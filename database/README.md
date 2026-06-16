@@ -79,9 +79,17 @@ sudo systemctl restart postgresql
 ```bash
 sudo -u postgres psql -c "CREATE ROLE tar1090 LOGIN PASSWORD 'changeme';"
 sudo -u postgres psql -c "CREATE DATABASE tar1090 OWNER tar1090;"
+# Extensions must be installed by a superuser (postgis/timescaledb are not "trusted").
+sudo -u postgres psql -d tar1090 \
+  -c "CREATE EXTENSION IF NOT EXISTS timescaledb;" \
+  -c "CREATE EXTENSION IF NOT EXISTS postgis;" \
+  -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+# Now create the tables/indexes/policies as the owner. (The CREATE EXTENSION lines in
+# schema.sql are no-ops here since the extensions already exist.)
 psql "host=127.0.0.1 dbname=tar1090 user=tar1090 password=changeme" -f schema.sql
 ```
-(Docker option A already created the role/db; just run the `schema.sql` line.)
+(Docker option A: its `POSTGRES_USER` is a superuser, so you can skip the separate
+extension step and just run the `schema.sql` line.)
 
 ## 3. Install and run the logger
 
@@ -119,15 +127,33 @@ TAR1090_DB_DSN="host=127.0.0.1 dbname=tar1090 user=tar1090 password=changeme" \
   python3 backfill_globe_history.py /var/globe_history
 ```
 
-## 6. Grafana (SQL dashboards + map trail replay)
+## 6. Grafana — historical search + map trail replay
+
+This is where you **search the logged history**. (tar1090's own Search box keeps
+working too, but it only searches aircraft currently loaded in the browser; the
+browser can't query the database directly, so historical search lives in Grafana.)
 
 - Add the datasource: copy [`grafana/datasource.yml`](grafana/datasource.yml) to
   `/etc/grafana/provisioning/datasources/` (edit host/password) and restart Grafana,
   or add a PostgreSQL datasource by hand (tick "TimescaleDB").
-- Import [`grafana/dashboard.json`](grafana/dashboard.json): military/aircraft/flight
-  stats, top operators, a recent-flights table, and a **Geomap** panel that draws the
-  trail of a selected flight. Use the dashboard time range / a `time_bucket` query to
-  animate replay. tar1090's own `?replay` keeps working independently.
+- Import [`grafana/dashboard.json`](grafana/dashboard.json) — the **"tar1090 - search
+  & trails"** dashboard.
+
+Using it as a search tool:
+
+- Set the **time range** (top right) to the period you want to search.
+- Type into the filter boxes at the top — **Callsign, Registration, Type, Operator**
+  (all are case-insensitive substring matches) and toggle **Military** = Any / Military
+  / Civil. Leave a box empty to ignore it. The trigram indexes from `schema.sql` keep
+  these fast.
+- The **Search results** table updates live; the stat panels show how many flights /
+  aircraft / military matched.
+- **Click a callsign** in the results (or pick from the **Flight** dropdown, which is
+  itself filtered by your search) to draw that flight's **trail** on the Geomap panel.
+
+For ad-hoc questions beyond the dashboard, use Grafana's Explore view or `psql` with the
+recipes in [`example_queries.sql`](example_queries.sql). tar1090's built-in `?replay`
+and heatmap continue to work independently of all of this.
 
 ## Tuning
 

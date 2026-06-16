@@ -10,6 +10,7 @@
 
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 CREATE EXTENSION IF NOT EXISTS postgis;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;   -- fast ILIKE '%term%' search (used by Grafana)
 
 -- ---------------------------------------------------------------------------
 -- aircraft: one slowly-changing row per ICAO 24-bit address (the "registry").
@@ -33,6 +34,9 @@ CREATE TABLE IF NOT EXISTS aircraft (
 CREATE INDEX IF NOT EXISTS aircraft_military_idx ON aircraft (military) WHERE military;
 CREATE INDEX IF NOT EXISTS aircraft_type_idx     ON aircraft (icao_type);
 CREATE INDEX IF NOT EXISTS aircraft_operator_idx ON aircraft (operator);
+-- trigram indexes so the Grafana search filters (ILIKE '%term%') stay fast
+CREATE INDEX IF NOT EXISTS aircraft_reg_trgm_idx ON aircraft USING gin (registration gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS aircraft_op_trgm_idx  ON aircraft USING gin (operator gin_trgm_ops);
 
 -- ---------------------------------------------------------------------------
 -- flights: one contiguous appearance of an aircraft with a given callsign.
@@ -53,6 +57,7 @@ CREATE TABLE IF NOT EXISTS flights (
 CREATE INDEX IF NOT EXISTS flights_callsign_idx ON flights (callsign, start_time DESC);
 CREATE INDEX IF NOT EXISTS flights_hex_idx      ON flights (icao_hex, start_time DESC);
 CREATE INDEX IF NOT EXISTS flights_start_idx    ON flights (start_time DESC);
+CREATE INDEX IF NOT EXISTS flights_cs_trgm_idx  ON flights USING gin (callsign gin_trgm_ops);
 
 -- ---------------------------------------------------------------------------
 -- positions: the time-series trail points that power replay / spatial queries.
