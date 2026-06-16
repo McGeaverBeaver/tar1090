@@ -1,0 +1,5 @@
+# Python dependencies for tar1090-logger.py and backfill_globe_history.py
+# Install with:  pip3 install -r requirements.txt
+#
+# psycopg 3 (the "binary" extra bundles libpq, so no system libpq-dev needed).
+psycopg[binary]>=3.1

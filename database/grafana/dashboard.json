@@ -1,0 +1,86 @@
+{
+  "title": "tar1090 - flights & trails",
+  "uid": "tar1090-flights",
+  "tags": ["tar1090", "adsb"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "now-24h", "to": "now" },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "flight",
+        "label": "Flight (trail panel)",
+        "type": "query",
+        "datasource": { "type": "postgres", "uid": "tar1090-timescaledb" },
+        "refresh": 2,
+        "includeAll": false,
+        "query": "SELECT coalesce(callsign,'(none)') || ' ' || coalesce(registration,icao_hex) || '  ' || to_char(start_time,'MM-DD HH24:MI') AS __text, id AS __value FROM v_flights ORDER BY start_time DESC LIMIT 300"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Military flights (range)",
+      "datasource": { "type": "postgres", "uid": "tar1090-timescaledb" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } } },
+      "targets": [ { "refId": "A", "format": "table", "rawSql": "SELECT count(*) AS \"military\" FROM v_flights WHERE military AND start_time BETWEEN $__timeFrom() AND $__timeTo();" } ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Distinct aircraft (range)",
+      "datasource": { "type": "postgres", "uid": "tar1090-timescaledb" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [ { "refId": "A", "format": "table", "rawSql": "SELECT count(DISTINCT icao_hex) AS \"aircraft\" FROM v_flights WHERE start_time BETWEEN $__timeFrom() AND $__timeTo();" } ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Total flights (range)",
+      "datasource": { "type": "postgres", "uid": "tar1090-timescaledb" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [ { "refId": "A", "format": "table", "rawSql": "SELECT count(*) AS \"flights\" FROM v_flights WHERE start_time BETWEEN $__timeFrom() AND $__timeTo();" } ]
+    },
+    {
+      "id": 4,
+      "type": "geomap",
+      "title": "Trail of selected flight",
+      "datasource": { "type": "postgres", "uid": "tar1090-timescaledb" },
+      "gridPos": { "h": 14, "w": 18, "x": 0, "y": 4 },
+      "options": {
+        "view": { "id": "fit", "lat": 0, "lon": 0, "zoom": 4 },
+        "basemap": { "type": "default", "name": "Basemap" },
+        "layers": [
+          {
+            "type": "markers",
+            "name": "trail",
+            "location": { "mode": "coords", "latitude": "latitude", "longitude": "longitude" },
+            "config": { "size": { "fixed": 4 }, "color": { "field": "alt_baro" } }
+          }
+        ]
+      },
+      "targets": [ { "refId": "A", "format": "table", "rawSql": "SELECT time, lat AS latitude, lon AS longitude, alt_baro FROM positions WHERE flight_id = $flight ORDER BY time;" } ]
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Top operators (range)",
+      "datasource": { "type": "postgres", "uid": "tar1090-timescaledb" },
+      "gridPos": { "h": 14, "w": 6, "x": 18, "y": 4 },
+      "targets": [ { "refId": "A", "format": "table", "rawSql": "SELECT operator, count(*) AS flights FROM v_flights WHERE start_time BETWEEN $__timeFrom() AND $__timeTo() AND operator IS NOT NULL GROUP BY operator ORDER BY flights DESC LIMIT 25;" } ]
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Recent flights",
+      "datasource": { "type": "postgres", "uid": "tar1090-timescaledb" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 18 },
+      "targets": [ { "refId": "A", "format": "table", "rawSql": "SELECT start_time, callsign, registration, icao_type, operator, military, max_alt, duration FROM v_flights WHERE start_time BETWEEN $__timeFrom() AND $__timeTo() ORDER BY start_time DESC LIMIT 500;" } ]
+    }
+  ]
+}

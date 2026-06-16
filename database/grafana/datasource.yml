@@ -1,0 +1,19 @@
+# Grafana datasource provisioning for the tar1090 TimescaleDB.
+# Copy to /etc/grafana/provisioning/datasources/ and edit the host/password,
+# then restart Grafana. (Or add the same connection manually in the Grafana UI.)
+apiVersion: 1
+
+datasources:
+  - name: tar1090 TimescaleDB
+    uid: tar1090-timescaledb
+    type: postgres
+    access: proxy
+    url: 127.0.0.1:5432
+    user: tar1090
+    jsonData:
+      database: tar1090
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: true
+    secureJsonData:
+      password: changeme

@@ -1,0 +1,37 @@
+# Configuration for tar1090-logger (EnvironmentFile for the systemd service).
+# Installed location: /etc/default/tar1090-logger
+#
+# All values have sane defaults baked into tar1090-logger.py; uncomment to override.
+
+# --- Database connection -----------------------------------------------------
+# libpq connection string (DSN) or URI for the TimescaleDB/PostGIS database.
+# The DB must live on persistent disk -- NOT under /run (tmpfs is wiped on reboot).
+TAR1090_DB_DSN="host=127.0.0.1 port=5432 dbname=tar1090 user=tar1090 password=changeme"
+
+# --- Data source -------------------------------------------------------------
+# Directory containing readsb's live aircraft.json (same dir tar1090 reads).
+# If unset, the logger auto-detects /run/readsb, /run/dump1090-fa, etc.
+#SOURCE_DIR="/run/readsb"
+
+# --- Sampling / loop ---------------------------------------------------------
+# Seconds between reads of aircraft.json.
+LOG_INTERVAL=5
+
+# --- Flight boundary ---------------------------------------------------------
+# A new flight row starts when the callsign changes, or the aircraft reappears
+# after this many seconds without a message.
+FLIGHT_GAP=300
+
+# --- Trail thinning (keeps the positions table small while preserving shape) -
+# Store a new position point when ANY of these thresholds is exceeded, or when
+# MAX_POINT_GAP seconds have elapsed since the last stored point.
+MAX_POINT_GAP=15
+MIN_TRACK_DEG=5
+MIN_ALT_FT=200
+MIN_GS_KT=10
+
+# --- Optional fallback metadata source --------------------------------------
+# If your readsb is NOT started with --db-file, point this at the tar1090-db CSV
+# so the logger can still resolve registration/type/operator/military itself.
+# (Leave empty when readsb already injects r/t/desc/ownOp/dbFlags into aircraft.json.)
+#AIRCRAFT_CSV="/usr/local/share/tar1090/aircraft.csv.gz"
