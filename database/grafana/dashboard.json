@@ -1,0 +1,89 @@
+{
+  "title": "tar1090 - search & trails",
+  "uid": "tar1090-search",
+  "tags": ["tar1090", "adsb"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 2,
+  "time": { "from": "now-30d", "to": "now" },
+  "refresh": "",
+  "templating": {
+    "list": [
+      { "name": "callsign", "type": "textbox", "label": "Callsign", "query": "", "current": { "text": "", "value": "" } },
+      { "name": "registration", "type": "textbox", "label": "Registration", "query": "", "current": { "text": "", "value": "" } },
+      { "name": "type", "type": "textbox", "label": "Type", "query": "", "current": { "text": "", "value": "" } },
+      { "name": "operator", "type": "textbox", "label": "Operator", "query": "", "current": { "text": "", "value": "" } },
+      {
+        "name": "mil", "type": "custom", "label": "Military",
+        "query": "Any : any, Military : mil, Civil : civ",
+        "options": [
+          { "text": "Any", "value": "any", "selected": true },
+          { "text": "Military", "value": "mil", "selected": false },
+          { "text": "Civil", "value": "civ", "selected": false }
+        ],
+        "current": { "text": "Any", "value": "any" }
+      },
+      {
+        "name": "flight", "type": "query", "label": "Flight (trail)",
+        "datasource": { "type": "postgres", "uid": "tar1090-timescaledb" },
+        "refresh": 2, "includeAll": false, "sort": 0,
+        "query": "SELECT coalesce(callsign,'(none)') || '  ' || coalesce(registration, icao_hex) || '  ' || coalesce(icao_type,'') || '  ' || to_char(start_time,'MM-DD HH24:MI') AS __text, id AS __value FROM v_flights WHERE start_time BETWEEN $__timeFrom() AND $__timeTo() AND (${callsign:sqlstring} = '' OR callsign ILIKE '%' || ${callsign:sqlstring} || '%') AND (${registration:sqlstring} = '' OR registration ILIKE '%' || ${registration:sqlstring} || '%') AND (${type:sqlstring} = '' OR icao_type ILIKE '%' || ${type:sqlstring} || '%') AND (${operator:sqlstring} = '' OR operator ILIKE '%' || ${operator:sqlstring} || '%') AND ('${mil}' = 'any' OR (military AND '${mil}' = 'mil') OR (NOT military AND '${mil}' = 'civ')) ORDER BY start_time DESC LIMIT 500"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Matching flights",
+      "datasource": { "type": "postgres", "uid": "tar1090-timescaledb" },
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 0 },
+      "targets": [ { "refId": "A", "format": "table", "rawSql": "SELECT count(*) AS \"flights\" FROM v_flights WHERE start_time BETWEEN $__timeFrom() AND $__timeTo() AND (${callsign:sqlstring} = '' OR callsign ILIKE '%' || ${callsign:sqlstring} || '%') AND (${registration:sqlstring} = '' OR registration ILIKE '%' || ${registration:sqlstring} || '%') AND (${type:sqlstring} = '' OR icao_type ILIKE '%' || ${type:sqlstring} || '%') AND (${operator:sqlstring} = '' OR operator ILIKE '%' || ${operator:sqlstring} || '%') AND ('${mil}' = 'any' OR (military AND '${mil}' = 'mil') OR (NOT military AND '${mil}' = 'civ'));" } ]
+    },
+    {
+      "id": 2, "type": "stat", "title": "Distinct aircraft",
+      "datasource": { "type": "postgres", "uid": "tar1090-timescaledb" },
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 0 },
+      "targets": [ { "refId": "A", "format": "table", "rawSql": "SELECT count(DISTINCT icao_hex) AS \"aircraft\" FROM v_flights WHERE start_time BETWEEN $__timeFrom() AND $__timeTo() AND (${callsign:sqlstring} = '' OR callsign ILIKE '%' || ${callsign:sqlstring} || '%') AND (${registration:sqlstring} = '' OR registration ILIKE '%' || ${registration:sqlstring} || '%') AND (${type:sqlstring} = '' OR icao_type ILIKE '%' || ${type:sqlstring} || '%') AND (${operator:sqlstring} = '' OR operator ILIKE '%' || ${operator:sqlstring} || '%') AND ('${mil}' = 'any' OR (military AND '${mil}' = 'mil') OR (NOT military AND '${mil}' = 'civ'));" } ]
+    },
+    {
+      "id": 3, "type": "stat", "title": "Of which military",
+      "datasource": { "type": "postgres", "uid": "tar1090-timescaledb" },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 0 },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } } },
+      "targets": [ { "refId": "A", "format": "table", "rawSql": "SELECT count(*) FILTER (WHERE military) AS \"military\" FROM v_flights WHERE start_time BETWEEN $__timeFrom() AND $__timeTo() AND (${callsign:sqlstring} = '' OR callsign ILIKE '%' || ${callsign:sqlstring} || '%') AND (${registration:sqlstring} = '' OR registration ILIKE '%' || ${registration:sqlstring} || '%') AND (${type:sqlstring} = '' OR icao_type ILIKE '%' || ${type:sqlstring} || '%') AND (${operator:sqlstring} = '' OR operator ILIKE '%' || ${operator:sqlstring} || '%') AND ('${mil}' = 'any' OR (military AND '${mil}' = 'mil') OR (NOT military AND '${mil}' = 'civ'));" } ]
+    },
+    {
+      "id": 4, "type": "table", "title": "Search results  (click a callsign to plot its trail)",
+      "datasource": { "type": "postgres", "uid": "tar1090-timescaledb" },
+      "gridPos": { "h": 11, "w": 24, "x": 0, "y": 4 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "callsign" },
+            "properties": [ { "id": "links", "value": [ { "title": "Plot this flight's trail", "url": "/d/tar1090-search/tar1090-search-and-trails?var-flight=${__data.fields.id}&${__url_time_range}", "targetBlank": false } ] } ]
+          }
+        ]
+      },
+      "targets": [ { "refId": "A", "format": "table", "rawSql": "SELECT start_time, callsign, registration, icao_type, operator, military, max_alt, duration, id FROM v_flights WHERE start_time BETWEEN $__timeFrom() AND $__timeTo() AND (${callsign:sqlstring} = '' OR callsign ILIKE '%' || ${callsign:sqlstring} || '%') AND (${registration:sqlstring} = '' OR registration ILIKE '%' || ${registration:sqlstring} || '%') AND (${type:sqlstring} = '' OR icao_type ILIKE '%' || ${type:sqlstring} || '%') AND (${operator:sqlstring} = '' OR operator ILIKE '%' || ${operator:sqlstring} || '%') AND ('${mil}' = 'any' OR (military AND '${mil}' = 'mil') OR (NOT military AND '${mil}' = 'civ')) ORDER BY start_time DESC LIMIT 1000;" } ]
+    },
+    {
+      "id": 5, "type": "geomap", "title": "Trail of selected flight ($flight)",
+      "datasource": { "type": "postgres", "uid": "tar1090-timescaledb" },
+      "gridPos": { "h": 15, "w": 17, "x": 0, "y": 15 },
+      "options": {
+        "view": { "id": "fit", "lat": 0, "lon": 0, "zoom": 4 },
+        "basemap": { "type": "default", "name": "Basemap" },
+        "layers": [
+          { "type": "markers", "name": "trail", "location": { "mode": "coords", "latitude": "latitude", "longitude": "longitude" }, "config": { "size": { "fixed": 4 }, "color": { "field": "alt_baro" } } }
+        ]
+      },
+      "targets": [ { "refId": "A", "format": "table", "rawSql": "SELECT time, lat AS latitude, lon AS longitude, alt_baro FROM positions WHERE flight_id = $flight ORDER BY time;" } ]
+    },
+    {
+      "id": 6, "type": "table", "title": "Top operators (current filter)",
+      "datasource": { "type": "postgres", "uid": "tar1090-timescaledb" },
+      "gridPos": { "h": 15, "w": 7, "x": 17, "y": 15 },
+      "targets": [ { "refId": "A", "format": "table", "rawSql": "SELECT operator, count(*) AS flights FROM v_flights WHERE start_time BETWEEN $__timeFrom() AND $__timeTo() AND operator IS NOT NULL AND (${callsign:sqlstring} = '' OR callsign ILIKE '%' || ${callsign:sqlstring} || '%') AND (${registration:sqlstring} = '' OR registration ILIKE '%' || ${registration:sqlstring} || '%') AND (${type:sqlstring} = '' OR icao_type ILIKE '%' || ${type:sqlstring} || '%') AND (${operator:sqlstring} = '' OR operator ILIKE '%' || ${operator:sqlstring} || '%') AND ('${mil}' = 'any' OR (military AND '${mil}' = 'mil') OR (NOT military AND '${mil}' = 'civ')) GROUP BY operator ORDER BY flights DESC LIMIT 30;" } ]
+    }
+  ]
+}
