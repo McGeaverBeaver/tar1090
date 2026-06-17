@@ -103,6 +103,21 @@ sudo systemctl enable --now tar1090-logger
 journalctl -u tar1090-logger -f                       # watch it log points
 ```
 
+### Alternative: run the logger in a container
+
+The image is built and published to GHCR by `.github/workflows/build-logger.yml`:
+
+```bash
+docker run -d --name tar1090-logger --restart unless-stopped \
+  -e TAR1090_DB_DSN="host=YOUR_DB dbname=tar1090 user=tar1090 password=changeme" \
+  -v /run/readsb:/run/readsb:ro \
+  ghcr.io/mcgeaverbeaver/tar1090-logger:latest
+```
+
+Mount your readsb run dir read-only so the container can read `aircraft.json`, and
+point `TAR1090_DB_DSN` at your database. Build it locally instead with
+`docker build -t tar1090-logger ./database`.
+
 ## 4. Verify
 
 ```sql
