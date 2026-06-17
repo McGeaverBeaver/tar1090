@@ -23,6 +23,7 @@ import os
 import signal
 import sys
 import time
+import urllib.request
 from datetime import datetime, timezone
 
 import psycopg
@@ -38,6 +39,10 @@ MIN_TRACK_DEG = float(os.environ.get("MIN_TRACK_DEG", "5"))
 MIN_ALT_FT    = float(os.environ.get("MIN_ALT_FT", "200"))
 MIN_GS_KT     = float(os.environ.get("MIN_GS_KT", "10"))
 AIRCRAFT_CSV  = os.environ.get("AIRCRAFT_CSV", "").strip()
+# Optional: fetch aircraft.json over HTTP instead of reading a local file. Useful
+# when readsb/tar1090 runs in a separate container -- point this at the tar1090 web
+# UI (e.g. http://192.168.1.10/data/aircraft.json, or just http://192.168.1.10).
+AIRCRAFT_URL  = os.environ.get("AIRCRAFT_URL", "").strip()
 
 # Same candidate list install.sh uses to find a decoder's aircraft.json.
 SOURCE_DIRS_FALLBACK = [
@@ -373,7 +378,27 @@ def evict(state, now_ts):
 
 
 # --- source discovery / IO --------------------------------------------------
-def detect_source_dir(arg):
+def is_url(s):
+    return isinstance(s, str) and (s.startswith("http://") or s.startswith("https://"))
+
+
+def normalize_url(src):
+    """Accept either a full aircraft.json URL or a tar1090 base URL and return the
+    full aircraft.json URL (so http://host and http://host/data/aircraft.json both
+    work)."""
+    if src.endswith(".json") or src.endswith(".json.gz"):
+        return src
+    return src.rstrip("/") + "/data/aircraft.json"
+
+
+def detect_source(arg):
+    """Return where to read aircraft.json from: an http(s) URL or a directory.
+    A URL (from the CLI arg, AIRCRAFT_URL or SOURCE_DIR) wins; otherwise probe the
+    usual decoder run dirs for an aircraft.json file."""
+    for s in (arg, AIRCRAFT_URL, os.environ.get("SOURCE_DIR", "")):
+        if is_url(s):
+            return normalize_url(s)
+
     candidates = []
     if arg:
         candidates.append(arg)
@@ -387,7 +412,25 @@ def detect_source_dir(arg):
     return candidates[0] if candidates else None
 
 
+def read_aircraft_url(url):
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            raw = resp.read()
+    except (OSError, ValueError) as e:
+        log.debug("could not fetch %s: %s", url, e)
+        return None
+    try:
+        if url.endswith(".gz") or raw[:2] == b"\x1f\x8b":
+            raw = gzip.decompress(raw)
+        return json.loads(raw.decode("utf-8", "replace"))
+    except (ValueError, OSError) as e:
+        log.debug("could not parse %s: %s", url, e)
+        return None
+
+
 def read_aircraft_json(src):
+    if is_url(src):
+        return read_aircraft_url(src)
     for name, opener in (("aircraft.json", open), ("aircraft.json.gz", gzip.open)):
         p = os.path.join(src, name)
         if os.path.exists(p):
@@ -428,7 +471,7 @@ def main():
     signal.signal(signal.SIGINT, _stop)
 
     arg = sys.argv[1] if len(sys.argv) > 1 else None
-    src = detect_source_dir(arg)
+    src = detect_source(arg)
     log.info("tar1090-logger starting; reading aircraft.json from %s", src)
     csv_meta = load_csv_metadata(AIRCRAFT_CSV)
 
@@ -449,7 +492,7 @@ def main():
                 points_min += process(conn, data, state, csv_meta)
                 evict(state, data.get("now") or time.time())
             elif not warned_nodata:
-                log.warning("no aircraft.json in %s yet (is readsb running?)", src)
+                log.warning("no aircraft.json from %s yet (is readsb/tar1090 reachable?)", src)
                 warned_nodata = True
 
             if time.time() >= next_stat:

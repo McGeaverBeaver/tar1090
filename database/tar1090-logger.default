@@ -12,6 +12,11 @@ TAR1090_DB_DSN="host=127.0.0.1 port=5432 dbname=tar1090 user=tar1090 password=ch
 # Directory containing readsb's live aircraft.json (same dir tar1090 reads).
 # If unset, the logger auto-detects /run/readsb, /run/dump1090-fa, etc.
 #SOURCE_DIR="/run/readsb"
+#
+# OR fetch aircraft.json over HTTP from the tar1090 web UI instead of a local
+# file -- use this when tar1090/readsb runs in a different container or host.
+# Point it at the tar1090 base URL or directly at the aircraft.json:
+#AIRCRAFT_URL="http://192.168.1.10/data/aircraft.json"
 
 # --- Sampling / loop ---------------------------------------------------------
 # Seconds between reads of aircraft.json.

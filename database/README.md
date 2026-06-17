@@ -105,18 +105,64 @@ journalctl -u tar1090-logger -f                       # watch it log points
 
 ### Alternative: run the logger in a container
 
-The image is built and published to GHCR by `.github/workflows/build-logger.yml`:
+The image is built and published to GHCR by `.github/workflows/build-logger.yml`.
+
+> **The logger image is NOT tar1090.** It does not serve a web UI, run readsb, or
+> contain a database. It is a tiny sidecar that reads an existing `aircraft.json` and
+> writes to an existing database. So you run **three** containers:
+>
+> | Container | Image | Role |
+> |-----------|-------|------|
+> | tar1090 / readsb | your existing tar1090 image | produces `aircraft.json`, serves the map — **unchanged** |
+> | database | `timescale/timescaledb-ha:pg16` | stores the data (needs a persistent volume) |
+> | logger | `ghcr.io/mcgeaverbeaver/tar1090-logger` | reads `aircraft.json`, writes to the DB |
+>
+> Env vars like `BEASTHOST`, `MLATHOST`, `LAT`, `LONG`, `TCP_PORT_80` belong on your
+> **tar1090** container and do nothing on the logger. The logger reads exactly **one**
+> connection variable, `TAR1090_DB_DSN` (a full libpq string) — individual `host` /
+> `user` / `password` vars are ignored.
+
+The logger needs to reach `aircraft.json`. In a multi-container setup the easy way is
+over HTTP from your tar1090 web UI (no volume juggling) via `AIRCRAFT_URL`:
+
+```bash
+# 1) database (persistent volume on real disk, NOT /run)
+docker run -d --name tar1090-db --restart unless-stopped \
+  -e POSTGRES_PASSWORD=changeme -e POSTGRES_DB=tar1090 -e POSTGRES_USER=tar1090 \
+  -v /path/on/host/pgdata:/home/postgres/pgdata/data \
+  timescale/timescaledb-ha:pg16
+
+# apply the schema once (POSTGRES_USER here is a superuser, so extensions just work)
+docker cp schema.sql tar1090-db:/tmp/schema.sql
+docker exec -u postgres tar1090-db psql -d tar1090 -f /tmp/schema.sql
+
+# 2) logger -- point it at the DB (TAR1090_DB_DSN) and tar1090's aircraft.json (AIRCRAFT_URL)
+docker run -d --name tar1090-logger --restart unless-stopped \
+  -e TAR1090_DB_DSN="host=DB_IP port=5432 dbname=tar1090 user=tar1090 password=changeme" \
+  -e AIRCRAFT_URL="http://TAR1090_IP/data/aircraft.json" \
+  ghcr.io/mcgeaverbeaver/tar1090-logger:latest
+```
+
+Replace `DB_IP` with the database container's address and `TAR1090_IP` with your
+tar1090 container's address. (`AIRCRAFT_URL` also accepts just `http://TAR1090_IP` —
+it appends `/data/aircraft.json`. Some images serve it at `/tar1090/data/aircraft.json`;
+open it in a browser to confirm the path.)
+
+If instead the logger runs on the **same host** as readsb, skip `AIRCRAFT_URL` and mount
+the run dir read-only so it reads the file directly:
 
 ```bash
 docker run -d --name tar1090-logger --restart unless-stopped \
-  -e TAR1090_DB_DSN="host=YOUR_DB dbname=tar1090 user=tar1090 password=changeme" \
+  -e TAR1090_DB_DSN="host=DB_IP dbname=tar1090 user=tar1090 password=changeme" \
   -v /run/readsb:/run/readsb:ro \
   ghcr.io/mcgeaverbeaver/tar1090-logger:latest
 ```
 
-Mount your readsb run dir read-only so the container can read `aircraft.json`, and
-point `TAR1090_DB_DSN` at your database. Build it locally instead with
-`docker build -t tar1090-logger ./database`.
+Build the image locally instead of pulling with `docker build -t tar1090-logger ./database`.
+
+> **Common error:** `database connect failed: failed to resolve host 'db'` means
+> `TAR1090_DB_DSN` was not set, so the image fell back to its placeholder default
+> (`host=db`). Set `TAR1090_DB_DSN` to your real database connection string.
 
 ## 4. Verify
 
