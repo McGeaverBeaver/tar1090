@@ -31,20 +31,53 @@ Built and published by [`.github/workflows/build-allinone.yml`](../.github/workf
 ghcr.io/mcgeaverbeaver/tar1090-allinone:latest
 ```
 
-## One-time: prepare your external database
+## One-time: the database
 
-On your existing PostgreSQL server (needs the **TimescaleDB** and **PostGIS**
-extensions — see [`../database/README.md`](../database/README.md) for installing them):
+The logger writes to an **external** TimescaleDB + PostGIS database. Two ways to get one.
+
+### Option A — dedicated TimescaleDB container (recommended)
+
+A separate container that bundles PostgreSQL + TimescaleDB + PostGIS. Nothing to
+install, nothing to change on any existing database, and its lifecycle is independent
+of the tar1090 container (pulling tar1090 updates can never touch your history).
 
 ```bash
-# create role + db (once)
+# 1) the database (persistent volume on real disk; pick any LAN IP / path you like)
+docker run -d --name tar1090-db --restart unless-stopped \
+  -e POSTGRES_PASSWORD=STRONGPASS -e TZ=America/New_York \
+  -v /mnt/cache/appdata/tar1090/pgdata:/home/postgres/pgdata/data \
+  timescale/timescaledb-ha:pg16
+# (Unraid: if it fails with "permission denied" on pgdata, the image runs as uid 1000:
+#  chmod -R 777 /mnt/cache/appdata/tar1090/pgdata  -- or use a named volume.)
+
+# 2) create the database + role, then apply the schema (pulled out of the tar1090 image)
+docker exec -e PGPASSWORD=STRONGPASS tar1090-db \
+  psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
+    -c "CREATE DATABASE tar1090;" \
+    -c "CREATE ROLE tar1090 LOGIN SUPERUSER PASSWORD 'STRONGPASS';"
+docker cp tar1090:/usr/local/share/tar1090/schema.sql /tmp/schema.sql   # from the running app container
+docker cp /tmp/schema.sql tar1090-db:/tmp/schema.sql
+docker exec -e PGPASSWORD=STRONGPASS tar1090-db \
+  psql -h 127.0.0.1 -U postgres -d tar1090 -v ON_ERROR_STOP=1 -f /tmp/schema.sql
+```
+
+Then set on the tar1090 container:
+`TAR1090_DB_DSN=host=<db-ip> port=5432 dbname=tar1090 user=tar1090 password=STRONGPASS`.
+
+### Option B — your own existing PostgreSQL
+
+Only if it already has (or you're willing to add) the **TimescaleDB** and **PostGIS**
+extensions. PostGIS is a per-database `CREATE EXTENSION` (no restart); TimescaleDB needs
+`shared_preload_libraries = 'timescaledb'` + a server restart. See
+[`../database/README.md`](../database/README.md) for the install steps, then:
+
+```bash
 sudo -u postgres psql -c "CREATE ROLE tar1090 LOGIN PASSWORD 'changeme';"
 sudo -u postgres psql -c "CREATE DATABASE tar1090 OWNER tar1090;"
 sudo -u postgres psql -d tar1090 \
   -c "CREATE EXTENSION IF NOT EXISTS timescaledb;" \
   -c "CREATE EXTENSION IF NOT EXISTS postgis;" \
   -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
-# apply the schema (grab it from this repo, or copy it out of the image)
 psql "host=DB_IP dbname=tar1090 user=tar1090 password=changeme" -f database/schema.sql
 ```
 
