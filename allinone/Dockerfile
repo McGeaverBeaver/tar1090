@@ -1,0 +1,53 @@
+# tar1090 all-in-one: the regular tar1090 web GUI + readsb, with the tar1090-logger
+# baked in so the same container also logs aircraft / flights / trails to your
+# EXTERNAL TimescaleDB. Postgres and Grafana are NOT bundled -- you point the logger
+# at your existing database (TAR1090_DB_DSN) and connect your own Grafana to it.
+#
+# This extends the actively-maintained sdr-enthusiasts tar1090 image (the successor
+# to the deprecated mikenye/tar1090), so every existing env var -- BEASTHOST,
+# MLATHOST, LAT, LONG, etc. -- and the web GUI behave exactly as before. We only add
+# one extra s6 service (the logger).
+#
+# Build context is the REPO ROOT (so we can reuse database/tar1090-logger.py and
+# database/schema.sql as the single source of truth):
+#   docker build -f allinone/Dockerfile -t tar1090-allinone .
+FROM ghcr.io/sdr-enthusiasts/docker-tar1090:latest
+
+# --- Python + psycopg3 for the logger ---------------------------------------
+# Prefer the distro psycopg3; fall back to the self-contained binary wheel.
+RUN set -eux; \
+    export DEBIAN_FRONTEND=noninteractive; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends python3 ca-certificates; \
+    if ! apt-get install -y --no-install-recommends python3-psycopg; then \
+        apt-get install -y --no-install-recommends python3-pip; \
+        pip3 install --no-cache-dir --break-system-packages "psycopg[binary]>=3.1"; \
+    fi; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
+
+# --- the logger + schema (reused from database/) ----------------------------
+COPY database/tar1090-logger.py /usr/local/share/tar1090/tar1090-logger.py
+COPY database/schema.sql        /usr/local/share/tar1090/schema.sql
+
+# Bundle an aircraft metadata CSV so registration/type/operator/military resolve
+# even if readsb is not run with --db-file. Best-effort: the logger works without it.
+RUN curl -fsSL -o /usr/local/share/tar1090/aircraft.csv.gz \
+      https://github.com/wiedehopf/tar1090-db/raw/csv/aircraft.csv.gz || \
+    echo "warning: could not pre-fetch aircraft.csv.gz; metadata will rely on readsb --db-file"
+
+# --- s6 service that runs the logger ----------------------------------------
+COPY allinone/rootfs/ /
+RUN chmod +x /etc/s6-overlay/s6-rc.d/tar1090-logger/run
+
+# Logger tunables (see database/tar1090-logger.default for what they do).
+# TAR1090_DB_DSN is intentionally left UNSET: set it to your external TimescaleDB to
+# enable logging (the web GUI runs regardless). e.g.
+#   -e TAR1090_DB_DSN="host=192.168.1.50 port=5432 dbname=tar1090 user=tar1090 password=secret"
+ENV ENABLE_LOGGER=true \
+    LOG_INTERVAL=5 \
+    FLIGHT_GAP=300 \
+    MAX_POINT_GAP=15 \
+    MIN_TRACK_DEG=5 \
+    MIN_ALT_FT=200 \
+    MIN_GS_KT=10

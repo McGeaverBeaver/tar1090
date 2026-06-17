@@ -1,0 +1,9 @@
+# Keep the logger image small: only the runtime files are needed.
+README.md
+schema.sql
+example_queries.sql
+grafana/
+Dockerfile
+.dockerignore
+__pycache__/
+*.pyc
