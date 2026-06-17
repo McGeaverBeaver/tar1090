@@ -7,7 +7,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 3,
+  "version": 4,
   "time": {
     "from": "now-6h",
     "to": "now"
@@ -17,43 +17,83 @@
     "list": [
       {
         "name": "callsign",
-        "type": "textbox",
+        "type": "query",
         "label": "Callsign",
-        "query": "",
+        "datasource": {
+          "type": "postgres",
+          "uid": "${DS_TAR1090}"
+        },
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": "__all",
         "current": {
-          "text": "",
-          "value": ""
-        }
+          "text": "All",
+          "value": "$__all",
+          "selected": true
+        },
+        "sort": 1,
+        "query": "SELECT DISTINCT f.callsign FROM flights f WHERE f.callsign IS NOT NULL AND f.callsign <> '' AND f.start_time BETWEEN $__timeFrom() AND $__timeTo() ORDER BY 1"
       },
       {
         "name": "registration",
-        "type": "textbox",
+        "type": "query",
         "label": "Registration",
-        "query": "",
+        "datasource": {
+          "type": "postgres",
+          "uid": "${DS_TAR1090}"
+        },
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": "__all",
         "current": {
-          "text": "",
-          "value": ""
-        }
+          "text": "All",
+          "value": "$__all",
+          "selected": true
+        },
+        "sort": 1,
+        "query": "SELECT DISTINCT a.registration FROM flights f JOIN aircraft a USING (icao_hex) WHERE a.registration IS NOT NULL AND a.registration <> '' AND f.start_time BETWEEN $__timeFrom() AND $__timeTo() ORDER BY 1"
       },
       {
         "name": "type",
-        "type": "textbox",
+        "type": "query",
         "label": "Type",
-        "query": "",
+        "datasource": {
+          "type": "postgres",
+          "uid": "${DS_TAR1090}"
+        },
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": "__all",
         "current": {
-          "text": "",
-          "value": ""
-        }
+          "text": "All",
+          "value": "$__all",
+          "selected": true
+        },
+        "sort": 1,
+        "query": "SELECT DISTINCT a.icao_type FROM flights f JOIN aircraft a USING (icao_hex) WHERE a.icao_type IS NOT NULL AND a.icao_type <> '' AND f.start_time BETWEEN $__timeFrom() AND $__timeTo() ORDER BY 1"
       },
       {
         "name": "operator",
-        "type": "textbox",
+        "type": "query",
         "label": "Operator",
-        "query": "",
+        "datasource": {
+          "type": "postgres",
+          "uid": "${DS_TAR1090}"
+        },
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": "__all",
         "current": {
-          "text": "",
-          "value": ""
-        }
+          "text": "All",
+          "value": "$__all",
+          "selected": true
+        },
+        "sort": 1,
+        "query": "SELECT DISTINCT a.operator FROM flights f JOIN aircraft a USING (icao_hex) WHERE a.operator IS NOT NULL AND a.operator <> '' AND f.start_time BETWEEN $__timeFrom() AND $__timeTo() ORDER BY 1"
       },
       {
         "name": "mil",
@@ -93,7 +133,7 @@
         "refresh": 2,
         "includeAll": false,
         "sort": 0,
-        "query": "SELECT a.registration || ' / ' || coalesce(a.icao_type,'?') || ' / ' || a.icao_hex AS __text, a.icao_hex AS __value FROM flights f JOIN aircraft a USING (icao_hex) WHERE f.start_time BETWEEN $__timeFrom() AND $__timeTo() AND (${callsign:sqlstring} = '' OR f.callsign ILIKE '%' || ${callsign:sqlstring} || '%') AND (${registration:sqlstring} = '' OR a.registration ILIKE '%' || ${registration:sqlstring} || '%') AND (${type:sqlstring} = '' OR a.icao_type ILIKE '%' || ${type:sqlstring} || '%') AND (${operator:sqlstring} = '' OR a.operator ILIKE '%' || ${operator:sqlstring} || '%') AND ('${mil}' = 'any' OR (a.military AND '${mil}' = 'mil') OR (NOT a.military AND '${mil}' = 'civ')) GROUP BY a.icao_hex, a.registration, a.icao_type ORDER BY max(f.end_time) DESC LIMIT 500"
+        "query": "SELECT coalesce(a.registration, a.icao_hex) || ' / ' || coalesce(a.icao_type,'?') || ' / ' || a.icao_hex AS __text, a.icao_hex AS __value FROM flights f JOIN aircraft a USING (icao_hex) WHERE f.start_time BETWEEN $__timeFrom() AND $__timeTo() AND ('__all' IN (${callsign:singlequote}) OR f.callsign IN (${callsign:singlequote})) AND ('__all' IN (${registration:singlequote}) OR a.registration IN (${registration:singlequote})) AND ('__all' IN (${type:singlequote}) OR a.icao_type IN (${type:singlequote})) AND ('__all' IN (${operator:singlequote}) OR a.operator IN (${operator:singlequote})) AND ('${mil}' = 'any' OR (a.military AND '${mil}' = 'mil') OR (NOT a.military AND '${mil}' = 'civ')) GROUP BY a.icao_hex, a.registration, a.icao_type ORDER BY max(f.end_time) DESC LIMIT 500"
       }
     ]
   },
@@ -140,7 +180,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT count(*) AS \"Flights\" FROM flights f JOIN aircraft a USING (icao_hex) WHERE f.start_time BETWEEN $__timeFrom() AND $__timeTo() AND (${callsign:sqlstring} = '' OR f.callsign ILIKE '%' || ${callsign:sqlstring} || '%') AND (${registration:sqlstring} = '' OR a.registration ILIKE '%' || ${registration:sqlstring} || '%') AND (${type:sqlstring} = '' OR a.icao_type ILIKE '%' || ${type:sqlstring} || '%') AND (${operator:sqlstring} = '' OR a.operator ILIKE '%' || ${operator:sqlstring} || '%') AND ('${mil}' = 'any' OR (a.military AND '${mil}' = 'mil') OR (NOT a.military AND '${mil}' = 'civ'));"
+          "rawSql": "SELECT count(*) AS \"Flights\" FROM flights f JOIN aircraft a USING (icao_hex) WHERE f.start_time BETWEEN $__timeFrom() AND $__timeTo() AND ('__all' IN (${callsign:singlequote}) OR f.callsign IN (${callsign:singlequote})) AND ('__all' IN (${registration:singlequote}) OR a.registration IN (${registration:singlequote})) AND ('__all' IN (${type:singlequote}) OR a.icao_type IN (${type:singlequote})) AND ('__all' IN (${operator:singlequote}) OR a.operator IN (${operator:singlequote})) AND ('${mil}' = 'any' OR (a.military AND '${mil}' = 'mil') OR (NOT a.military AND '${mil}' = 'civ'));"
         }
       ]
     },
@@ -186,7 +226,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT count(DISTINCT a.icao_hex) AS \"Aircraft\" FROM flights f JOIN aircraft a USING (icao_hex) WHERE f.start_time BETWEEN $__timeFrom() AND $__timeTo() AND (${callsign:sqlstring} = '' OR f.callsign ILIKE '%' || ${callsign:sqlstring} || '%') AND (${registration:sqlstring} = '' OR a.registration ILIKE '%' || ${registration:sqlstring} || '%') AND (${type:sqlstring} = '' OR a.icao_type ILIKE '%' || ${type:sqlstring} || '%') AND (${operator:sqlstring} = '' OR a.operator ILIKE '%' || ${operator:sqlstring} || '%') AND ('${mil}' = 'any' OR (a.military AND '${mil}' = 'mil') OR (NOT a.military AND '${mil}' = 'civ'));"
+          "rawSql": "SELECT count(DISTINCT a.icao_hex) AS \"Aircraft\" FROM flights f JOIN aircraft a USING (icao_hex) WHERE f.start_time BETWEEN $__timeFrom() AND $__timeTo() AND ('__all' IN (${callsign:singlequote}) OR f.callsign IN (${callsign:singlequote})) AND ('__all' IN (${registration:singlequote}) OR a.registration IN (${registration:singlequote})) AND ('__all' IN (${type:singlequote}) OR a.icao_type IN (${type:singlequote})) AND ('__all' IN (${operator:singlequote}) OR a.operator IN (${operator:singlequote})) AND ('${mil}' = 'any' OR (a.military AND '${mil}' = 'mil') OR (NOT a.military AND '${mil}' = 'civ'));"
         }
       ]
     },
@@ -243,14 +283,14 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT count(DISTINCT a.icao_hex) FILTER (WHERE a.military) AS \"Military\" FROM flights f JOIN aircraft a USING (icao_hex) WHERE f.start_time BETWEEN $__timeFrom() AND $__timeTo() AND (${callsign:sqlstring} = '' OR f.callsign ILIKE '%' || ${callsign:sqlstring} || '%') AND (${registration:sqlstring} = '' OR a.registration ILIKE '%' || ${registration:sqlstring} || '%') AND (${type:sqlstring} = '' OR a.icao_type ILIKE '%' || ${type:sqlstring} || '%') AND (${operator:sqlstring} = '' OR a.operator ILIKE '%' || ${operator:sqlstring} || '%') AND ('${mil}' = 'any' OR (a.military AND '${mil}' = 'mil') OR (NOT a.military AND '${mil}' = 'civ'));"
+          "rawSql": "SELECT count(DISTINCT a.icao_hex) FILTER (WHERE a.military) AS \"Military\" FROM flights f JOIN aircraft a USING (icao_hex) WHERE f.start_time BETWEEN $__timeFrom() AND $__timeTo() AND ('__all' IN (${callsign:singlequote}) OR f.callsign IN (${callsign:singlequote})) AND ('__all' IN (${registration:singlequote}) OR a.registration IN (${registration:singlequote})) AND ('__all' IN (${type:singlequote}) OR a.icao_type IN (${type:singlequote})) AND ('__all' IN (${operator:singlequote}) OR a.operator IN (${operator:singlequote})) AND ('${mil}' = 'any' OR (a.military AND '${mil}' = 'mil') OR (NOT a.military AND '${mil}' = 'civ'));"
         }
       ]
     },
     {
       "id": 4,
       "type": "table",
-      "title": "Search results \u2014 one row per aircraft (click Registration to plot its trail)",
+      "title": "Search results \u2014 one row per aircraft (click Registration or ICAO to plot its trail)",
       "datasource": {
         "type": "postgres",
         "uid": "${DS_TAR1090}"
@@ -289,8 +329,18 @@
             },
             "properties": [
               {
-                "id": "custom.hidden",
-                "value": true
+                "id": "displayName",
+                "value": "ICAO"
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Plot this aircraft's trail",
+                    "url": "/d/tar1090-search/tar1090-search-trails?var-ac=${__data.fields.icao_hex}&${__url_time_range}",
+                    "targetBlank": false
+                  }
+                ]
               }
             ]
           }
@@ -300,7 +350,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT a.registration, a.icao_type, a.operator, a.military, string_agg(DISTINCT f.callsign, ', ') AS callsigns, a.first_seen, a.last_seen, count(*) AS flights, a.icao_hex FROM flights f JOIN aircraft a USING (icao_hex) WHERE f.start_time BETWEEN $__timeFrom() AND $__timeTo() AND (${callsign:sqlstring} = '' OR f.callsign ILIKE '%' || ${callsign:sqlstring} || '%') AND (${registration:sqlstring} = '' OR a.registration ILIKE '%' || ${registration:sqlstring} || '%') AND (${type:sqlstring} = '' OR a.icao_type ILIKE '%' || ${type:sqlstring} || '%') AND (${operator:sqlstring} = '' OR a.operator ILIKE '%' || ${operator:sqlstring} || '%') AND ('${mil}' = 'any' OR (a.military AND '${mil}' = 'mil') OR (NOT a.military AND '${mil}' = 'civ')) GROUP BY a.icao_hex, a.registration, a.icao_type, a.operator, a.military, a.first_seen, a.last_seen ORDER BY a.last_seen DESC LIMIT 1000;"
+          "rawSql": "SELECT a.registration, a.icao_type, a.operator, a.military, string_agg(DISTINCT f.callsign, ', ') AS callsigns, a.first_seen, a.last_seen, count(*) AS flights, a.icao_hex FROM flights f JOIN aircraft a USING (icao_hex) WHERE f.start_time BETWEEN $__timeFrom() AND $__timeTo() AND ('__all' IN (${callsign:singlequote}) OR f.callsign IN (${callsign:singlequote})) AND ('__all' IN (${registration:singlequote}) OR a.registration IN (${registration:singlequote})) AND ('__all' IN (${type:singlequote}) OR a.icao_type IN (${type:singlequote})) AND ('__all' IN (${operator:singlequote}) OR a.operator IN (${operator:singlequote})) AND ('${mil}' = 'any' OR (a.military AND '${mil}' = 'mil') OR (NOT a.military AND '${mil}' = 'civ')) GROUP BY a.icao_hex, a.registration, a.icao_type, a.operator, a.military, a.first_seen, a.last_seen ORDER BY a.last_seen DESC LIMIT 1000;"
         }
       ]
     },
@@ -392,7 +442,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT a.operator, count(DISTINCT a.icao_hex) AS aircraft, count(*) AS flights FROM flights f JOIN aircraft a USING (icao_hex) WHERE f.start_time BETWEEN $__timeFrom() AND $__timeTo() AND a.operator IS NOT NULL AND (${callsign:sqlstring} = '' OR f.callsign ILIKE '%' || ${callsign:sqlstring} || '%') AND (${registration:sqlstring} = '' OR a.registration ILIKE '%' || ${registration:sqlstring} || '%') AND (${type:sqlstring} = '' OR a.icao_type ILIKE '%' || ${type:sqlstring} || '%') AND (${operator:sqlstring} = '' OR a.operator ILIKE '%' || ${operator:sqlstring} || '%') AND ('${mil}' = 'any' OR (a.military AND '${mil}' = 'mil') OR (NOT a.military AND '${mil}' = 'civ')) GROUP BY a.operator ORDER BY flights DESC LIMIT 30;"
+          "rawSql": "SELECT a.operator, count(DISTINCT a.icao_hex) AS aircraft, count(*) AS flights FROM flights f JOIN aircraft a USING (icao_hex) WHERE f.start_time BETWEEN $__timeFrom() AND $__timeTo() AND a.operator IS NOT NULL AND ('__all' IN (${callsign:singlequote}) OR f.callsign IN (${callsign:singlequote})) AND ('__all' IN (${registration:singlequote}) OR a.registration IN (${registration:singlequote})) AND ('__all' IN (${type:singlequote}) OR a.icao_type IN (${type:singlequote})) AND ('__all' IN (${operator:singlequote}) OR a.operator IN (${operator:singlequote})) AND ('${mil}' = 'any' OR (a.military AND '${mil}' = 'mil') OR (NOT a.military AND '${mil}' = 'civ')) GROUP BY a.operator ORDER BY flights DESC LIMIT 30;"
         }
       ]
     }
