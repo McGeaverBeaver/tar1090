@@ -132,9 +132,11 @@ docker run -d --name tar1090-db --restart unless-stopped \
   -v /path/on/host/pgdata:/home/postgres/pgdata/data \
   timescale/timescaledb-ha:pg16
 
-# apply the schema once (POSTGRES_USER here is a superuser, so extensions just work)
+# apply the schema once (POSTGRES_USER here is a superuser, so extensions just work
+# and the tables end up owned by tar1090, which is what the logger connects as)
 docker cp schema.sql tar1090-db:/tmp/schema.sql
-docker exec -u postgres tar1090-db psql -d tar1090 -f /tmp/schema.sql
+docker exec -e PGPASSWORD=changeme tar1090-db \
+  psql -h 127.0.0.1 -U tar1090 -d tar1090 -f /tmp/schema.sql
 
 # 2) logger -- point it at the DB (TAR1090_DB_DSN) and tar1090's aircraft.json (AIRCRAFT_URL)
 docker run -d --name tar1090-logger --restart unless-stopped \
