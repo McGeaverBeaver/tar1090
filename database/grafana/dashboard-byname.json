@@ -6,7 +6,7 @@
     "adsb"
   ],
   "timezone": "browser",
-  "schemaVersion": 39,
+  "schemaVersion": 32,
   "version": 3,
   "time": {
     "from": "now-6h",
@@ -86,10 +86,7 @@
         "name": "ac",
         "type": "query",
         "label": "Aircraft (trail)",
-        "datasource": {
-          "type": "postgres",
-          "uid": "${DS_TAR1090}"
-        },
+        "datasource": "tar1090",
         "refresh": 2,
         "includeAll": false,
         "sort": 0,
@@ -102,10 +99,7 @@
       "id": 1,
       "type": "stat",
       "title": "Flights",
-      "datasource": {
-        "type": "postgres",
-        "uid": "${DS_TAR1090}"
-      },
+      "datasource": "tar1090",
       "gridPos": {
         "h": 4,
         "w": 8,
@@ -148,10 +142,7 @@
       "id": 2,
       "type": "stat",
       "title": "Aircraft",
-      "datasource": {
-        "type": "postgres",
-        "uid": "${DS_TAR1090}"
-      },
+      "datasource": "tar1090",
       "gridPos": {
         "h": 4,
         "w": 8,
@@ -194,10 +185,7 @@
       "id": 3,
       "type": "stat",
       "title": "Military aircraft",
-      "datasource": {
-        "type": "postgres",
-        "uid": "${DS_TAR1090}"
-      },
+      "datasource": "tar1090",
       "gridPos": {
         "h": 4,
         "w": 8,
@@ -251,10 +239,7 @@
       "id": 4,
       "type": "table",
       "title": "Search results \u2014 one row per aircraft (click Registration to plot its trail)",
-      "datasource": {
-        "type": "postgres",
-        "uid": "${DS_TAR1090}"
-      },
+      "datasource": "tar1090",
       "gridPos": {
         "h": 11,
         "w": 24,
@@ -308,10 +293,7 @@
       "id": 5,
       "type": "geomap",
       "title": "Trail of selected aircraft ($ac)",
-      "datasource": {
-        "type": "postgres",
-        "uid": "${DS_TAR1090}"
-      },
+      "datasource": "tar1090",
       "gridPos": {
         "h": 15,
         "w": 17,
@@ -378,10 +360,7 @@
       "id": 6,
       "type": "table",
       "title": "Top operators (current filter)",
-      "datasource": {
-        "type": "postgres",
-        "uid": "${DS_TAR1090}"
-      },
+      "datasource": "tar1090",
       "gridPos": {
         "h": 15,
         "w": 7,
@@ -396,16 +375,5 @@
         }
       ]
     }
-  ],
-  "__inputs": [
-    {
-      "name": "DS_TAR1090",
-      "label": "tar1090 TimescaleDB",
-      "description": "",
-      "type": "datasource",
-      "pluginId": "postgres",
-      "pluginName": "PostgreSQL"
-    }
-  ],
-  "__requires": []
+  ]
 }
