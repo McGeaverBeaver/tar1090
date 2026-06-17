@@ -30,11 +30,14 @@ RUN set -eux; \
 COPY database/tar1090-logger.py /usr/local/share/tar1090/tar1090-logger.py
 COPY database/schema.sql        /usr/local/share/tar1090/schema.sql
 
-# Bundle an aircraft metadata CSV so registration/type/operator/military resolve
-# even if readsb is not run with --db-file. Best-effort: the logger works without it.
-RUN curl -fsSL -o /usr/local/share/tar1090/aircraft.csv.gz \
-      https://github.com/wiedehopf/tar1090-db/raw/csv/aircraft.csv.gz || \
-    echo "warning: could not pre-fetch aircraft.csv.gz; metadata will rely on readsb --db-file"
+# Bundle the aircraft metadata CSV so registration/type/operator/military resolve
+# even when readsb is not run with --db-file. Fail the build if it can't be fetched
+# or isn't a valid (>1MB) gzip, so we never ship an image without working metadata.
+RUN curl -fsSL --retry 5 --retry-delay 2 -o /usr/local/share/tar1090/aircraft.csv.gz \
+      https://github.com/wiedehopf/tar1090-db/raw/csv/aircraft.csv.gz \
+ && gzip -t /usr/local/share/tar1090/aircraft.csv.gz \
+ && [ "$(stat -c%s /usr/local/share/tar1090/aircraft.csv.gz)" -gt 1000000 ] \
+ && echo "bundled aircraft.csv.gz ($(stat -c%s /usr/local/share/tar1090/aircraft.csv.gz) bytes)"
 
 # --- s6 service that runs the logger ----------------------------------------
 COPY allinone/rootfs/ /

@@ -119,15 +119,16 @@ def resolve_meta(ac, csv_meta):
     year = ac.get("year")
     dbf = ac.get("dbFlags") or 0
 
-    if csv_meta and (reg is None or typ is None):
+    if csv_meta and (reg is None or typ is None or op is None):
         m = csv_meta.get(ac["hex"].lower().lstrip("~"))
         if m:
-            reg = reg or m.get("registration")
-            typ = typ or m.get("icao_type")
-            desc = desc or m.get("type_desc")
-            op = op or m.get("operator")
-            if not ac.get("dbFlags") and m.get("dbFlags"):
-                dbf = m["dbFlags"]
+            # m is a tuple: (registration, icao_type, type_desc, operator, dbFlags)
+            reg = reg or m[0]
+            typ = typ or m[1]
+            desc = desc or m[2]
+            op = op or m[3]
+            if not ac.get("dbFlags") and m[4]:
+                dbf = m[4]
 
     return {
         "reg": reg or None,
@@ -142,12 +143,31 @@ def resolve_meta(ac, csv_meta):
     }
 
 
-def load_csv_metadata(path):
-    """Best-effort loader for a tar1090-db style CSV (used only when readsb is run
-    without --db-file). Matches columns by header name so it tolerates format
-    differences; if the header is unrecognised it is skipped with a warning."""
-    import csv as _csv
+def parse_dbflags(s):
+    """tar1090-db encodes dbFlags as a positional binary string: index 0 = military,
+    1 = interesting, 2 = pia, 3 = ladd (see html/planeObject.js). e.g. '10' = military.
+    Tolerate an already-numeric value too."""
+    s = (s or "").strip()
+    if not s:
+        return 0
+    if set(s) <= {"0", "1"}:               # positional bit string ('10', '0010', ...)
+        f = 0
+        for i, bit in enumerate(("1", "2", "4", "8")):
+            if i < len(s) and s[i] == "1":
+                f |= int(bit)
+        return f
+    try:                                   # some sources store a plain integer
+        return int(s)
+    except ValueError:
+        return 0
 
+
+def load_csv_metadata(path):
+    """Loader for a tar1090-db style aircraft CSV (used when readsb is NOT run with
+    --db-file). Handles the real wiedehopf format -- headerless, ';'-separated,
+    columns: icao;registration;icaotype;dbflags;description;year;operator -- and
+    falls back to header-name matching for other CSV shapes. Returns
+    {icao_hex: (registration, icao_type, type_desc, operator, dbFlags)}."""
     if not path:
         return {}
     if not os.path.exists(path):
@@ -156,55 +176,68 @@ def load_csv_metadata(path):
 
     opener = gzip.open if path.endswith(".gz") else open
     out = {}
+    _i = sys.intern  # dedupe the very repetitive type/desc/operator strings
     try:
         with opener(path, "rt", encoding="utf-8", errors="replace", newline="") as fh:
-            sample = fh.read(4096)
+            first = fh.readline()
             fh.seek(0)
-            delim = ";" if sample.count(";") >= sample.count(",") else ","
-            rdr = _csv.reader(fh, delimiter=delim)
-            header = next(rdr, None)
-            if not header:
-                return {}
-            cols = [h.strip().lower() for h in header]
+            f0 = first.split(";")[0].strip().lstrip("~")
+            headerless = ";" in first and len(f0) == 6 and all(c in "0123456789abcdefABCDEF" for c in f0)
 
-            def idx(*names):
-                for n in names:
-                    if n in cols:
-                        return cols.index(n)
-                return None
+            if headerless:
+                for line in fh:
+                    p = line.rstrip("\n").split(";")
+                    if len(p) < 3:
+                        continue
+                    key = p[0].strip().lower().lstrip("~")
+                    if not key:
+                        continue
+                    reg = (p[1].strip() if len(p) > 1 else "") or None
+                    typ = (p[2].strip() if len(p) > 2 else "") or None
+                    flags = parse_dbflags(p[3] if len(p) > 3 else "")
+                    desc = (p[4].strip() if len(p) > 4 else "") or None
+                    op = (p[6].strip() if len(p) > 6 else "") or None
+                    out[key] = (reg, _i(typ) if typ else None, _i(desc) if desc else None,
+                                _i(op) if op else None, flags)
+            else:
+                import csv as _csv
+                sample = first
+                delim = ";" if sample.count(";") >= sample.count(",") else ","
+                rdr = _csv.reader(fh, delimiter=delim)
+                header = next(rdr, None)
+                cols = [h.strip().lower() for h in header] if header else []
 
-            i_icao = idx("icao", "hex", "icao24", "icaohex")
-            i_reg = idx("registration", "reg", "r", "tail")
-            i_type = idx("icaotype", "type", "t", "typecode", "icao_type")
-            i_desc = idx("desc", "description", "type_desc", "model")
-            i_op = idx("operator", "ownop", "owner", "airline")
-            i_flags = idx("dbflags", "flags")
-            if i_icao is None:
-                log.warning("AIRCRAFT_CSV header not recognised (cols=%s); skipping", cols)
-                return {}
+                def idx(*names):
+                    for n in names:
+                        if n in cols:
+                            return cols.index(n)
+                    return None
 
-            for row in rdr:
-                if len(row) <= i_icao:
-                    continue
-                key = row[i_icao].strip().lower().lstrip("~")
-                if not key:
-                    continue
-                rec = {}
-                if i_reg is not None and i_reg < len(row):
-                    rec["registration"] = row[i_reg].strip() or None
-                if i_type is not None and i_type < len(row):
-                    rec["icao_type"] = row[i_type].strip() or None
-                if i_desc is not None and i_desc < len(row):
-                    rec["type_desc"] = row[i_desc].strip() or None
-                if i_op is not None and i_op < len(row):
-                    rec["operator"] = row[i_op].strip() or None
-                if i_flags is not None and i_flags < len(row):
-                    try:
-                        rec["dbFlags"] = int(row[i_flags])
-                    except ValueError:
-                        pass
-                out[key] = rec
-        log.info("loaded %d aircraft from fallback CSV %s", len(out), path)
+                i_icao = idx("icao", "hex", "icao24", "icaohex")
+                i_reg = idx("registration", "reg", "r", "tail")
+                i_type = idx("icaotype", "type", "t", "typecode", "icao_type")
+                i_desc = idx("desc", "description", "type_desc", "model")
+                i_op = idx("operator", "ownop", "owner", "airline")
+                i_flags = idx("dbflags", "flags")
+                if i_icao is None:
+                    log.warning("AIRCRAFT_CSV header not recognised (cols=%s); skipping", cols)
+                    return {}
+
+                def cell(row, i):
+                    return (row[i].strip() or None) if (i is not None and i < len(row)) else None
+
+                for row in rdr:
+                    if len(row) <= i_icao:
+                        continue
+                    key = row[i_icao].strip().lower().lstrip("~")
+                    if not key:
+                        continue
+                    typ, desc, op = cell(row, i_type), cell(row, i_desc), cell(row, i_op)
+                    flags = parse_dbflags(row[i_flags]) if (i_flags is not None and i_flags < len(row)) else 0
+                    out[key] = (cell(row, i_reg), _i(typ) if typ else None,
+                                _i(desc) if desc else None, _i(op) if op else None, flags)
+
+        log.info("loaded %d aircraft from CSV %s", len(out), path)
     except OSError as e:
         log.warning("failed to load AIRCRAFT_CSV %s: %s", path, e)
     return out
