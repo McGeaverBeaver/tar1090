@@ -10,7 +10,10 @@ on:
     paths:
       - allinone/**
       - database/tar1090-logger.py
+      - database/tar1090-history-api.py
+      - database/history/**
       - database/schema.sql
+      - database/schema-index.sql
       - .github/workflows/build-allinone.yml
   workflow_dispatch:
 
