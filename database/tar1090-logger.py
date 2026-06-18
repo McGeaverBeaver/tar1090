@@ -43,6 +43,10 @@ AIRCRAFT_CSV  = os.environ.get("AIRCRAFT_CSV", "").strip()
 # when readsb/tar1090 runs in a separate container -- point this at the tar1090 web
 # UI (e.g. http://192.168.1.10/data/aircraft.json, or just http://192.168.1.10).
 AIRCRAFT_URL  = os.environ.get("AIRCRAFT_URL", "").strip()
+# Log individual trail points into the `positions` table (needs the full schema.sql
+# with TimescaleDB). Set false for the slim "index only" setup (schema-index.sql),
+# where trails are read on demand from globe_history instead -- no positions stored.
+LOG_POSITIONS = os.environ.get("LOG_POSITIONS", "true").strip().lower() != "false"
 
 # Same candidate list install.sh uses to find a decoder's aircraft.json.
 SOURCE_DIRS_FALLBACK = [
@@ -383,16 +387,17 @@ def process(conn, data, state, csv_meta):
             cur.executemany(
                 "UPDATE flights SET end_time=%s, msg_count=%s, max_alt=%s WHERE id=%s", fupd)
 
-        for d in decisions:
-            if d["store_pos"]:
-                p = d["pos"]
-                pos_rows.append((p["time"], d["hex"], d["flight_id"], p["lat"], p["lon"],
-                                 p["alt"], p["ground"], p["gs"], p["track"],
-                                 p["baro_rate"], p["source"]))
-        if pos_rows:
-            with cur.copy(COPY_POSITIONS) as cp:
-                for r in pos_rows:
-                    cp.write_row(r)
+        if LOG_POSITIONS:
+            for d in decisions:
+                if d["store_pos"]:
+                    p = d["pos"]
+                    pos_rows.append((p["time"], d["hex"], d["flight_id"], p["lat"], p["lon"],
+                                     p["alt"], p["ground"], p["gs"], p["track"],
+                                     p["baro_rate"], p["source"]))
+            if pos_rows:
+                with cur.copy(COPY_POSITIONS) as cp:
+                    for r in pos_rows:
+                        cp.write_row(r)
 
     conn.commit()
 

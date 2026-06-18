@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tar1090 — history search &amp; replay</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.4 system-ui, sans-serif; background: #14161a; color: #e6e6e6; }
+  header { padding: 8px 12px; background: #1d2026; border-bottom: 1px solid #2c313a; }
+  header h1 { margin: 0; font-size: 15px; font-weight: 600; }
+  header span { color: #8a93a2; font-weight: 400; }
+  #controls { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px; background: #1a1d23; border-bottom: 1px solid #2c313a; align-items: center; }
+  #controls input, #controls select { background: #0f1115; color: #e6e6e6; border: 1px solid #333; border-radius: 4px; padding: 5px 7px; font-size: 13px; }
+  #controls input[type=text] { width: 120px; }
+  #controls label { color: #8a93a2; font-size: 11px; display: flex; flex-direction: column; gap: 2px; }
+  #controls button { background: #2d6cdf; color: #fff; border: 0; border-radius: 4px; padding: 7px 14px; cursor: pointer; font-size: 13px; }
+  #controls button:hover { background: #3b78e8; }
+  #main { display: flex; height: calc(100vh - 112px); }
+  #left { width: 46%; min-width: 360px; overflow: auto; border-right: 1px solid #2c313a; }
+  #right { flex: 1; position: relative; }
+  #map { position: absolute; inset: 0; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid #23262d; white-space: nowrap; }
+  th { position: sticky; top: 0; background: #1d2026; cursor: pointer; font-size: 11px; color: #9aa3b2; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: #20242b; }
+  tbody tr.sel { background: #243a5e; }
+  .mil { color: #ff6b6b; font-weight: 600; }
+  #status { padding: 6px 12px; color: #8a93a2; }
+  #replay { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 500; background: rgba(20,22,26,.92);
+            border: 1px solid #2c313a; border-radius: 6px; padding: 6px 10px; display: none; align-items: center; gap: 8px; }
+  #replay.on { display: flex; }
+  #replay input[type=range] { flex: 1; }
+  #replay button { background: #2d6cdf; color: #fff; border: 0; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
+  #ptlabel { color: #cbd3df; font-variant-numeric: tabular-nums; min-width: 230px; }
+</style>
+</head>
+<body>
+<header><h1>tar1090 — history search &amp; replay <span>· search the flight index, replay trails from globe_history</span></h1></header>
+
+<div id="controls">
+  <label>Search<input id="q" type="text" placeholder="callsign / reg / type"></label>
+  <label>Callsign<input id="callsign" type="text"></label>
+  <label>Registration<input id="registration" type="text"></label>
+  <label>Type<input id="type" type="text"></label>
+  <label>Operator<input id="operator" type="text"></label>
+  <label>Military<select id="mil"><option value="any">Any</option><option value="mil">Military</option><option value="civ">Civil</option></select></label>
+  <label>From<input id="from" type="datetime-local"></label>
+  <label>To<input id="to" type="datetime-local"></label>
+  <button id="go">Search</button>
+</div>
+
+<div id="main">
+  <div id="left">
+    <div id="status">Set a time range and search.</div>
+    <table><thead><tr>
+      <th data-k="callsign">Callsign</th><th data-k="registration">Reg</th><th data-k="icao_type">Type</th>
+      <th data-k="operator">Operator</th><th data-k="military">Mil</th>
+      <th data-k="start">Start (UTC)</th><th data-k="duration_s">Dur</th><th data-k="max_alt">Max alt</th>
+    </tr></thead><tbody id="rows"></tbody></table>
+  </div>
+  <div id="right">
+    <div id="map"></div>
+    <div id="replay">
+      <button id="play">▶</button>
+      <input id="slider" type="range" min="0" max="0" value="0">
+      <span id="ptlabel"></span>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const pad = n => String(n).padStart(2, '0');
+function fmtUTC(ms){ if(ms==null) return ''; const d=new Date(ms);
+  return d.getUTCFullYear()+'-'+pad(d.getUTCMonth()+1)+'-'+pad(d.getUTCDate())+' '+pad(d.getUTCHours())+':'+pad(d.getUTCMinutes())+':'+pad(d.getUTCSeconds())+'Z'; }
+function fmtDur(s){ if(s==null) return ''; const h=Math.floor(s/3600), m=Math.floor(s%3600/60), ss=s%60;
+  return (h?h+'h ':'')+(h||m?m+'m ':'')+ss+'s'; }
+// datetime-local <-> epoch ms (local time)
+function toMs(v){ return v ? new Date(v).getTime() : ''; }
+function localInput(d){ return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes()); }
+
+// default range: last 24h
+(function(){ const now=new Date(); $('to').value=localInput(now); $('from').value=localInput(new Date(now-864e5)); })();
+
+const map = L.map('map', { worldCopyJump:true }).setView([40, -74], 4);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(map);
+let trailLayer = L.layerGroup().addTo(map);
+let marker = null, pts = [], anim = null;
+
+let flights = [], sortKey = 'start', sortDir = -1;
+
+async function doSearch(){
+  const p = new URLSearchParams();
+  for (const k of ['q','callsign','registration','type','operator','mil']) if ($(k).value) p.set(k, $(k).value);
+  if ($('from').value) p.set('from', toMs($('from').value));
+  if ($('to').value)   p.set('to',   toMs($('to').value));
+  $('status').textContent = 'Searching…';
+  try {
+    const r = await fetch('api/search?' + p.toString());
+    const j = await r.json();
+    if (j.error) { $('status').textContent = 'Error: ' + j.error; return; }
+    flights = j.flights;
+    $('status').textContent = `${j.count} flight(s) · ${fmtUTC(j.from)} → ${fmtUTC(j.to)} (click a row to replay its trail)`;
+    render();
+  } catch(e){ $('status').textContent = 'Request failed: ' + e; }
+}
+
+function render(){
+  flights.sort((a,b)=>{ const x=a[sortKey], y=b[sortKey];
+    return (x<y?-1:x>y?1:0)*sortDir; });
+  const tb = $('rows'); tb.innerHTML='';
+  for (const f of flights){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${f.callsign||''}</td><td>${f.registration||''}</td><td>${f.icao_type||''}</td>`
+      + `<td>${f.operator||''}</td><td class="${f.military?'mil':''}">${f.military?'MIL':''}</td>`
+      + `<td>${fmtUTC(f.start)}</td><td>${fmtDur(f.duration_s)}</td><td>${f.max_alt!=null?f.max_alt:''}</td>`;
+    tr.onclick = ()=>{ document.querySelectorAll('#rows tr').forEach(x=>x.classList.remove('sel')); tr.classList.add('sel'); loadTrace(f); };
+    tb.appendChild(tr);
+  }
+}
+
+document.querySelectorAll('th[data-k]').forEach(th=>th.onclick=()=>{
+  const k=th.dataset.k; sortDir = (sortKey===k)? -sortDir : 1; sortKey=k; render(); });
+
+const altColor = a => a==null?'#888': a<2000?'#d33':a<10000?'#e80':a<20000?'#dd0':a<30000?'#3c3':'#3af';
+
+async function loadTrace(f){
+  stopAnim();
+  trailLayer.clearLayers();
+  $('status_pt')&&($('status_pt').textContent='');
+  const p = new URLSearchParams({ hex:f.icao_hex, start:f.start, end:f.end });
+  const r = await fetch('api/trace?' + p.toString());
+  const j = await r.json();
+  pts = j.points || [];
+  if (!pts.length){ $('replay').classList.remove('on'); alert('No trail found in globe_history for this flight (file may be aged out, or globe-history wasn\'t enabled then).'); return; }
+  // colored polyline segments by altitude
+  for (let i=1;i<pts.length;i++){
+    L.polyline([[pts[i-1][1],pts[i-1][2]],[pts[i][1],pts[i][2]]],
+      { color: altColor(pts[i][3]), weight: 3, opacity: .85 }).addTo(trailLayer);
+  }
+  marker = L.circleMarker([pts[0][1],pts[0][2]], { radius:6, color:'#fff', weight:2, fillColor:'#2d6cdf', fillOpacity:1 }).addTo(trailLayer);
+  map.fitBounds(L.latLngBounds(pts.map(p=>[p[1],p[2]])).pad(0.1));
+  const s=$('slider'); s.max=pts.length-1; s.value=0; showPoint(0);
+  $('replay').classList.add('on');
+}
+
+function showPoint(i){
+  const p = pts[i]; if(!p) return;
+  marker.setLatLng([p[1],p[2]]);
+  $('ptlabel').textContent = `${fmtUTC(p[0])} · ${p[3]!=null?p[3]+' ft':'—'} · ${i+1}/${pts.length}`;
+}
+$('slider').oninput = e => showPoint(+e.target.value);
+
+function stopAnim(){ if(anim){ clearInterval(anim); anim=null; $('play').textContent='▶'; } }
+$('play').onclick = ()=>{
+  if (anim){ stopAnim(); return; }
+  if (+$('slider').value >= pts.length-1) $('slider').value = 0;
+  $('play').textContent='❚❚';
+  anim = setInterval(()=>{ let i=+$('slider').value+1; if(i>=pts.length){ stopAnim(); return; }
+    $('slider').value=i; showPoint(i); }, 120);
+};
+
+$('go').onclick = doSearch;
+document.querySelectorAll('#controls input').forEach(el=>el.addEventListener('keydown',e=>{ if(e.key==='Enter') doSearch(); }));
+doSearch();
+</script>
+</body>
+</html>

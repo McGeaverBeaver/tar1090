@@ -26,9 +26,12 @@ RUN set -eux; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
-# --- the logger + schema (reused from database/) ----------------------------
-COPY database/tar1090-logger.py /usr/local/share/tar1090/tar1090-logger.py
-COPY database/schema.sql        /usr/local/share/tar1090/schema.sql
+# --- the logger, history API + page, and schemas (reused from database/) -----
+COPY database/tar1090-logger.py      /usr/local/share/tar1090/tar1090-logger.py
+COPY database/tar1090-history-api.py /usr/local/share/tar1090/tar1090-history-api.py
+COPY database/history/               /usr/local/share/tar1090/history/
+COPY database/schema.sql             /usr/local/share/tar1090/schema.sql
+COPY database/schema-index.sql       /usr/local/share/tar1090/schema-index.sql
 
 # Bundle the aircraft metadata CSV so registration/type/operator/military resolve
 # even when readsb is not run with --db-file. Fail the build if it can't be fetched
@@ -39,18 +42,30 @@ RUN curl -fsSL --retry 5 --retry-delay 2 -o /usr/local/share/tar1090/aircraft.cs
  && [ "$(stat -c%s /usr/local/share/tar1090/aircraft.csv.gz)" -gt 1000000 ] \
  && echo "bundled aircraft.csv.gz ($(stat -c%s /usr/local/share/tar1090/aircraft.csv.gz) bytes)"
 
-# --- s6 service that runs the logger ----------------------------------------
+# --- s6 services: the logger + the history search/replay API ----------------
 COPY allinone/rootfs/ /
-RUN chmod +x /etc/s6-overlay/s6-rc.d/tar1090-logger/run
+RUN chmod +x /etc/s6-overlay/s6-rc.d/tar1090-logger/run \
+             /etc/s6-overlay/s6-rc.d/tar1090-history-api/run
 
-# Logger tunables (see database/tar1090-logger.default for what they do).
-# TAR1090_DB_DSN is intentionally left UNSET: set it to your external TimescaleDB to
-# enable logging (the web GUI runs regardless). e.g.
+# The history search & replay page is served by the bundled API on port 8090:
+#   http://<host>:8090/   (search the flight index; trails come from globe_history)
+EXPOSE 8090
+
+# Logger + history-API tunables (see database/tar1090-logger.default).
+# TAR1090_DB_DSN is intentionally left UNSET: set it to your database to enable logging
+# and search (the web GUI runs regardless). e.g.
 #   -e TAR1090_DB_DSN="host=192.168.1.50 port=5432 dbname=tar1090 user=tar1090 password=secret"
+# LOG_POSITIONS=false: with the history page, trails are read from globe_history, so the
+# logger only maintains the slim aircraft/flights index (apply schema-index.sql -- plain
+# PostgreSQL, no TimescaleDB/PostGIS needed). Set true to also fill a positions table.
 ENV ENABLE_LOGGER=true \
+    ENABLE_HISTORY_API=true \
+    LOG_POSITIONS=false \
     LOG_INTERVAL=5 \
     FLIGHT_GAP=300 \
     MAX_POINT_GAP=15 \
     MIN_TRACK_DEG=5 \
+    MIN_GS_KT=10 \
     MIN_ALT_FT=200 \
-    MIN_GS_KT=10
+    GLOBE_HISTORY_DIR=/var/globe_history \
+    HISTORY_API_PORT=8090
