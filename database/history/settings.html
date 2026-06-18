@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tar1090 — alert settings</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.5 system-ui, sans-serif; background: #14161a; color: #e6e6e6; }
+  header { padding: 8px 12px 0; background: #1d2026; border-bottom: 1px solid #2c313a; }
+  header h1 { margin: 0 0 6px; font-size: 15px; font-weight: 600; }
+  #tabs { display: flex; gap: 2px; }
+  #tabs a { color: #9aa3b2; text-decoration: none; padding: 7px 14px; border-radius: 6px 6px 0 0; font-size: 13px; }
+  #tabs a:hover { background: #23272f; color: #e6e6e6; }
+  #tabs a.active { background: #2d6cdf; color: #fff; }
+  main { max-width: 680px; margin: 0 auto; padding: 16px 12px 40px; }
+  fieldset { border: 1px solid #2c313a; border-radius: 8px; margin: 0 0 16px; padding: 12px 14px; }
+  legend { color: #9aa3b2; font-size: 12px; padding: 0 6px; }
+  .row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+  .row label { width: 150px; color: #b9c1cd; flex: none; }
+  input[type=text], input[type=number], input[type=password] { flex: 1; background: #0f1115; color: #e6e6e6;
+    border: 1px solid #333; border-radius: 4px; padding: 6px 8px; font-size: 13px; }
+  input[type=checkbox] { width: 16px; height: 16px; }
+  button { background: #2d6cdf; color: #fff; border: 0; border-radius: 5px; padding: 8px 16px; cursor: pointer; font-size: 13px; }
+  button.ghost { background: #2a2f38; }
+  button:hover { filter: brightness(1.1); }
+  .actions { display: flex; gap: 8px; margin-top: 4px; }
+  #status { margin-top: 12px; color: #9aa3b2; min-height: 18px; }
+  .help { color: #7e8794; font-size: 11.5px; margin: 2px 0 0 160px; }
+  code { background: #0f1115; padding: 1px 5px; border-radius: 3px; color: #cbd3df; }
+</style>
+</head>
+<body>
+<header>
+  <h1>tar1090 — alerts</h1>
+  <nav id="tabs"><a href="index.html">History</a><a href="alerts.html">Alerts</a><a href="settings.html" class="active">Settings</a></nav>
+</header>
+<main>
+  <fieldset>
+    <legend>MQTT broker → Home Assistant</legend>
+    <div class="row"><label>Alerting enabled</label><input type="checkbox" id="enabled"></div>
+    <div class="row"><label>Broker host</label><input type="text" id="mqtt_host" placeholder="192.168.1.x (your Mosquitto / HA broker)"></div>
+    <div class="row"><label>Port</label><input type="number" id="mqtt_port" value="1883" style="max-width:120px"></div>
+    <div class="row"><label>Username</label><input type="text" id="mqtt_username" placeholder="(optional)"></div>
+    <div class="row"><label>Password</label><input type="password" id="mqtt_password" placeholder="(optional)"></div>
+    <div class="row"><label>Use TLS</label><input type="checkbox" id="mqtt_tls"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Topics & Home Assistant</legend>
+    <div class="row"><label>Base topic</label><input type="text" id="base_topic" value="tar1090"></div>
+    <div class="help">Events publish to <code>&lt;base&gt;/event</code>; per-rule sensors to <code>&lt;base&gt;/rule/&lt;id&gt;/state</code>.</div>
+    <div class="row"><label>HA MQTT Discovery</label><input type="checkbox" id="ha_discovery"></div>
+    <div class="help">Auto-creates a <code>binary_sensor</code> in Home Assistant per rule — no YAML. It pulses on for each detection.</div>
+    <div class="row"><label>Discovery prefix</label><input type="text" id="discovery_prefix" value="homeassistant"></div>
+  </fieldset>
+
+  <div class="actions">
+    <button id="save">Save</button>
+    <button id="test" class="ghost">Save &amp; send test</button>
+  </div>
+  <div id="status">Configure your broker, Save, then use the Alerts tab to add rules.</div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+function setMsg(t){ $('status').textContent = t; }
+
+async function load(){
+  try {
+    const j = await (await fetch('api/alerts/config')).json();
+    const c = j.config || {};
+    $('enabled').checked = c.enabled !== false;
+    $('mqtt_host').value = c.mqtt_host || '';
+    $('mqtt_port').value = c.mqtt_port || 1883;
+    $('mqtt_username').value = c.mqtt_username || '';
+    $('mqtt_password').value = '';
+    $('mqtt_password').placeholder = c.has_password ? '•••••• (stored — leave blank to keep)' : '(optional)';
+    $('mqtt_tls').checked = !!c.mqtt_tls;
+    $('base_topic').value = c.base_topic || 'tar1090';
+    $('ha_discovery').checked = c.ha_discovery !== false;
+    $('discovery_prefix').value = c.discovery_prefix || 'homeassistant';
+  } catch(e){ setMsg('Could not load settings: ' + e); }
+}
+function collect(){
+  return {
+    enabled: $('enabled').checked,
+    mqtt_host: $('mqtt_host').value.trim(),
+    mqtt_port: +$('mqtt_port').value || 1883,
+    mqtt_username: $('mqtt_username').value.trim(),
+    mqtt_password: $('mqtt_password').value,        // blank => API keeps the stored one
+    mqtt_tls: $('mqtt_tls').checked,
+    base_topic: $('base_topic').value.trim() || 'tar1090',
+    ha_discovery: $('ha_discovery').checked,
+    discovery_prefix: $('discovery_prefix').value.trim() || 'homeassistant',
+  };
+}
+async function post(path, body){
+  const r = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  return r.json();
+}
+$('save').onclick = async ()=>{
+  setMsg('Saving…');
+  const r = await post('api/alerts/config', collect());
+  if (r.ok){ setMsg('Saved.'); load(); } else setMsg('Error: ' + (r.error || 'save failed'));
+};
+$('test').onclick = async ()=>{
+  setMsg('Saving, then publishing a test message…');
+  let r = await post('api/alerts/config', collect());
+  if (!r.ok){ setMsg('Error saving: ' + (r.error || 'failed')); return; }
+  load();
+  r = await post('api/alerts/test', {});
+  setMsg(r.ok ? 'Test published ✓ — look for topic <base>/test in Home Assistant / MQTT.'
+              : 'Test failed: ' + (r.error || 'unknown error'));
+};
+load();
+</script>
+</body>
+</html>

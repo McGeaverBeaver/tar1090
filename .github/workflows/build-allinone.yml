@@ -11,9 +11,12 @@ on:
       - allinone/**
       - database/tar1090-logger.py
       - database/tar1090-history-api.py
+      - database/tar1090-alerter.py
+      - database/tar1090_mqtt.py
       - database/history/**
       - database/schema.sql
       - database/schema-index.sql
+      - database/schema-alerts.sql
       - .github/workflows/build-allinone.yml
   workflow_dispatch:
 

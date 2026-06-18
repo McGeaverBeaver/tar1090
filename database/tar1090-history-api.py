@@ -18,12 +18,18 @@ import json
 import logging
 import os
 import struct
+import sys
 import threading
 from datetime import datetime, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 import psycopg
+from psycopg.types.json import Jsonb
+
+# sibling helper (alerting MQTT); importable because we add our own dir to sys.path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import tar1090_mqtt as mq        # noqa: E402
 
 log = logging.getLogger("tar1090-history-api")
 
@@ -56,8 +62,9 @@ def query(sql, params):
     with _lock:
         try:
             cur = db().execute(sql, params)
-            cols = [d.name for d in cur.description]
-            return [dict(zip(cols, row)) for row in cur.fetchall()]
+            cols = [d.name for d in cur.description] if cur.description else []
+            rows = cur.fetchall() if cur.description else []
+            return [dict(zip(cols, row)) for row in rows]
         except psycopg.Error:
             global _conn
             if _conn is not None:
@@ -67,6 +74,10 @@ def query(sql, params):
                     pass
             _conn = None
             raise
+
+
+# Write that may return rows (RETURNING) or nothing; same reconnect-on-error as query().
+execute = query
 
 
 def ms(dt):
@@ -386,9 +397,155 @@ def traces(q):
     return {"flights": out, "chunks": len(bases), "truncated": False}
 
 
+# --- alerts -----------------------------------------------------------------
+ALERT_DDL = """
+CREATE TABLE IF NOT EXISTS alert_config (
+  id int PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  enabled boolean NOT NULL DEFAULT true,
+  mqtt_host text, mqtt_port int NOT NULL DEFAULT 1883,
+  mqtt_username text, mqtt_password text, mqtt_tls boolean NOT NULL DEFAULT false,
+  base_topic text NOT NULL DEFAULT 'tar1090',
+  ha_discovery boolean NOT NULL DEFAULT true,
+  discovery_prefix text NOT NULL DEFAULT 'homeassistant',
+  updated_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS alert_rules (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name text NOT NULL, enabled boolean NOT NULL DEFAULT true,
+  conditions jsonb NOT NULL DEFAULT '{}'::jsonb, zone jsonb, time_window jsonb,
+  cooldown_sec int NOT NULL DEFAULT 1800,
+  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS alert_log (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  rule_id bigint, rule_name text, icao_hex text, callsign text, registration text,
+  icao_type text, operator text, military boolean,
+  lat double precision, lon double precision, alt int, squawk text,
+  fired_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS alert_log_fired_idx ON alert_log (fired_at DESC);
+"""
+_alerts_ready = False
+
+
+def _ensure_alerts():
+    global _alerts_ready
+    if not _alerts_ready:
+        execute(ALERT_DDL, ())
+        _alerts_ready = True
+
+
+def alerts_rules_get(q):
+    _ensure_alerts()
+    return {"rules": query("SELECT id, name, enabled, conditions, zone, time_window, "
+                           "cooldown_sec FROM alert_rules ORDER BY id", ())}
+
+
+def alerts_rule_save(body):
+    _ensure_alerts()
+    name = (body.get("name") or "").strip()
+    if not name:
+        return {"error": "name is required"}
+    cond = Jsonb(body.get("conditions") or {})
+    zone = Jsonb(body["zone"]) if body.get("zone") else None
+    win  = Jsonb(body["time_window"]) if body.get("time_window") else None
+    cd   = int(body.get("cooldown_sec") or 1800)
+    enabled = bool(body.get("enabled", True))
+    rid = body.get("id")
+    if rid:
+        execute("UPDATE alert_rules SET name=%s, enabled=%s, conditions=%s, zone=%s, "
+                "time_window=%s, cooldown_sec=%s, updated_at=now() WHERE id=%s",
+                (name, enabled, cond, zone, win, cd, int(rid)))
+        return {"ok": True, "id": int(rid)}
+    rows = execute("INSERT INTO alert_rules (name, enabled, conditions, zone, time_window, "
+                   "cooldown_sec) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
+                   (name, enabled, cond, zone, win, cd))
+    return {"ok": True, "id": rows[0]["id"]}
+
+
+def alerts_rule_delete(body):
+    _ensure_alerts()
+    if not body.get("id"):
+        return {"error": "id required"}
+    execute("DELETE FROM alert_rules WHERE id=%s", (int(body["id"]),))
+    return {"ok": True}
+
+
+def alerts_config_get(q):
+    _ensure_alerts()
+    rows = query("SELECT enabled, mqtt_host, mqtt_port, mqtt_username, mqtt_password, "
+                 "mqtt_tls, base_topic, ha_discovery, discovery_prefix "
+                 "FROM alert_config WHERE id=1", ())
+    if not rows:
+        return {"config": {"enabled": True, "mqtt_port": 1883, "mqtt_tls": False,
+                           "base_topic": "tar1090", "ha_discovery": True,
+                           "discovery_prefix": "homeassistant", "has_password": False}}
+    c = rows[0]
+    c["has_password"] = bool(c.pop("mqtt_password", None))   # never expose the password
+    return {"config": c}
+
+
+def alerts_config_save(body):
+    _ensure_alerts()
+    cur = query("SELECT mqtt_password FROM alert_config WHERE id=1", ())
+    pw = body.get("mqtt_password")
+    if pw in (None, ""):                                     # blank -> keep the stored password
+        pw = cur[0]["mqtt_password"] if cur else None
+    execute("INSERT INTO alert_config (id, enabled, mqtt_host, mqtt_port, mqtt_username, "
+            "mqtt_password, mqtt_tls, base_topic, ha_discovery, discovery_prefix, updated_at) "
+            "VALUES (1,%s,%s,%s,%s,%s,%s,%s,%s,%s, now()) "
+            "ON CONFLICT (id) DO UPDATE SET enabled=EXCLUDED.enabled, mqtt_host=EXCLUDED.mqtt_host, "
+            "mqtt_port=EXCLUDED.mqtt_port, mqtt_username=EXCLUDED.mqtt_username, "
+            "mqtt_password=EXCLUDED.mqtt_password, mqtt_tls=EXCLUDED.mqtt_tls, "
+            "base_topic=EXCLUDED.base_topic, ha_discovery=EXCLUDED.ha_discovery, "
+            "discovery_prefix=EXCLUDED.discovery_prefix, updated_at=now()",
+            (bool(body.get("enabled", True)), body.get("mqtt_host") or None,
+             int(body.get("mqtt_port") or 1883), body.get("mqtt_username") or None, pw,
+             bool(body.get("mqtt_tls", False)), body.get("base_topic") or "tar1090",
+             bool(body.get("ha_discovery", True)), body.get("discovery_prefix") or "homeassistant"))
+    return {"ok": True}
+
+
+def alerts_test(body):
+    _ensure_alerts()
+    rows = query("SELECT enabled, mqtt_host, mqtt_port, mqtt_username, mqtt_password, "
+                 "mqtt_tls, base_topic FROM alert_config WHERE id=1", ())
+    if not rows or not rows[0].get("mqtt_host"):
+        return {"ok": False, "error": "save an MQTT broker host first"}
+    cfg = rows[0]
+    ok, err = mq.publish_once(cfg, (cfg.get("base_topic") or "tar1090") + "/test",
+                              {"test": True, "msg": "tar1090 alert test",
+                               "time": datetime.now(timezone.utc).isoformat()})
+    return {"ok": ok, "error": err}
+
+
+def alerts_log_get(q):
+    _ensure_alerts()
+    try:
+        limit = min(int(q.get("limit", [100])[0]), 1000)
+    except ValueError:
+        limit = 100
+    where, params = "", []
+    since = q.get("since", [None])[0]
+    if since:
+        try:
+            params.append(int(since))
+            where = "WHERE id > %s"
+        except ValueError:
+            pass
+    params.append(limit)
+    rows = query("SELECT id, rule_id, rule_name, icao_hex, callsign, registration, icao_type, "
+                 "operator, military, lat, lon, alt, squawk, fired_at FROM alert_log "
+                 + where + " ORDER BY fired_at DESC LIMIT %s", params)
+    for r in rows:
+        r["fired_at"] = ms(r["fired_at"])
+    return {"alerts": rows}
+
+
 # --- HTTP -------------------------------------------------------------------
 ROUTES = {"/api/search": search, "/api/options": options,
-          "/api/trace": trace, "/api/traces": traces}
+          "/api/trace": trace, "/api/traces": traces,
+          "/api/alerts/rules": alerts_rules_get, "/api/alerts/config": alerts_config_get,
+          "/api/alerts/log": alerts_log_get}
+POST_ROUTES = {"/api/alerts/rules": alerts_rule_save, "/api/alerts/rules/delete": alerts_rule_delete,
+               "/api/alerts/config": alerts_config_save, "/api/alerts/test": alerts_test}
 CONTENT = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
            ".css": "text/css", ".json": "application/json", ".ico": "image/x-icon"}
 
@@ -425,6 +582,28 @@ class Handler(BaseHTTPRequestHandler):
 
     do_HEAD = do_GET
 
+    def do_POST(self):
+        fn = POST_ROUTES.get(urlparse(self.path).path)
+        if not fn:
+            self._send(404, {"error": "not found"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b""
+            body = json.loads(raw.decode("utf-8")) if raw else {}
+            if not isinstance(body, dict):
+                raise ValueError("expected a JSON object")
+        except (ValueError, TypeError):
+            self._send(400, {"error": "invalid JSON body"})
+            return
+        try:
+            self._send(200, fn(body))
+        except psycopg.Error as e:
+            self._send(503, {"error": "database unavailable", "detail": str(e)})
+        except Exception as e:                           # noqa: BLE001
+            log.exception("post handler error")
+            self._send(500, {"error": str(e)})
+
     def _serve_static(self, path):
         if path in ("/", ""):
             path = "/index.html"
@@ -445,6 +624,10 @@ def main():
     logging.basicConfig(level=os.environ.get("LOGLEVEL", "INFO"),
                         format="%(asctime)s %(levelname)s %(message)s")
     log.info("tar1090-history-api on %s:%d  (globe_history=%s, web=%s)", BIND, PORT, GLOBE_DIR, WEB_DIR)
+    try:
+        _ensure_alerts()                                 # create alert tables up front (best effort)
+    except psycopg.Error as e:
+        log.warning("alert tables not created yet (DB down?): %s -- will retry on first use", e)
     ThreadingHTTPServer((BIND, PORT), Handler).serve_forever()
 
 
