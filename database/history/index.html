@@ -44,6 +44,11 @@
   #replay input[type=range] { flex: 1; }
   #replay button { background: #2d6cdf; color: #fff; border: 0; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
   #ptlabel { color: #cbd3df; font-variant-numeric: tabular-nums; min-width: 210px; }
+  #acphoto { position: absolute; top: 8px; right: 8px; z-index: 600; display: none;
+             background: rgba(20,22,26,.92); border: 1px solid #2c313a; border-radius: 6px; padding: 3px; }
+  #acphoto.on { display: block; }
+  #acphoto img { display: block; max-width: 220px; max-height: 150px; border-radius: 4px; }
+  #acphoto .cr { font-size: 10px; color: #8a93a2; padding: 2px 4px 0; text-align: right; }
   @media (max-width: 760px) {
     #main { flex-direction: column; }
     #left { width: 100%; min-width: 0; max-height: 40vh; border-right: 0; border-bottom: 1px solid #2c313a; }
@@ -86,6 +91,7 @@
   </div>
   <div id="right">
     <div id="map"></div>
+    <div id="acphoto"></div>
     <div id="replay">
       <button id="play">▶</button>
       <input id="slider" type="range" min="0" max="0" value="0">
@@ -121,6 +127,39 @@ const MAX_DRAW = 300;   // mirrors the API's HISTORY_MAX_TRAILS
 const altColor = a => a==null?'#888': a<2000?'#d33':a<10000?'#e80':a<20000?'#dd0':a<30000?'#3c3':'#3af';
 function hue(s){ let h=0; for (let i=0;i<s.length;i++) h=(h*31 + s.charCodeAt(i))>>>0; return 'hsl('+(h%360)+',70%,60%)'; }
 function setStatus(extra){ $('status').textContent = searchMsg + (extra ? ' — ' + extra : ''); }
+
+// Aircraft photo overlay (planespotters.net — same source as the main tar1090 UI).
+const PS_API = 'https://api.planespotters.net/pub/photos/hex/';
+let photoReq = 0;
+function hidePhoto(){ const el=$('acphoto'); el.classList.remove('on'); el.innerHTML=''; }
+async function showPhoto(f){
+  hidePhoto();
+  if (!f || !f.icao_hex || f.icao_hex[0] === '~') return;        // no photos for mlat/tisb hexes
+  const my = ++photoReq;
+  let url = PS_API + f.icao_hex.toUpperCase();
+  const qs = [];
+  if (f.registration) qs.push('reg=' + encodeURIComponent(f.registration));
+  if (f.icao_type)    qs.push('icaoType=' + encodeURIComponent(f.icao_type));
+  if (qs.length) url += '?' + qs.join('&');
+  let j;
+  try { const r = await fetch(url); if (!r.ok) return; j = await r.json(); }
+  catch(e){ return; }                                           // network/CORS -> just show nothing
+  if (my !== photoReq) return;                                  // a newer selection superseded this
+  const ph = (j.photos || [])[0];
+  const thumb = ph && ph.thumbnail;
+  const src = thumb && (thumb.src || thumb);
+  if (!src) return;
+  const el = $('acphoto'); el.innerHTML = '';
+  const img = document.createElement('img'); img.alt = '';
+  img.onload  = ()=> { if (my === photoReq) el.classList.add('on'); };  // reveal only once it loads
+  img.onerror = ()=> hidePhoto();                               // never leave a broken image
+  if (ph.link && /^https?:\/\//.test(ph.link)){
+    const a = document.createElement('a'); a.href = ph.link; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    a.appendChild(img); el.appendChild(a);
+  } else { el.appendChild(img); }
+  if (ph.photographer){ const d = document.createElement('div'); d.className = 'cr'; d.textContent = '© ' + ph.photographer; el.appendChild(d); }
+  img.src = src;
+}
 
 async function doSearch(){
   const p = new URLSearchParams();
@@ -177,7 +216,7 @@ function onRow(f, ev){
 function toggleId(id){ selected.has(id) ? selected.delete(id) : selected.add(id); markRows(); renderMap(); }
 
 async function renderMap(){
-  stopAnim(); trailLayer.clearLayers(); $('replay').classList.remove('on');
+  stopAnim(); trailLayer.clearLayers(); $('replay').classList.remove('on'); hidePhoto();
   const ids = selected.size ? [...selected] : flights.map(f=>f.id);
   if (!ids.length){ setStatus('no flights'); return; }
   if (selected.size === 1) await drawSingle(byId.get(ids[0]));
@@ -187,6 +226,7 @@ async function renderMap(){
 // One aircraft: detailed altitude-coloured trail + replay scrubber.
 async function drawSingle(f){
   if (!f) return;
+  showPhoto(f);
   setStatus('loading trail…');
   let j;
   try { j = await (await fetch('api/trace?' + new URLSearchParams({ hex:f.icao_hex, start:f.start, end:f.end }))).json(); }
@@ -263,7 +303,7 @@ $('clear').onclick = ()=>{
   selected.clear(); flights = []; byId.clear(); pts = [];
   ['q','callsign','registration','type','operator'].forEach(k=> $(k).value='');
   $('mil').value = 'any';
-  $('rows').innerHTML=''; trailLayer.clearLayers(); stopAnim(); $('replay').classList.remove('on');
+  $('rows').innerHTML=''; trailLayer.clearLayers(); stopAnim(); $('replay').classList.remove('on'); hidePhoto();
   searchMsg = 'Cleared.'; setStatus('pick a time range or preset and search');
 };
 $('multi').onclick = ()=>{ multiMode = !multiMode; $('multi').classList.toggle('on', multiMode); };
