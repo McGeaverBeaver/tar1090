@@ -34,6 +34,10 @@ BIND        = os.environ.get("HISTORY_API_BIND", "0.0.0.0")
 WEB_DIR     = os.environ.get("HISTORY_WEB_DIR",
                              os.path.join(os.path.dirname(os.path.abspath(__file__)), "history"))
 MAX_RESULTS = int(os.environ.get("HISTORY_MAX_RESULTS", "2000"))
+# "Show all trails" caps: how many flights to draw at once, and how many distinct 30-min
+# heatmap chunks we'll read for one overview request (bounds work for wide time ranges).
+MAX_TRAILS       = int(os.environ.get("HISTORY_MAX_TRAILS", "300"))
+MAX_TRACE_CHUNKS = int(os.environ.get("HISTORY_MAX_TRACE_CHUNKS", "400"))
 
 # --- database ---------------------------------------------------------------
 _conn = None
@@ -193,39 +197,56 @@ def _heat_alt(f3):
     return a * 25        # stored in units of 25 ft
 
 
+def _cbase_path(cbase):
+    """Filesystem path of the 30-min heatmap chunk whose UTC window starts at epoch cbase."""
+    d = datetime.fromtimestamp(cbase, tz=timezone.utc)
+    idx = 2 * d.hour + (1 if d.minute >= 30 else 0)
+    return os.path.join(GLOBE_DIR, f"{d.year:04d}", f"{d.month:02d}", f"{d.day:02d}",
+                        "heatmap", f"{idx:02d}.bin.ttf")
+
+
+def _parse_heat_chunk(path):
+    """Return (ints, n, slices, ival) for a heatmap chunk, or None if unreadable/empty."""
+    try:
+        raw = _read_bytes_maybe_gzip(path)
+    except (OSError, ValueError) as e:
+        log.warning("heatmap read failed %s: %s", path, e)
+        return None
+    if not raw or len(raw) % 16:
+        return None
+    n = len(raw) // 4
+    a = struct.unpack("<%di" % n, raw)
+    sl = [i for i in range(0, n, 4) if a[i] == HEAT_MAGIC]
+    if not sl:
+        return None
+    ival = (a[sl[0] + 3] & 0xFFFF) / 1000.0 or 15.0
+    return a, n, sl, ival
+
+
+def _chunk_bases(lo, hi, step=1800):
+    """Epoch starts of every 30-min chunk overlapping [lo, hi]."""
+    out, base = [], int(lo) // step * step
+    while base <= hi:
+        out.append(base)
+        base += step
+    return out
+
+
 def _heatmap_points(hexid, lo, hi, pad=120):
     try:
         target = int(hexid, 16) & 0xFFFFFF
     except ValueError:
         return []
-    lo_p, hi_p, step = lo - pad, hi + pad, 1800
-    chunks = []
-    base = int(lo_p) // step * step
-    while base <= hi_p:
-        d = datetime.fromtimestamp(base, tz=timezone.utc)
-        idx = 2 * d.hour + (1 if d.minute >= 30 else 0)
-        chunks.append((base, os.path.join(
-            GLOBE_DIR, f"{d.year:04d}", f"{d.month:02d}", f"{d.day:02d}",
-            "heatmap", f"{idx:02d}.bin.ttf")))
-        base += step
-
+    lo_p, hi_p = lo - pad, hi + pad
     out = []
-    for cbase, path in chunks:
+    for cbase in _chunk_bases(lo_p, hi_p):
+        path = _cbase_path(cbase)
         if not os.path.exists(path):
             continue
-        try:
-            raw = _read_bytes_maybe_gzip(path)
-        except (OSError, ValueError) as e:
-            log.warning("heatmap read failed %s: %s", path, e)
+        parsed = _parse_heat_chunk(path)
+        if not parsed:
             continue
-        if not raw or len(raw) % 16:
-            continue
-        n = len(raw) // 4
-        a = struct.unpack("<%di" % n, raw)
-        sl = [i for i in range(0, n, 4) if a[i] == HEAT_MAGIC]
-        if not sl:
-            continue
-        ival = (a[sl[0] + 3] & 0xFFFF) / 1000.0 or 15.0
+        a, n, sl, ival = parsed
         for si, spos in enumerate(sl):
             t = cbase + si * ival
             if t < lo_p or t > hi_p:
@@ -302,8 +323,72 @@ def trace(q):
     return {"hex": hexid, "points": points, "files": files, "source": source}
 
 
+def traces(q):
+    """Batch trail reader for the "show all / multiple" overview: given flight ids, read
+    each touched heatmap chunk ONCE and hand back every flight's clipped trail. Far cheaper
+    than calling /api/trace per aircraft (which would re-read the same chunks repeatedly)."""
+    raw = (q.get("ids", [""])[0] or "").strip()
+    if not raw:
+        return {"flights": {}, "chunks": 0}
+    try:
+        ids = [int(x) for x in raw.split(",") if x.strip()][:MAX_TRAILS]
+    except ValueError:
+        return {"error": "bad ids"}
+    if not ids:
+        return {"flights": {}, "chunks": 0}
+
+    rows = query("SELECT id, icao_hex, start_time, end_time FROM v_flights WHERE id = ANY(%s)",
+                 [ids])
+    pad = 120
+    by_hex = {}        # hex_low24 -> [(flight_id, lo, hi), ...]
+    bases = set()
+    for r in rows:
+        hexid = (r["icao_hex"] or "").strip().lower().lstrip("~")
+        if not hexid or any(c not in "0123456789abcdef" for c in hexid):
+            continue
+        target = int(hexid, 16) & 0xFFFFFF
+        lo = r["start_time"].timestamp() - pad
+        hi = r["end_time"].timestamp() + pad
+        by_hex.setdefault(target, []).append((r["id"], lo, hi))
+        bases.update(_chunk_bases(lo, hi))
+
+    if len(bases) > MAX_TRACE_CHUNKS:
+        return {"flights": {}, "truncated": True, "chunks": len(bases),
+                "max_chunks": MAX_TRACE_CHUNKS}
+
+    out = {}
+    for cbase in sorted(bases):
+        path = _cbase_path(cbase)
+        if not os.path.exists(path):
+            continue
+        parsed = _parse_heat_chunk(path)
+        if not parsed:
+            continue
+        a, n, sl, ival = parsed
+        for si, spos in enumerate(sl):
+            t = cbase + si * ival
+            tm = int(t * 1000)
+            j = spos + 4
+            while j < n and a[j] != HEAT_MAGIC:
+                wins = by_hex.get(a[j] & 0xFFFFFF)
+                if wins:
+                    lat, lon = a[j + 1] / 1e6, a[j + 2] / 1e6
+                    if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+                        pt = None
+                        for fid, lo, hi in wins:
+                            if lo <= t <= hi:
+                                if pt is None:
+                                    pt = [tm, round(lat, 5), round(lon, 5), _heat_alt(a[j + 3])]
+                                out.setdefault(fid, []).append(pt)
+                j += 4
+    for v in out.values():
+        v.sort(key=lambda p: p[0])
+    return {"flights": out, "chunks": len(bases), "truncated": False}
+
+
 # --- HTTP -------------------------------------------------------------------
-ROUTES = {"/api/search": search, "/api/options": options, "/api/trace": trace}
+ROUTES = {"/api/search": search, "/api/options": options,
+          "/api/trace": trace, "/api/traces": traces}
 CONTENT = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
            ".css": "text/css", ".json": "application/json", ".ico": "image/x-icon"}
 

@@ -8,18 +8,25 @@
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
-  body { margin: 0; font: 13px/1.4 system-ui, sans-serif; background: #14161a; color: #e6e6e6; }
+  html, body { height: 100%; }
+  body { margin: 0; display: flex; flex-direction: column; font: 13px/1.4 system-ui, sans-serif; background: #14161a; color: #e6e6e6; }
   header { padding: 8px 12px; background: #1d2026; border-bottom: 1px solid #2c313a; }
   header h1 { margin: 0; font-size: 15px; font-weight: 600; }
   header span { color: #8a93a2; font-weight: 400; }
   #controls { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px; background: #1a1d23; border-bottom: 1px solid #2c313a; align-items: center; }
   #controls input, #controls select { background: #0f1115; color: #e6e6e6; border: 1px solid #333; border-radius: 4px; padding: 5px 7px; font-size: 13px; }
-  #controls input[type=text] { width: 120px; }
+  #controls input[type=text] { width: 116px; }
   #controls label { color: #8a93a2; font-size: 11px; display: flex; flex-direction: column; gap: 2px; }
   #controls button { background: #2d6cdf; color: #fff; border: 0; border-radius: 4px; padding: 7px 14px; cursor: pointer; font-size: 13px; }
   #controls button:hover { background: #3b78e8; }
-  #main { display: flex; height: calc(100vh - 112px); }
-  #left { width: 46%; min-width: 360px; overflow: auto; border-right: 1px solid #2c313a; }
+  #controls button.ghost { background: #2a2f38; }
+  #controls button.ghost:hover { background: #353c47; }
+  #controls button.toggle.on { background: #2e9e6b; }
+  #presets { display: flex; gap: 4px; }
+  #presets button { background: #21252c; color: #cdd5e0; padding: 6px 9px; font-size: 12px; }
+  #presets button:hover { background: #2c333d; }
+  #main { flex: 1; min-height: 0; display: flex; }
+  #left { width: 46%; min-width: 320px; overflow: auto; border-right: 1px solid #2c313a; }
   #right { flex: 1; position: relative; }
   #map { position: absolute; inset: 0; }
   table { width: 100%; border-collapse: collapse; }
@@ -28,20 +35,32 @@
   tbody tr { cursor: pointer; }
   tbody tr:hover { background: #20242b; }
   tbody tr.sel { background: #243a5e; }
+  td.swatch { width: 4px; padding: 0; }
   .mil { color: #ff6b6b; font-weight: 600; }
-  #status { padding: 6px 12px; color: #8a93a2; }
+  #status { padding: 6px 12px; color: #9aa3b2; }
   #replay { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 500; background: rgba(20,22,26,.92);
             border: 1px solid #2c313a; border-radius: 6px; padding: 6px 10px; display: none; align-items: center; gap: 8px; }
   #replay.on { display: flex; }
   #replay input[type=range] { flex: 1; }
   #replay button { background: #2d6cdf; color: #fff; border: 0; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
-  #ptlabel { color: #cbd3df; font-variant-numeric: tabular-nums; min-width: 230px; }
+  #ptlabel { color: #cbd3df; font-variant-numeric: tabular-nums; min-width: 210px; }
+  @media (max-width: 760px) {
+    #main { flex-direction: column; }
+    #left { width: 100%; min-width: 0; max-height: 40vh; border-right: 0; border-bottom: 1px solid #2c313a; }
+    #right { min-height: 50vh; }
+    #controls button, #presets button { padding: 9px 12px; }
+    #ptlabel { min-width: 0; }
+  }
 </style>
 </head>
 <body>
 <header><h1>tar1090 — history search &amp; replay <span>· search the flight index, replay trails from globe_history</span></h1></header>
 
 <div id="controls">
+  <div id="presets">
+    <button data-h="4">4h</button><button data-h="8">8h</button><button data-h="24">24h</button>
+    <button data-h="168">7d</button><button data-h="720">30d</button><button data-h="8760">1y</button>
+  </div>
   <label>Search<input id="q" type="text" placeholder="callsign / reg / type"></label>
   <label>Callsign<input id="callsign" type="text"></label>
   <label>Registration<input id="registration" type="text"></label>
@@ -51,12 +70,15 @@
   <label>From<input id="from" type="datetime-local"></label>
   <label>To<input id="to" type="datetime-local"></label>
   <button id="go">Search</button>
+  <button id="clear" class="ghost">Clear</button>
+  <button id="multi" class="toggle ghost" title="Mobile-friendly multi-select: when on, each tap adds/removes a flight">Multi</button>
 </div>
 
 <div id="main">
   <div id="left">
-    <div id="status">Set a time range and search.</div>
+    <div id="status">Pick a time range (or a preset) and search.</div>
     <table><thead><tr>
+      <th class="swatch"></th>
       <th data-k="callsign">Callsign</th><th data-k="registration">Reg</th><th data-k="icao_type">Type</th>
       <th data-k="operator">Operator</th><th data-k="military">Mil</th>
       <th data-k="start">Start (UTC)</th><th data-k="duration_s">Dur</th><th data-k="max_alt">Max alt</th>
@@ -80,7 +102,6 @@ function fmtUTC(ms){ if(ms==null) return ''; const d=new Date(ms);
   return d.getUTCFullYear()+'-'+pad(d.getUTCMonth()+1)+'-'+pad(d.getUTCDate())+' '+pad(d.getUTCHours())+':'+pad(d.getUTCMinutes())+':'+pad(d.getUTCSeconds())+'Z'; }
 function fmtDur(s){ if(s==null) return ''; const h=Math.floor(s/3600), m=Math.floor(s%3600/60), ss=s%60;
   return (h?h+'h ':'')+(h||m?m+'m ':'')+ss+'s'; }
-// datetime-local <-> epoch ms (local time)
 function toMs(v){ return v ? new Date(v).getTime() : ''; }
 function localInput(d){ return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes()); }
 
@@ -93,34 +114,45 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
 let trailLayer = L.layerGroup().addTo(map);
 let marker = null, pts = [], anim = null;
 
-let flights = [], sortKey = 'start', sortDir = -1;
+let flights = [], byId = new Map(), selected = new Set(), multiMode = false;
+let sortKey = 'start', sortDir = -1, searchMsg = '';
+const MAX_DRAW = 300;   // mirrors the API's HISTORY_MAX_TRAILS
+
+const altColor = a => a==null?'#888': a<2000?'#d33':a<10000?'#e80':a<20000?'#dd0':a<30000?'#3c3':'#3af';
+function hue(s){ let h=0; for (let i=0;i<s.length;i++) h=(h*31 + s.charCodeAt(i))>>>0; return 'hsl('+(h%360)+',70%,60%)'; }
+function setStatus(extra){ $('status').textContent = searchMsg + (extra ? ' — ' + extra : ''); }
 
 async function doSearch(){
   const p = new URLSearchParams();
   for (const k of ['q','callsign','registration','type','operator','mil']) if ($(k).value) p.set(k, $(k).value);
   if ($('from').value) p.set('from', toMs($('from').value));
   if ($('to').value)   p.set('to',   toMs($('to').value));
-  $('status').textContent = 'Searching…';
+  searchMsg = 'Searching…'; setStatus();
   try {
     const r = await fetch('api/search?' + p.toString());
     const j = await r.json();
-    if (j.error) { $('status').textContent = 'Error: ' + j.error; return; }
-    flights = j.flights;
-    $('status').textContent = `${j.count} flight(s) · ${fmtUTC(j.from)} → ${fmtUTC(j.to)} (click a row to replay its trail)`;
+    if (j.error) { searchMsg = 'Error: ' + j.error; setStatus(); return; }
+    flights = j.flights; selected.clear();
+    searchMsg = `${j.count} flight(s) · ${fmtUTC(j.from)} → ${fmtUTC(j.to)}`;
     render();
-  } catch(e){ $('status').textContent = 'Request failed: ' + e; }
+    renderMap();                       // nothing selected -> show every trail in range
+  } catch(e){ searchMsg = 'Request failed: ' + e; setStatus(); }
 }
 
 function render(){
-  flights.sort((a,b)=>{ const x=a[sortKey], y=b[sortKey];
-    return (x<y?-1:x>y?1:0)*sortDir; });
+  flights.sort((a,b)=>{ const x=a[sortKey], y=b[sortKey]; return (x<y?-1:x>y?1:0)*sortDir; });
+  byId = new Map(flights.map(f=>[f.id, f]));
   const tb = $('rows'); tb.innerHTML='';
   for (const f of flights){
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${f.callsign||''}</td><td>${f.registration||''}</td><td>${f.icao_type||''}</td>`
+    tr.dataset.id = f.id;
+    const sw = f.military ? '#ff4d4d' : hue(f.icao_hex || String(f.id));
+    tr.innerHTML = `<td class="swatch" style="background:${sw}"></td>`
+      + `<td>${f.callsign||''}</td><td>${f.registration||''}</td><td>${f.icao_type||''}</td>`
       + `<td>${f.operator||''}</td><td class="${f.military?'mil':''}">${f.military?'MIL':''}</td>`
       + `<td>${fmtUTC(f.start)}</td><td>${fmtDur(f.duration_s)}</td><td>${f.max_alt!=null?f.max_alt:''}</td>`;
-    tr.onclick = ()=>{ document.querySelectorAll('#rows tr').forEach(x=>x.classList.remove('sel')); tr.classList.add('sel'); loadTrace(f); };
+    if (selected.has(f.id)) tr.classList.add('sel');
+    tr.onclick = (ev)=> onRow(f, ev);
     tb.appendChild(tr);
   }
 }
@@ -128,31 +160,83 @@ function render(){
 document.querySelectorAll('th[data-k]').forEach(th=>th.onclick=()=>{
   const k=th.dataset.k; sortDir = (sortKey===k)? -sortDir : 1; sortKey=k; render(); });
 
-const altColor = a => a==null?'#888': a<2000?'#d33':a<10000?'#e80':a<20000?'#dd0':a<30000?'#3c3':'#3af';
+function markRows(){ document.querySelectorAll('#rows tr').forEach(tr=>
+  tr.classList.toggle('sel', selected.has(+tr.dataset.id))); }
 
-async function loadTrace(f){
-  stopAnim();
-  trailLayer.clearLayers();
-  $('status_pt')&&($('status_pt').textContent='');
-  const p = new URLSearchParams({ hex:f.icao_hex, start:f.start, end:f.end });
-  const r = await fetch('api/trace?' + p.toString());
-  const j = await r.json();
+function onRow(f, ev){
+  const additive = multiMode || ev.ctrlKey || ev.metaKey || ev.shiftKey;
+  if (additive){
+    selected.has(f.id) ? selected.delete(f.id) : selected.add(f.id);
+  } else if (selected.size === 1 && selected.has(f.id)){
+    selected.clear();                  // click the only selection again -> back to "all"
+  } else {
+    selected.clear(); selected.add(f.id);
+  }
+  markRows(); renderMap();
+}
+function toggleId(id){ selected.has(id) ? selected.delete(id) : selected.add(id); markRows(); renderMap(); }
+
+async function renderMap(){
+  stopAnim(); trailLayer.clearLayers(); $('replay').classList.remove('on');
+  const ids = selected.size ? [...selected] : flights.map(f=>f.id);
+  if (!ids.length){ setStatus('no flights'); return; }
+  if (selected.size === 1) await drawSingle(byId.get(ids[0]));
+  else                     await drawMany(ids, selected.size === 0);
+}
+
+// One aircraft: detailed altitude-coloured trail + replay scrubber.
+async function drawSingle(f){
+  if (!f) return;
+  setStatus('loading trail…');
+  let j;
+  try { j = await (await fetch('api/trace?' + new URLSearchParams({ hex:f.icao_hex, start:f.start, end:f.end }))).json(); }
+  catch(e){ setStatus('trail request failed: ' + e); return; }
   pts = j.points || [];
-  if (!pts.length){ $('replay').classList.remove('on'); alert('No trail on disk for this flight — its globe_history data has aged out (MAX_GLOBE_HISTORY) or predates globe-history being collected.'); return; }
-  $('status').textContent = `${f.callsign||f.icao_hex}: ${pts.length} points · trail from ${j.source==='heatmap'?'heatmap':'full trace'}`;
-  // colored polyline segments by altitude
+  if (!pts.length){ setStatus(`${f.callsign||f.icao_hex}: no trail on disk (aged out, or before globe-history was collected)`); return; }
   for (let i=1;i<pts.length;i++){
-    L.polyline([[pts[i-1][1],pts[i-1][2]],[pts[i][1],pts[i][2]]],
-      { color: altColor(pts[i][3]), weight: 3, opacity: .85 }).addTo(trailLayer);
+    const seg = L.polyline([[pts[i-1][1],pts[i-1][2]],[pts[i][1],pts[i][2]]],
+      { color: altColor(pts[i][3]), weight: 3, opacity: .9 });
+    seg.on('click', ()=> toggleId(f.id));
+    seg.addTo(trailLayer);
   }
   marker = L.circleMarker([pts[0][1],pts[0][2]], { radius:6, color:'#fff', weight:2, fillColor:'#2d6cdf', fillOpacity:1 }).addTo(trailLayer);
   map.fitBounds(L.latLngBounds(pts.map(p=>[p[1],p[2]])).pad(0.1));
   const s=$('slider'); s.max=pts.length-1; s.value=0; showPoint(0);
   $('replay').classList.add('on');
+  setStatus(`${f.callsign||f.icao_hex}: ${pts.length} points · ${j.source==='heatmap'?'heatmap':'full trace'} — play to replay; click the trail or its row to deselect`);
+}
+
+// Many aircraft (or "all in range"): one light line per flight, no scrubber.
+async function drawMany(ids, isAll){
+  const capped = ids.slice(0, MAX_DRAW);
+  setStatus('loading trails…');
+  let j;
+  try { j = await (await fetch('api/traces?ids=' + capped.join(','))).json(); }
+  catch(e){ setStatus('trail request failed: ' + e); return; }
+  if (j.error){ setStatus('error: ' + j.error); return; }
+  if (j.truncated){
+    setStatus(`time range too wide to draw all trails (${j.chunks} chunks > ${j.max_chunks}) — narrow the range/filters, or select specific flights`);
+    return;
+  }
+  const fl = j.flights || {};
+  let count = 0; const bounds = [];
+  for (const id of capped){
+    const tp = fl[id]; if (!tp || tp.length < 2) continue;
+    const f = byId.get(id);
+    const col = (f && f.military) ? '#ff4d4d' : hue((f && f.icao_hex) || String(id));
+    const line = L.polyline(tp.map(p=>[p[1],p[2]]), { color: col, weight: (f && f.military)?3:2, opacity: .72 });
+    line.on('click', ()=> { selected.clear(); selected.add(id); markRows(); renderMap(); });
+    line.addTo(trailLayer);
+    for (const p of tp) bounds.push([p[1],p[2]]);
+    count++;
+  }
+  if (bounds.length) map.fitBounds(L.latLngBounds(bounds).pad(0.08));
+  const more = (isAll && flights.length > capped.length) ? ` (first ${capped.length} of ${flights.length})` : '';
+  setStatus(`${count} trail(s) shown${more} · ${isAll?'all in range':'selected'} — click a line or row to focus; Ctrl/⌘-click or Multi to add`);
 }
 
 function showPoint(i){
-  const p = pts[i]; if(!p) return;
+  const p = pts[i]; if(!p || !marker) return;
   marker.setLatLng([p[1],p[2]]);
   $('ptlabel').textContent = `${fmtUTC(p[0])} · ${p[3]!=null?p[3]+' ft':'—'} · ${i+1}/${pts.length}`;
 }
@@ -167,8 +251,24 @@ $('play').onclick = ()=>{
     $('slider').value=i; showPoint(i); }, 120);
 };
 
+// presets, search, clear, multi
+document.querySelectorAll('#presets button').forEach(b=> b.onclick = ()=>{
+  const now = new Date();
+  $('to').value = localInput(now);
+  $('from').value = localInput(new Date(now - (+b.dataset.h) * 3600e3));
+  doSearch();
+});
 $('go').onclick = doSearch;
+$('clear').onclick = ()=>{
+  selected.clear(); flights = []; byId.clear(); pts = [];
+  ['q','callsign','registration','type','operator'].forEach(k=> $(k).value='');
+  $('mil').value = 'any';
+  $('rows').innerHTML=''; trailLayer.clearLayers(); stopAnim(); $('replay').classList.remove('on');
+  searchMsg = 'Cleared.'; setStatus('pick a time range or preset and search');
+};
+$('multi').onclick = ()=>{ multiMode = !multiMode; $('multi').classList.toggle('on', multiMode); };
 document.querySelectorAll('#controls input').forEach(el=>el.addEventListener('keydown',e=>{ if(e.key==='Enter') doSearch(); }));
+
 doSearch();
 </script>
 </body>
