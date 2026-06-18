@@ -138,7 +138,8 @@ async function loadTrace(f){
   const r = await fetch('api/trace?' + p.toString());
   const j = await r.json();
   pts = j.points || [];
-  if (!pts.length){ $('replay').classList.remove('on'); alert('No trail found in globe_history for this flight (file may be aged out, or globe-history wasn\'t enabled then).'); return; }
+  if (!pts.length){ $('replay').classList.remove('on'); alert('No trail on disk for this flight — its globe_history data has aged out (MAX_GLOBE_HISTORY) or predates globe-history being collected.'); return; }
+  $('status').textContent = `${f.callsign||f.icao_hex}: ${pts.length} points · trail from ${j.source==='heatmap'?'heatmap':'full trace'}`;
   // colored polyline segments by altitude
   for (let i=1;i<pts.length;i++){
     L.polyline([[pts[i-1][1],pts[i-1][2]],[pts[i][1],pts[i][2]]],

@@ -59,14 +59,15 @@ EXPOSE 8090
 # logger only maintains the slim aircraft/flights index (apply schema-index.sql -- plain
 # PostgreSQL, no TimescaleDB/PostGIS needed). Set true to also fill a positions table.
 #
-# READSB_ENABLE_TRACES=true turns ON the per-aircraft trace files
-# (globe_history/.../traces/XX/trace_full_<hex>.json) that the replay page reads. The
-# upstream image ships this OFF, which would leave every trail empty -- so we default it
-# ON here, since this image exists to search & replay those trails. Note it only affects
-# flights from when it's enabled onward. Bound disk/inode usage with MAX_GLOBE_HISTORY=<days>;
-# set READSB_ENABLE_TRACES=false to opt out. Persist /var/globe_history on a real volume.
-ENV READSB_ENABLE_TRACES=true \
-    ENABLE_LOGGER=true \
+# Trails: the replay page reconstructs each trail from readsb's heatmap chunks
+# (globe_history/.../heatmap/NN.bin.ttf), which readsb ALWAYS writes -- the same data the
+# native ?replay animates from -- so it works against whatever history you already have,
+# with no extra setting. For sharper trails on NEW flights you can additionally set
+# READSB_ENABLE_TRACES=true (writes a per-aircraft trace_full_*.json the API prefers when
+# present); we leave it OFF by default because it's one file per aircraft per day and the
+# only way to bound it, MAX_GLOBE_HISTORY, also deletes the older heatmap history you want
+# to keep. Persist /var/globe_history on a real volume.
+ENV ENABLE_LOGGER=true \
     ENABLE_HISTORY_API=true \
     LOG_POSITIONS=false \
     LOG_INTERVAL=5 \
