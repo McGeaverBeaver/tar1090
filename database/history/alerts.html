@@ -28,6 +28,7 @@
   .bar .sp { flex: 1; }
   .muted { color: #7e8794; }
   .rule { border: 1px solid #2c313a; border-radius: 7px; padding: 8px 10px; margin-bottom: 8px; background: #1a1d23; }
+  .rule.justmade { border-color: #caa23a; box-shadow: 0 0 0 1px #caa23a inset; }
   .rule .rh { display: flex; align-items: center; gap: 8px; }
   .rule .rh .sp { flex: 1; }
   .rule .rs { color: #8a93a2; font-size: 11.5px; margin-top: 4px; }
@@ -150,7 +151,7 @@ function renderRules(){
   const el = $('rules'); el.innerHTML = '';
   if (!rules.length){ el.innerHTML = '<div class="muted">No rules yet. Click “+ New rule”.</div>'; return; }
   for (const r of rules){
-    const div = document.createElement('div'); div.className = 'rule';
+    const div = document.createElement('div'); div.className = 'rule'; div.dataset.id = r.id;
     div.innerHTML = `<div class="rh"><input type="checkbox" ${r.enabled?'checked':''} title="enabled">
       <b>${esc(r.name)}</b><span class="sp"></span>
       <button class="mini ghost edit">Edit</button><button class="mini danger del">Delete</button></div>
@@ -286,8 +287,30 @@ async function pollLog(){
   } catch(e){}
 }
 
+// Deep links from the History page's 🔔 button:
+//   alerts.html?edit=<id>       open that rule's editor straight away (single selection)
+//   alerts.html?new=<id,id,…>   highlight the freshly created rules (multi selection)
+function handleDeepLink(){
+  const q = new URLSearchParams(location.search);
+  const edit = q.get('edit');
+  if (edit){
+    const r = rules.find(x => String(x.id) === String(edit));
+    if (r) openEditor(r);
+    return;
+  }
+  const nw = q.get('new');
+  if (nw){
+    const ids = new Set(nw.split(',').map(s => s.trim()).filter(Boolean));
+    let first = null;
+    document.querySelectorAll('#rules .rule').forEach(el => {
+      if (ids.has(el.dataset.id)){ el.classList.add('justmade'); first = first || el; }
+    });
+    if (first) first.scrollIntoView({ block:'center' });
+  }
+}
+
 updateNotifyBtn();
-loadRules();
+loadRules().then(handleDeepLink);
 pollLog();
 setInterval(pollLog, 5000);
 </script>

@@ -26,6 +26,7 @@
   #controls button.ghost { background: #2a2f38; }
   #controls button.ghost:hover { background: #353c47; }
   #controls button.toggle.on { background: #2e9e6b; }
+  #bell.armed { background: #caa23a; color: #1a1d23; font-weight: 600; }
   #presets { display: flex; gap: 4px; }
   #presets button { background: #21252c; color: #cdd5e0; padding: 6px 9px; font-size: 12px; }
   #presets button:hover { background: #2c333d; }
@@ -84,6 +85,7 @@
   <button id="go">Search</button>
   <button id="clear" class="ghost">Clear</button>
   <button id="multi" class="toggle ghost" title="Mobile-friendly multi-select: when on, each tap adds/removes a flight">Multi</button>
+  <button id="bell" class="ghost" title="Select one or more flights, then create alert rules">🔔 Alert</button>
 </div>
 
 <div id="main">
@@ -223,6 +225,7 @@ function onRow(f, ev){
 function toggleId(id){ selected.has(id) ? selected.delete(id) : selected.add(id); markRows(); renderMap(); }
 
 async function renderMap(){
+  updateBell();
   stopAnim(); trailLayer.clearLayers(); $('replay').classList.remove('on'); hidePhoto();
   const ids = selected.size ? [...selected] : flights.map(f=>f.id);
   if (!ids.length){ setStatus('no flights'); return; }
@@ -311,9 +314,55 @@ $('clear').onclick = ()=>{
   ['q','callsign','registration','type','operator'].forEach(k=> $(k).value='');
   $('mil').value = 'any';
   $('rows').innerHTML=''; trailLayer.clearLayers(); stopAnim(); $('replay').classList.remove('on'); hidePhoto();
+  $('bell').disabled = false; updateBell();
   searchMsg = 'Cleared.'; setStatus('pick a time range or preset and search');
 };
 $('multi').onclick = ()=>{ multiMode = !multiMode; $('multi').classList.toggle('on', multiMode); };
+
+// Bell: turn the current selection into alert rules, then hand off to the Alerts tab to refine.
+async function postJSON(path, body){
+  const r = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  return r.json();
+}
+function updateBell(){
+  const b = $('bell'); if (!b) return;
+  const n = selected.size;
+  b.classList.toggle('armed', n>0);
+  b.textContent = n>0 ? `🔔 Alert (${n})` : '🔔 Alert';
+  b.title = n>0 ? `Create ${n} alert rule(s) from the selected flight(s)`
+                : 'Select one or more flights, then create alert rules';
+}
+// Identify the airframe by registration; fall back to callsign, then type. (The alert engine
+// has no per-hex condition, so registration is the most specific "this aircraft" match.)
+function ruleFromFlight(f){
+  const cond = {};
+  if (f.registration)   cond.registration = f.registration;
+  else if (f.callsign)  cond.callsign = f.callsign;
+  else if (f.icao_type) cond.icao_type = f.icao_type;
+  else return null;                                   // nothing matchable
+  const name = [f.callsign, f.registration].filter(Boolean).join(' · ') || f.icao_type || f.icao_hex || 'aircraft';
+  return { name, enabled:true, conditions:cond, zone:null, time_window:null, cooldown_sec:1800 };
+}
+$('bell').onclick = async ()=>{
+  const sel = [...selected].map(id=>byId.get(id)).filter(Boolean);
+  if (!sel.length){ setStatus('select one or more flights first, then click 🔔 to create alert rules'); return; }
+  const bodies = sel.map(ruleFromFlight).filter(Boolean);
+  if (!bodies.length){ setStatus('the selected flight(s) have no callsign / registration / type to alert on'); return; }
+  $('bell').disabled = true; setStatus(`creating ${bodies.length} alert rule(s)…`);
+  try {
+    const ids = [];
+    for (const body of bodies){            // sequential: the API serialises DB writes on one connection
+      const res = await postJSON('api/alerts/rules', body);
+      if (!res || !res.id) throw new Error((res && res.error) || 'save failed');
+      ids.push(res.id);
+    }
+    location.href = ids.length === 1 ? `alerts.html?edit=${ids[0]}` : `alerts.html?new=${ids.join(',')}`;
+  } catch(e){
+    $('bell').disabled = false;
+    setStatus('could not create alert(s): ' + (e.message || e) + ' — is the alerts database reachable?');
+  }
+};
+
 document.querySelectorAll('#controls input').forEach(el=>el.addEventListener('keydown',e=>{ if(e.key==='Enter') doSearch(); }));
 
 doSearch();
