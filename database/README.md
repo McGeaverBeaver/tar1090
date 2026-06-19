@@ -189,6 +189,22 @@ than logger start. Run **once** (it duplicates position rows if re-run):
 TAR1090_DB_DSN="host=127.0.0.1 dbname=tar1090 user=tar1090 password=changeme" \
   python3 backfill_globe_history.py /var/globe_history
 ```
+This needs the per-aircraft `trace_full_*.json` files, which only exist when readsb runs
+with `READSB_ENABLE_TRACES` / `--write-globe-history`. It records callsigns.
+
+**If you only have heatmap chunks** (readsb always writes `…/heatmap/NN.bin.ttf`, even with
+traces off), use the heatmap importer instead — it reconstructs the searchable flight index
+straight from those `.ttf` files:
+```bash
+TAR1090_DB_DSN="host=127.0.0.1 dbname=tar1090 user=tar1090 password=changeme" \
+AIRCRAFT_CSV=/path/to/aircraft.csv.gz \
+  python3 backfill_heatmap.py /var/globe_history
+```
+Heatmap chunks carry only hex + position + altitude, **not callsigns**, so these flights
+have `callsign = NULL` — you search them by registration / type / operator / military / time
+(those come from the aircraft table; point `AIRCRAFT_CSV` at the wiedehopf `aircraft.csv.gz`
+to fill them in). Re-running is safe: a leg is inserted only when no existing flight for that
+hex overlaps it. Tune `GAP_MINUTES` (leg split, default 15) and `MIN_POINTS` (default 2).
 
 ## 6. Grafana — historical search + map trail replay
 
