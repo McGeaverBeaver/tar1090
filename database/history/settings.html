@@ -29,6 +29,11 @@
   #status { margin-top: 12px; color: #9aa3b2; min-height: 18px; }
   .help { color: #7e8794; font-size: 11.5px; margin: 2px 0 0 160px; }
   code { background: #0f1115; padding: 1px 5px; border-radius: 3px; color: #cbd3df; }
+  #imp_bar { height: 8px; background: #0f1115; border: 1px solid #2c313a; border-radius: 5px; overflow: hidden; margin: 12px 0 6px; }
+  #imp_fill { height: 100%; width: 0; background: #2d6cdf; transition: width .3s; }
+  #imp_status { color: #9aa3b2; font-size: 12.5px; }
+  #imp_status b.run { color: #4ea1ff; } #imp_status b.done { color: #2e9e6b; }
+  #imp_status b.err { color: #ff6b6b; } #imp_status b.idle { color: #b9c1cd; }
 </style>
 </head>
 <body>
@@ -61,6 +66,23 @@
     <button id="test" class="ghost">Save &amp; send test</button>
   </div>
   <div id="status">Configure your broker, Save, then use the Alerts tab to add rules.</div>
+
+  <fieldset>
+    <legend>Historical import — globe_history heatmap → searchable index</legend>
+    <div class="row"><label>globe_history path</label><input type="text" id="globe_dir" placeholder="/var/globe_history"></div>
+    <div class="help">Scans readsb's heatmap <code>.ttf</code> chunks under this path and fills the flight
+      index, so traffic from before logging began (or with traces off) becomes searchable. Runs in the
+      background and <b>resumes automatically</b> if it crashes or the container restarts. Imported flights
+      have <b>no callsign</b> (the heatmap doesn't store it) — search them by registration / type / operator
+      / military / time.</div>
+    <div class="actions">
+      <button id="imp_start">Start / resume import</button>
+      <button id="imp_restart" class="ghost">Restart from scratch</button>
+      <button id="imp_stop" class="ghost">Stop</button>
+    </div>
+    <div id="imp_bar"><div id="imp_fill"></div></div>
+    <div id="imp_status"></div>
+  </fieldset>
 </main>
 
 <script>
@@ -115,6 +137,47 @@ $('test').onclick = async ()=>{
               : 'Test failed: ' + (r.error || 'unknown error'));
 };
 load();
+
+// ---- historical import ----
+const fmtN = n => (n == null ? 0 : n).toLocaleString();
+function renderImport(r){
+  $('globe_dir').placeholder = r.default_globe_dir || '/var/globe_history';
+  if (!$('globe_dir').value && r.globe_dir) $('globe_dir').value = r.globe_dir;
+  const total = r.chunks_total || 0, done = r.chunks_done || 0;
+  const pct = total ? Math.round(100 * done / total) : (r.status === 'done' ? 100 : 0);
+  $('imp_fill').style.width = pct + '%';
+  if (r.available === false){
+    $('imp_status').innerHTML = '<b class="err">the heatmap importer is not installed on this server</b>';
+  } else {
+    const cls = ({running:'run', done:'done', error:'err'})[r.status] || 'idle';
+    let line = `<b class="${cls}">${r.status || 'idle'}</b>`;
+    if (total || done) line += ` · ${fmtN(done)} / ${fmtN(total)} chunks (${pct}%)`;
+    line += ` · ${fmtN(r.flights_added)} flights · ${fmtN(r.fixes_seen)} fixes`;
+    if (r.message) line += ` — ${r.message}`;
+    $('imp_status').innerHTML = line;
+  }
+  const running = !!r.running, ok = r.available !== false;
+  $('imp_start').disabled = running || !ok;
+  $('imp_restart').disabled = running || !ok;
+  $('imp_stop').disabled = !running;
+}
+async function loadImport(){
+  try { renderImport(await (await fetch('api/import/status')).json()); }
+  catch(e){ $('imp_status').textContent = 'import status unavailable: ' + e; }
+}
+async function startImport(restart){
+  if (restart && !confirm('Restart the import from scratch? It re-scans everything (safe, but slower).')) return;
+  const body = { globe_dir: $('globe_dir').value.trim() || $('globe_dir').placeholder, restart: !!restart };
+  const r = await post('api/import/start', body);
+  if (r.error){ $('imp_status').innerHTML = '<b class="err">' + r.error + '</b>'; return; }
+  renderImport(r);
+}
+$('imp_start').onclick = () => startImport(false);
+$('imp_restart').onclick = () => startImport(true);
+$('imp_stop').onclick = async () => { await post('api/import/stop', {}); setTimeout(loadImport, 300); };
+
+loadImport();
+setInterval(loadImport, 3000);
 </script>
 </body>
 </html>

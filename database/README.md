@@ -194,7 +194,10 @@ with `READSB_ENABLE_TRACES` / `--write-globe-history`. It records callsigns.
 
 **If you only have heatmap chunks** (readsb always writes `…/heatmap/NN.bin.ttf`, even with
 traces off), use the heatmap importer instead — it reconstructs the searchable flight index
-straight from those `.ttf` files:
+straight from those `.ttf` files. The easiest way is the **history app's Settings tab →
+“Historical import”**: confirm the `/var/globe_history` path and click **Start** — it runs in
+the background with a progress bar and a checkpoint, so it **resumes automatically** if it
+crashes or the container restarts. The equivalent one-off CLI:
 ```bash
 TAR1090_DB_DSN="host=127.0.0.1 dbname=tar1090 user=tar1090 password=changeme" \
 AIRCRAFT_CSV=/path/to/aircraft.csv.gz \

@@ -20,6 +20,7 @@ import os
 import struct
 import sys
 import threading
+import time
 from datetime import datetime, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -30,6 +31,11 @@ from psycopg.types.json import Jsonb
 # sibling helper (alerting MQTT); importable because we add our own dir to sys.path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tar1090_mqtt as mq        # noqa: E402
+try:
+    import tar1090_heatmap_import as hm        # noqa: E402  (the Settings "Historical import" job)
+except Exception as _e:          # pragma: no cover -- import feature just disabled if missing
+    hm = None
+    logging.getLogger("tar1090-history-api").warning("heatmap importer unavailable: %s", _e)
 
 log = logging.getLogger("tar1090-history-api")
 
@@ -546,13 +552,158 @@ def alerts_log_get(q):
     return {"alerts": rows}
 
 
+# --- historical import (heatmap .ttf -> searchable index) -------------------
+# A resumable background job: walk globe_history heatmap chunks and fill the aircraft/flights
+# index (see tar1090_heatmap_import). Progress + a checkpoint live in import_state so the
+# Settings tab can show it and so a crash / container restart picks up where it left off.
+IMPORT_DDL = """
+CREATE TABLE IF NOT EXISTS import_state (
+  id int PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  status text NOT NULL DEFAULT 'idle',             -- idle|running|done|error|cancelled
+  globe_dir text,
+  last_cbase double precision NOT NULL DEFAULT 0,  -- checkpoint: resume from this chunk epoch
+  chunks_total int NOT NULL DEFAULT 0, chunks_done int NOT NULL DEFAULT 0,
+  flights_added bigint NOT NULL DEFAULT 0, fixes_seen bigint NOT NULL DEFAULT 0,
+  message text, started_at timestamptz, updated_at timestamptz NOT NULL DEFAULT now());
+INSERT INTO import_state (id, status) VALUES (1, 'idle') ON CONFLICT DO NOTHING;
+"""
+_import_ready = False
+_import_lock = threading.Lock()
+_import_thread = None
+_import_cancel = threading.Event()
+
+
+def _ensure_import():
+    global _import_ready
+    if not _import_ready:
+        execute(IMPORT_DDL, ())
+        _import_ready = True
+
+
+def _default_csv():
+    csv = os.environ.get("AIRCRAFT_CSV", "").strip()
+    if csv:
+        return csv
+    bundled = "/usr/local/share/tar1090/aircraft.csv.gz"     # present in the all-in-one image
+    return bundled if os.path.exists(bundled) else ""
+
+
+def _import_worker(globe):
+    last = [0.0]
+
+    def progress(s):
+        now = time.monotonic()
+        if now - last[0] < 1.5 and s["chunks_done"] < s["chunks_total"]:
+            return                                           # throttle UI writes
+        last[0] = now
+        try:
+            execute("UPDATE import_state SET chunks_total=%s, chunks_done=%s, flights_added=%s, "
+                    "fixes_seen=%s, last_cbase=%s, updated_at=now() WHERE id=1",
+                    (s["chunks_total"], s["chunks_done"], s["flights"], s["fixes"], s["checkpoint"]))
+        except psycopg.Error:
+            pass
+
+    imp = None
+    try:
+        meta = hm.load_csv_metadata(_default_csv())
+        row = query("SELECT last_cbase FROM import_state WHERE id=1", ())
+        resume_from = float(row[0]["last_cbase"]) if row and row[0]["last_cbase"] else 0.0
+        conn = psycopg.connect(DB_DSN)
+        conn.autocommit = True
+        try:
+            imp = hm.Importer(conn, meta, resume_from=resume_from,
+                              cancel=_import_cancel.is_set, on_progress=progress)
+            result = imp.run(globe)
+        finally:
+            conn.close()
+        msg = ("stopped — press Start to resume" if result == "cancelled"
+               else f"imported {imp.n_flights} flight legs from {imp.n_points} fixes")
+        execute("UPDATE import_state SET status=%s, message=%s, chunks_total=%s, chunks_done=%s, "
+                "flights_added=%s, fixes_seen=%s, last_cbase=%s, updated_at=now() WHERE id=1",
+                ("cancelled" if result == "cancelled" else "done", msg, imp.total,
+                 imp.skipped + imp.processed, imp.n_flights, imp.n_points, imp.committed_checkpoint))
+    except Exception as e:                               # noqa: BLE001
+        log.exception("historical import failed")
+        try:
+            execute("UPDATE import_state SET status='error', message=%s, updated_at=now() WHERE id=1",
+                    (str(e),))
+        except psycopg.Error:
+            pass
+
+
+def _launch_import(globe):
+    global _import_thread
+    _import_cancel.clear()
+    _import_thread = threading.Thread(target=_import_worker, args=(globe,),
+                                      name="heatmap-import", daemon=True)
+    _import_thread.start()
+
+
+def import_status(q):
+    _ensure_import()
+    rows = query("SELECT status, globe_dir, last_cbase, chunks_total, chunks_done, flights_added, "
+                 "fixes_seen, message, started_at, updated_at FROM import_state WHERE id=1", ())
+    r = dict(rows[0]) if rows else {"status": "idle"}
+    r["started_at"] = ms(r.get("started_at"))
+    r["updated_at"] = ms(r.get("updated_at"))
+    r["running"] = bool(_import_thread and _import_thread.is_alive())
+    r["default_globe_dir"] = GLOBE_DIR
+    if not r.get("globe_dir"):
+        r["globe_dir"] = GLOBE_DIR
+    r["available"] = hm is not None
+    return r
+
+
+def import_start(body):
+    if hm is None:
+        return {"error": "the heatmap importer is not installed on this server"}
+    with _import_lock:
+        if _import_thread and _import_thread.is_alive():
+            return {"error": "an import is already running"}
+        globe = (body.get("globe_dir") or GLOBE_DIR or "/var/globe_history").strip()
+        if not os.path.isdir(globe):
+            return {"error": "path not found on the server: " + globe}
+        _ensure_import()
+        if body.get("restart"):
+            execute("UPDATE import_state SET status='running', globe_dir=%s, last_cbase=0, "
+                    "chunks_total=0, chunks_done=0, flights_added=0, fixes_seen=0, message=NULL, "
+                    "started_at=now(), updated_at=now() WHERE id=1", (globe,))
+        else:
+            execute("UPDATE import_state SET status='running', globe_dir=%s, message=NULL, "
+                    "started_at=COALESCE(started_at, now()), updated_at=now() WHERE id=1", (globe,))
+        _launch_import(globe)
+    return import_status({})
+
+
+def import_stop(body):
+    _import_cancel.set()
+    return {"ok": True}
+
+
+def _resume_import_on_start():
+    """If the row says an import was running when the process died, continue from checkpoint."""
+    if hm is None:
+        return
+    _ensure_import()
+    row = query("SELECT status, globe_dir FROM import_state WHERE id=1", ())
+    if row and row[0]["status"] == "running":
+        globe = row[0]["globe_dir"] or GLOBE_DIR
+        if os.path.isdir(globe):
+            log.info("resuming interrupted historical import from checkpoint (%s)", globe)
+            _launch_import(globe)
+        else:
+            execute("UPDATE import_state SET status='error', message=%s, updated_at=now() WHERE id=1",
+                    ("globe_dir not found on restart: " + str(globe),))
+
+
 # --- HTTP -------------------------------------------------------------------
 ROUTES = {"/api/search": search, "/api/options": options,
           "/api/trace": trace, "/api/traces": traces,
           "/api/alerts/rules": alerts_rules_get, "/api/alerts/config": alerts_config_get,
-          "/api/alerts/log": alerts_log_get}
+          "/api/alerts/log": alerts_log_get, "/api/import/status": import_status}
 POST_ROUTES = {"/api/alerts/rules": alerts_rule_save, "/api/alerts/rules/delete": alerts_rule_delete,
-               "/api/alerts/config": alerts_config_save, "/api/alerts/test": alerts_test}
+               "/api/alerts/config": alerts_config_save, "/api/alerts/test": alerts_test,
+               "/api/import/start": import_start, "/api/import/stop": import_stop}
 CONTENT = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
            ".css": "text/css", ".json": "application/json", ".ico": "image/x-icon"}
 
@@ -633,8 +784,9 @@ def main():
     log.info("tar1090-history-api on %s:%d  (globe_history=%s, web=%s)", BIND, PORT, GLOBE_DIR, WEB_DIR)
     try:
         _ensure_alerts()                                 # create alert tables up front (best effort)
+        _resume_import_on_start()                        # continue an interrupted import, if any
     except psycopg.Error as e:
-        log.warning("alert tables not created yet (DB down?): %s -- will retry on first use", e)
+        log.warning("tables not created yet (DB down?): %s -- will retry on first use", e)
     ThreadingHTTPServer((BIND, PORT), Handler).serve_forever()
 
 
