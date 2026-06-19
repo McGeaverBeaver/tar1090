@@ -30,6 +30,13 @@
   #presets { display: flex; gap: 4px; }
   #presets button { background: #21252c; color: #cdd5e0; padding: 6px 9px; font-size: 12px; }
   #presets button:hover { background: #2c333d; }
+  #pager { display: flex; align-items: center; gap: 8px; padding: 5px 12px; background: #1a1d23; border-bottom: 1px solid #2c313a; }
+  #pager label { color: #8a93a2; font-size: 11px; display: flex; align-items: center; gap: 4px; }
+  #pager select { background: #0f1115; color: #e6e6e6; border: 1px solid #333; border-radius: 4px; padding: 4px 6px; font-size: 12px; }
+  #pager button { background: #2a2f38; color: #e6e6e6; border: 0; border-radius: 4px; padding: 5px 10px; cursor: pointer; font-size: 12px; }
+  #pager button:hover:not(:disabled) { background: #353c47; }
+  #pager button:disabled { opacity: .45; cursor: default; }
+  #pageinfo { color: #cdd5e0; font-size: 12px; font-variant-numeric: tabular-nums; }
   #main { flex: 1; min-height: 0; display: flex; }
   #left { width: 46%; min-width: 320px; overflow: auto; border-right: 1px solid #2c313a; }
   #right { flex: 1; position: relative; }
@@ -88,6 +95,20 @@
   <button id="bell" class="ghost" title="Select one or more flights, then create alert rules">🔔 Alert</button>
 </div>
 
+<div id="pager">
+  <label>Per page
+    <select id="pagesize">
+      <option value="100">100</option>
+      <option value="500" selected>500</option>
+      <option value="1000">1000</option>
+      <option value="2000">2000</option>
+    </select>
+  </label>
+  <button id="prev" disabled>‹ Prev</button>
+  <span id="pageinfo"></span>
+  <button id="next" disabled>Next ›</button>
+</div>
+
 <div id="main">
   <div id="left">
     <div id="status">Pick a time range (or a preset) and search.</div>
@@ -131,6 +152,7 @@ let marker = null, pts = [], anim = null;
 
 let flights = [], byId = new Map(), selected = new Set(), multiMode = false;
 let sortKey = 'start', sortDir = -1, searchMsg = '';
+let pageOffset = 0, pageSize = 500, total = 0;
 const MAX_DRAW = 300;   // mirrors the API's HISTORY_MAX_TRAILS
 
 const altColor = a => a==null?'#888': a<2000?'#d33':a<10000?'#e80':a<20000?'#dd0':a<30000?'#3c3':'#3af';
@@ -170,21 +192,36 @@ async function showPhoto(f){
   img.src = src;
 }
 
-async function doSearch(){
+async function doSearch(keepPage){
+  if (!keepPage) pageOffset = 0;       // a fresh search / new filters / new page size -> page 1
+  pageSize = +$('pagesize').value || 500;
   const p = new URLSearchParams();
   for (const k of ['q','callsign','registration','type','operator','mil']) if ($(k).value) p.set(k, $(k).value);
   if ($('from').value) p.set('from', toMs($('from').value));
   if ($('to').value)   p.set('to',   toMs($('to').value));
+  p.set('limit', pageSize); p.set('offset', pageOffset);
   searchMsg = 'Searching…'; setStatus();
   try {
     const r = await fetch('api/search?' + p.toString());
     const j = await r.json();
-    if (j.error) { searchMsg = 'Error: ' + j.error; setStatus(); return; }
+    if (j.error) { searchMsg = 'Error: ' + j.error; setStatus(); renderPager(); return; }
     flights = j.flights; selected.clear();
-    searchMsg = `${j.count} flight(s) · ${fmtUTC(j.from)} → ${fmtUTC(j.to)}`;
+    total = (j.total != null) ? j.total : j.count;
+    pageOffset = (j.offset != null) ? j.offset : pageOffset;
+    const lo = total ? pageOffset + 1 : 0, hi = pageOffset + flights.length;
+    searchMsg = `${lo}–${hi} of ${total} flight(s) · ${fmtUTC(j.from)} → ${fmtUTC(j.to)}`;
     render();
-    renderMap();                       // nothing selected -> show every trail in range
-  } catch(e){ searchMsg = 'Request failed: ' + e; setStatus(); }
+    renderMap();                       // nothing selected -> show this page's trails
+    renderPager();
+  } catch(e){ searchMsg = 'Request failed: ' + e; setStatus(); renderPager(); }
+}
+
+function renderPager(){
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const cur = Math.floor(pageOffset / pageSize) + 1;
+  $('pageinfo').textContent = total ? `Page ${cur} / ${pages}` : '';
+  $('prev').disabled = pageOffset <= 0;
+  $('next').disabled = pageOffset + pageSize >= total;
 }
 
 function render(){
@@ -308,13 +345,17 @@ document.querySelectorAll('#presets button').forEach(b=> b.onclick = ()=>{
   $('from').value = localInput(new Date(now - (+b.dataset.h) * 3600e3));
   doSearch();
 });
-$('go').onclick = doSearch;
+$('go').onclick = ()=> doSearch(false);
+$('prev').onclick = ()=>{ if (pageOffset > 0){ pageOffset = Math.max(0, pageOffset - pageSize); doSearch(true); } };
+$('next').onclick = ()=>{ if (pageOffset + pageSize < total){ pageOffset += pageSize; doSearch(true); } };
+$('pagesize').onchange = ()=> doSearch(false);   // new page size -> back to page 1
 $('clear').onclick = ()=>{
   selected.clear(); flights = []; byId.clear(); pts = [];
   ['q','callsign','registration','type','operator'].forEach(k=> $(k).value='');
   $('mil').value = 'any';
   $('rows').innerHTML=''; trailLayer.clearLayers(); stopAnim(); $('replay').classList.remove('on'); hidePhoto();
   $('bell').disabled = false; updateBell();
+  total = 0; pageOffset = 0; renderPager();
   searchMsg = 'Cleared.'; setStatus('pick a time range or preset and search');
 };
 $('multi').onclick = ()=>{ multiMode = !multiMode; $('multi').classList.toggle('on', multiMode); };

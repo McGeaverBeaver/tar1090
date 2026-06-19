@@ -136,23 +136,30 @@ def search(q):
         where.append("NOT military")
 
     try:
-        limit = min(int(q.get("limit", [500])[0]), MAX_RESULTS)
+        limit = min(max(1, int(q.get("limit", [500])[0])), MAX_RESULTS)
     except ValueError:
         limit = 500
+    try:
+        offset = max(0, int(q.get("offset", [0])[0]))
+    except ValueError:
+        offset = 0
+
+    where_sql = " AND ".join(where)
+    total = query("SELECT count(*) AS n FROM v_flights WHERE " + where_sql, list(params))[0]["n"]
 
     sql = ("SELECT id, icao_hex, callsign, registration, icao_type, operator, military, "
            "start_time, end_time, max_alt, "
            "EXTRACT(EPOCH FROM (end_time - start_time))::int AS duration_s "
-           "FROM v_flights WHERE " + " AND ".join(where) +
-           " ORDER BY start_time DESC LIMIT %s")
-    params.append(limit)
+           "FROM v_flights WHERE " + where_sql +
+           " ORDER BY start_time DESC LIMIT %s OFFSET %s")
 
-    rows = query(sql, params)
+    rows = query(sql, list(params) + [limit, offset])
     for r in rows:
         r["start"] = ms(r.pop("start_time"))
         r["end"] = ms(r.pop("end_time"))
         r["military"] = bool(r["military"])
-    return {"flights": rows, "from": ms(t_from), "to": ms(t_to), "count": len(rows)}
+    return {"flights": rows, "from": ms(t_from), "to": ms(t_to),
+            "count": len(rows), "total": total, "limit": limit, "offset": offset}
 
 
 def options(q):
