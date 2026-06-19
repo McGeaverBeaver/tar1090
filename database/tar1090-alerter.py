@@ -36,6 +36,10 @@ AIRCRAFT_JSON = os.environ.get("ALERT_AIRCRAFT_JSON")
 CANDIDATE_DIRS = ["/run/readsb", "/run/dump1090-fa", "/run/dump1090",
                   "/run/adsbexchange-feed", "/run/dump1090-mutability", "/run/skyaware978"]
 PS_API = "https://api.planespotters.net/pub/photos/hex/"
+# planespotters sits behind Cloudflare and answers 403 to the default urllib User-Agent,
+# so identify ourselves like a real client (override with ALERT_PHOTO_UA if needed).
+PHOTO_UA = os.environ.get(
+    "ALERT_PHOTO_UA", "tar1090-alerter/1.0 (+https://github.com/McGeaverBeaver/tar1090)")
 
 
 # --- database ---------------------------------------------------------------
@@ -262,25 +266,43 @@ def in_window(win, now):
 
 
 # --- firing -----------------------------------------------------------------
+def _thumb_src(ph):
+    # planespotters returns a small "thumbnail" and a larger "thumbnail_large"; prefer the
+    # larger one for the Home Assistant card, falling back to the small one (the same photo
+    # the history page shows).
+    for key in ("thumbnail_large", "thumbnail"):
+        t = ph.get(key)
+        src = t.get("src") if isinstance(t, dict) else t
+        if src:
+            return src
+    return None
+
+
+def _ps_get(url):
+    req = urllib.request.Request(url, headers={
+        "User-Agent": PHOTO_UA, "Accept": "application/json", "Accept-Language": "en-US,en;q=0.9"})
+    with urllib.request.urlopen(req, timeout=6) as r:
+        return json.loads(r.read().decode("utf-8", "replace"))
+
+
 def fetch_photo(p):
     if not FETCH_PHOTO or not p["hex"] or p["hex"].startswith("~"):
         return None
+    base = PS_API + p["hex"].upper()
+    qs = []
+    if p["registration"]:
+        qs.append("reg=" + urllib.parse.quote(str(p["registration"])))
+    if p["icao_type"]:
+        qs.append("icaoType=" + urllib.parse.quote(str(p["icao_type"])))
     try:
-        url = PS_API + p["hex"].upper()
-        qs = []
-        if p["registration"]:
-            qs.append("reg=" + urllib.parse.quote(str(p["registration"])))
-        if p["icao_type"]:
-            qs.append("icaoType=" + urllib.parse.quote(str(p["icao_type"])))
-        if qs:
-            url += "?" + "&".join(qs)
-        with urllib.request.urlopen(url, timeout=3) as r:
-            data = json.loads(r.read().decode("utf-8", "replace"))
+        data = _ps_get(base + ("?" + "&".join(qs) if qs else ""))
         ph = (data.get("photos") or [None])[0]
-        thumb = ph and ph.get("thumbnail")
-        return (thumb.get("src") if isinstance(thumb, dict) else thumb) if ph else None
-    except Exception:                        # noqa: BLE001 -- photo is best-effort
+        if not ph and qs:                          # reg/type hint matched nothing -> try hex only
+            ph = (_ps_get(base).get("photos") or [None])[0]
+    except Exception as e:                          # noqa: BLE001 -- photo is best-effort
+        log.info("photo lookup failed for %s: %s", p["hex"], e)   # 403 = UA/IP block, timeout = egress
         return None
+    return _thumb_src(ph) if ph else None
 
 
 def log_alert(rule, p):
