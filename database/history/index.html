@@ -293,7 +293,8 @@ async function drawSingle(f){
   map.fitBounds(L.latLngBounds(pts.map(p=>[p[1],p[2]])).pad(0.1));
   const s=$('slider'); s.max=pts.length-1; s.value=0; showPoint(0);
   $('replay').classList.add('on');
-  setStatus(`${f.callsign||f.icao_hex}: ${pts.length} points · ${j.source==='heatmap'?'heatmap':'full trace'} — play to replay; click the trail or its row to deselect`);
+  const srcLabel = j.source==='heatmap' ? 'heatmap' : j.source==='live' ? 'live (in progress)' : 'full trace';
+  setStatus(`${f.callsign||f.icao_hex}: ${pts.length} points · ${srcLabel} — play to replay; click the trail or its row to deselect`);
 }
 
 // Many aircraft (or "all in range"): one light line per flight, no scrubber.

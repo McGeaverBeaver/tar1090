@@ -41,6 +41,9 @@ log = logging.getLogger("tar1090-history-api")
 
 DB_DSN      = os.environ.get("TAR1090_DB_DSN", "dbname=tar1090")
 GLOBE_DIR   = os.environ.get("GLOBE_HISTORY_DIR", "/var/globe_history")
+# readsb's live run dir (same container) -- holds traces/<xx>/trace_full_<hex>.json for
+# aircraft it's currently tracking, used to draw the trail of a still-active flight.
+RUN_DIR     = os.environ.get("READSB_RUN_DIR", os.environ.get("SOURCE_DIR", "/run/readsb"))
 PORT        = int(os.environ.get("HISTORY_API_PORT", "8090"))
 BIND        = os.environ.get("HISTORY_API_BIND", "0.0.0.0")
 WEB_DIR     = os.environ.get("HISTORY_WEB_DIR",
@@ -293,6 +296,47 @@ def _heatmap_points(hexid, lo, hi, pad=120):
     return out
 
 
+# Turn one readsb trace_full doc ({"timestamp": base, "trace": [[dt, lat, lon, alt, ...]]})
+# into [ms, lat, lon, alt] points, clipped to [lo, hi] epoch seconds (either may be None).
+def _trace_doc_points(doc, lo, hi, pad=120):
+    out = []
+    base = doc.get("timestamp") or 0
+    for e in doc.get("trace") or []:
+        if len(e) < 4 or e[1] is None or e[2] is None:
+            continue
+        t = base + e[0]
+        if lo is not None and t < lo - pad:
+            continue
+        if hi is not None and t > hi + pad:
+            continue
+        alt = e[3]
+        if alt == "ground":
+            alt = 0
+        out.append([int(t * 1000), round(e[1], 5), round(e[2], 5),
+                    alt if isinstance(alt, (int, float)) else None])
+    return out
+
+
+# Read a flight's still-live trail straight from readsb's run dir (it writes
+# traces/<xx>/trace_full_<hex>.json there for aircraft it's currently tracking, the same file
+# the main tar1090 map draws on click). Lets an in-progress ("LIVE") flight show its
+# trail-so-far before it's archived to globe_history. Returns clipped, time-sorted points.
+def _live_trace_points(hexid, t_from, t_to, pad=120):
+    path = os.path.join(RUN_DIR, "traces", hexid[-2:], f"trace_full_{hexid}.json")
+    if not os.path.exists(path):
+        return []
+    try:
+        doc = _read_json_maybe_gzip(path)
+    except (OSError, ValueError) as e:
+        log.warning("live trace read failed %s: %s", path, e)
+        return []
+    lo = t_from.timestamp() if t_from else None
+    hi = t_to.timestamp() if t_to else None
+    pts = _trace_doc_points(doc, lo, hi, pad)
+    pts.sort(key=lambda p: p[0])
+    return pts
+
+
 # Read a flight's per-aircraft trace_full_<hex>.json from globe_history for the UTC day(s)
 # it spans, clipped to [t_from, t_to] (aware datetimes; either may be None). Returns
 # (points, files_read). This is the sharp, preferred source written when READSB_ENABLE_TRACES
@@ -324,20 +368,7 @@ def _trace_file_points(hexid, t_from, t_to, pad=120):
             log.warning("trace read failed %s: %s", path, e)
             continue
         files += 1
-        base = doc.get("timestamp") or 0
-        for e in doc.get("trace") or []:
-            if len(e) < 4 or e[1] is None or e[2] is None:
-                continue
-            t = base + e[0]
-            if lo is not None and t < lo - pad:
-                continue
-            if hi is not None and t > hi + pad:
-                continue
-            alt = e[3]
-            if alt == "ground":
-                alt = 0
-            points.append([int(t * 1000), round(e[1], 5), round(e[2], 5),
-                           alt if isinstance(alt, (int, float)) else None])
+        points.extend(_trace_doc_points(doc, lo, hi, pad))
     points.sort(key=lambda p: p[0])
     return points, files
 
@@ -351,9 +382,14 @@ def trace(q):
 
     points, files = _trace_file_points(hexid, t_from, t_to)
     source = "trace"
-    # No per-aircraft trace file (these need READSB_ENABLE_TRACES, and today's live trace
-    # isn't archived into globe_history yet) -> fall back to the heatmap chunks readsb
-    # always writes. Same positions the native replay uses, so existing history works.
+    # Still-active flight whose trail isn't archived to globe_history yet -> read readsb's
+    # live trace from its run dir so the in-progress trail still draws.
+    if not points:
+        live = _live_trace_points(hexid, t_from, t_to)
+        if live:
+            points, source = live, "live"
+    # No trace file at all -> fall back to the heatmap chunks readsb always writes (same
+    # positions the native replay uses), so existing history still works.
     if not points and t_from and t_to:
         points = _heatmap_points(hexid, t_from.timestamp(), t_to.timestamp())
         source = "heatmap"
@@ -387,6 +423,9 @@ def traces(q):
             continue
         # Prefer the same per-aircraft trace file the single-flight view uses.
         pts, _ = _trace_file_points(hexid, r["start_time"], r["end_time"], pad)
+        if not pts:
+            # Still-active flight -> use readsb's live run-dir trace for its trail-so-far.
+            pts = _live_trace_points(hexid, r["start_time"], r["end_time"], pad)
         if pts:
             out[r["id"]] = pts
             continue
