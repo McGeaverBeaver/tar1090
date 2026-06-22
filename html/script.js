@@ -2822,9 +2822,9 @@ function ol_map_init() {
         }
         //console.log(`planeHex: ${planeHex} trailHex: ${trailHex}`);
         if (planeHex) {
-            selectPlaneByHex(planeHex, {noDeselect: dblclick, follow: dblclick, scrollTable: true});
+            selectPlaneByHex(planeHex, {noDeselect: dblclick, follow: dblclick});
         } else if (trailHex) {
-            selectPlaneByHex(trailHex, {noDeselect: true, scrollTable: true});
+            selectPlaneByHex(trailHex, {noDeselect: true});
         }
 
         if (!planeHex && !trailHex && !multiSelect && !showTrace) {
@@ -4773,109 +4773,7 @@ function selectPlaneByHex(hex, options) {
 
     pTracks || TAR.planeMan.refresh();
 
-    if (newPlane) {
-        // selecting on the map: jump to the matching row in the table
-        if (options.scrollTable) {
-            requestAnimationFrame(function() { scrollTableToPlane(newPlane); });
-        }
-        // selecting on the table: frame the whole trail on the map
-        if (options.zoomToTrail) {
-            const willFetchTrace = !options.noFetch && (globeIndex || showTrace || haveTraces);
-            if (willFetchTrace) {
-                // The full trail loads asynchronously; fit the view once it is drawn
-                // (see PlaneObject.updateLines). A timeout is used as a fallback in
-                // case the trace never gets drawn.
-                newPlane.zoomToTrailPending = true;
-                clearTimeout(zoomTrailTimeout);
-                zoomTrailTimeout = setTimeout(function() {
-                    if (newPlane.zoomToTrailPending) {
-                        newPlane.zoomToTrailPending = false;
-                        zoomToPlaneTrail(newPlane);
-                    }
-                }, 1500);
-            } else {
-                zoomToPlaneTrail(newPlane);
-            }
-        }
-    }
-
     return newPlane !== undefined;
-}
-
-let zoomTrailTimeout = null;
-
-// Scroll the table so the row for the given plane is visible. Only the sidebar
-// table container is scrolled and only when the row is currently out of view.
-function scrollTableToPlane(plane) {
-    if (!plane || !plane.tr || !plane.tr.parentNode)
-        return;
-    const row = plane.tr;
-    const container = document.getElementById('sidebar_canvas');
-    if (!container) {
-        row.scrollIntoView({block: 'nearest'});
-        return;
-    }
-    const cRect = container.getBoundingClientRect();
-    const rRect = row.getBoundingClientRect();
-    if (rRect.height == 0)
-        return; // row not laid out / table hidden
-    if (rRect.top < cRect.top) {
-        container.scrollTop -= (cRect.top - rRect.top) + 4;
-    } else if (rRect.bottom > cRect.bottom) {
-        container.scrollTop += (rRect.bottom - cRect.bottom) + 4;
-    }
-}
-
-// Compute the map extent [minX, minY, maxX, maxY] (projected coords) covering a
-// plane's full trail. Built manually to avoid ol.extent helpers that aren't all
-// exported in the custom OpenLayers build.
-function getTrailExtent(plane) {
-    if (!plane)
-        return null;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    const accumulate = function(ext) {
-        if (!ext)
-            return;
-        if (ext[0] < minX) minX = ext[0];
-        if (ext[1] < minY) minY = ext[1];
-        if (ext[2] > maxX) maxX = ext[2];
-        if (ext[3] > maxY) maxY = ext[3];
-    };
-    if (plane.track_linesegs) {
-        for (let i = 0; i < plane.track_linesegs.length; i++) {
-            const seg = plane.track_linesegs[i];
-            if (seg && seg.fixed)
-                accumulate(seg.fixed.getExtent());
-        }
-    }
-    if (plane.position) {
-        const p = ol.proj.fromLonLat(plane.position);
-        accumulate([p[0], p[1], p[0], p[1]]);
-    }
-    if (minX > maxX || minY > maxY)
-        return null;
-    return [minX, minY, maxX, maxY];
-}
-
-// Zoom/pan the map so the plane's full trail is visible.
-function zoomToPlaneTrail(plane) {
-    if (!plane)
-        return;
-    // framing the whole trail, so stop following the aircraft
-    toggleFollow(false);
-    const view = OLMap.getView();
-    const extent = getTrailExtent(plane);
-    if (!extent) {
-        if (plane.position)
-            view.setCenter(ol.proj.fromLonLat(plane.position));
-        return;
-    }
-    view.fit(extent, {
-        size: OLMap.getSize(),
-        padding: [60, 60, 60, 60],
-        duration: 400,
-        maxZoom: 14,
-    });
 }
 
 // loop through the planes and mark them as selected to show the paths for all planes

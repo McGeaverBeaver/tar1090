@@ -2090,13 +2090,6 @@ PlaneObject.prototype.updateLines = function() {
     if (this.trail_labels && label_add.length > 0)
         this.trail_labels.addFeatures(label_add);
 
-    // A table selection requested framing the full trail; the trail data is now
-    // drawn, so fit the map to it (used for asynchronously loaded traces).
-    if (this.zoomToTrailPending) {
-        this.zoomToTrailPending = false;
-        zoomToPlaneTrail(this);
-    }
-
 };
 
 PlaneObject.prototype.resetTrail = function() {
@@ -2169,16 +2162,13 @@ PlaneObject.prototype.makeTR = function (trTemplate) {
 
         if(!mapIsVisible) {
             if (onMobile && toggles['sidebar_visible']) {
-                // Phone full-screen list: tapping a flight jumps back to the map,
-                // framed on that flight's full trail.
+                // Phone full-screen list: tapping a flight switches back to the
+                // map and centres/follows it (no jarring zoom-out).
                 toggles['sidebar_visible'].toggle(false);
-                selectPlaneByHex(this.icao, {follow: false, zoomToTrail: true});
-            } else {
-                selectPlaneByHex(this.icao, {follow: true});
             }
+            selectPlaneByHex(this.icao, {follow: true});
         } else {
-            // selecting from the table: zoom the map to frame the full trail
-            selectPlaneByHex(this.icao, {follow: false, zoomToTrail: true});
+            selectPlaneByHex(this.icao, {follow: false});
         }
         evt.preventDefault();
     };
