@@ -2090,6 +2090,13 @@ PlaneObject.prototype.updateLines = function() {
     if (this.trail_labels && label_add.length > 0)
         this.trail_labels.addFeatures(label_add);
 
+    // A table selection requested framing the full trail; the trail data is now
+    // drawn, so fit the map to it (used for asynchronously loaded traces).
+    if (this.zoomToTrailPending) {
+        this.zoomToTrailPending = false;
+        zoomToPlaneTrail(this);
+    }
+
 };
 
 PlaneObject.prototype.resetTrail = function() {
@@ -2163,7 +2170,8 @@ PlaneObject.prototype.makeTR = function (trTemplate) {
         if(!mapIsVisible) {
             selectPlaneByHex(this.icao, {follow: true});
         } else {
-            selectPlaneByHex(this.icao, {follow: false});
+            // selecting from the table: zoom the map to frame the full trail
+            selectPlaneByHex(this.icao, {follow: false, zoomToTrail: true});
         }
         evt.preventDefault();
     };
