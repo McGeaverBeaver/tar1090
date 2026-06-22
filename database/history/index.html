@@ -301,10 +301,6 @@ async function drawMany(ids, isAll){
   try { j = await (await fetch('api/traces?ids=' + capped.join(','))).json(); }
   catch(e){ setStatus('trail request failed: ' + e); return; }
   if (j.error){ setStatus('error: ' + j.error); return; }
-  if (j.truncated){
-    setStatus(`time range too wide to draw all trails (${j.chunks} chunks > ${j.max_chunks}) — narrow the range/filters, or select specific flights`);
-    return;
-  }
   const fl = j.flights || {};
   let count = 0; const bounds = [];
   for (const id of capped){
@@ -319,7 +315,14 @@ async function drawMany(ids, isAll){
   }
   if (bounds.length) map.fitBounds(L.latLngBounds(bounds).pad(0.08));
   const more = (isAll && flights.length > capped.length) ? ` (first ${capped.length} of ${flights.length})` : '';
-  setStatus(`${count} trail(s) shown${more} · ${isAll?'all in range':'selected'} — click a line or row to focus; Ctrl/⌘-click or Multi to add`);
+  // Trace-file trails are always returned; only the heatmap fallback can be truncated for a
+  // very wide range, so we still draw what we have and just note that some were skipped.
+  const trunc = j.truncated ? ` · some trails skipped (range too wide: ${j.chunks} > ${j.max_chunks} chunks) — narrow it to see the rest` : '';
+  if (!count && j.truncated){
+    setStatus(`time range too wide to draw these trails (${j.chunks} chunks > ${j.max_chunks}) — narrow the range/filters, or select specific flights`);
+    return;
+  }
+  setStatus(`${count} trail(s) shown${more}${trunc} · ${isAll?'all in range':'selected'} — click a line or row to focus; Ctrl/⌘-click or Multi to add`);
 }
 
 function showPoint(i){

@@ -287,14 +287,11 @@ def _heatmap_points(hexid, lo, hi, pad=120):
     return out
 
 
-def trace(q):
-    hexid = (q.get("hex", [""])[0] or "").strip().lower().lstrip("~")
-    if not hexid or any(c not in "0123456789abcdef" for c in hexid):
-        return {"hex": hexid, "points": [], "error": "bad hex"}
-    t_from = parse_time(q.get("start", [None])[0], None)
-    t_to   = parse_time(q.get("end", [None])[0], None)
-
-    # which UTC day file(s) does this flight touch
+# Read a flight's per-aircraft trace_full_<hex>.json from globe_history for the UTC day(s)
+# it spans, clipped to [t_from, t_to] (aware datetimes; either may be None). Returns
+# (points, files_read). This is the sharp, preferred source written when READSB_ENABLE_TRACES
+# is on -- shared by both the single-flight (trace) and batch (traces) readers.
+def _trace_file_points(hexid, t_from, t_to, pad=120):
     days = []
     if t_from and t_to:
         d = datetime(t_from.year, t_from.month, t_from.day, tzinfo=timezone.utc)
@@ -307,7 +304,6 @@ def trace(q):
 
     lo = t_from.timestamp() if t_from else None
     hi = t_to.timestamp() if t_to else None
-    pad = 120  # seconds of slack so we don't clip the ends of the leg
 
     points = []
     files = 0
@@ -337,20 +333,32 @@ def trace(q):
             points.append([int(t * 1000), round(e[1], 5), round(e[2], 5),
                            alt if isinstance(alt, (int, float)) else None])
     points.sort(key=lambda p: p[0])
+    return points, files
+
+
+def trace(q):
+    hexid = (q.get("hex", [""])[0] or "").strip().lower().lstrip("~")
+    if not hexid or any(c not in "0123456789abcdef" for c in hexid):
+        return {"hex": hexid, "points": [], "error": "bad hex"}
+    t_from = parse_time(q.get("start", [None])[0], None)
+    t_to   = parse_time(q.get("end", [None])[0], None)
+
+    points, files = _trace_file_points(hexid, t_from, t_to)
     source = "trace"
     # No per-aircraft trace file (these need READSB_ENABLE_TRACES, and today's live trace
     # isn't archived into globe_history yet) -> fall back to the heatmap chunks readsb
     # always writes. Same positions the native replay uses, so existing history works.
-    if not points and lo is not None and hi is not None:
-        points = _heatmap_points(hexid, lo, hi, pad)
+    if not points and t_from and t_to:
+        points = _heatmap_points(hexid, t_from.timestamp(), t_to.timestamp())
         source = "heatmap"
     return {"hex": hexid, "points": points, "files": files, "source": source}
 
 
 def traces(q):
-    """Batch trail reader for the "show all / multiple" overview: given flight ids, read
-    each touched heatmap chunk ONCE and hand back every flight's clipped trail. Far cheaper
-    than calling /api/trace per aircraft (which would re-read the same chunks repeatedly)."""
+    """Batch trail reader for the "show all / multiple" overview: given flight ids, hand back
+    every flight's trail. Each flight prefers its own sharp per-aircraft trace_full file (same
+    source the single-flight reader uses); flights that don't have one fall back to the
+    heatmap chunks, which are read ONCE each and shared across those flights."""
     raw = (q.get("ids", [""])[0] or "").strip()
     if not raw:
         return {"flights": {}, "chunks": 0}
@@ -364,12 +372,19 @@ def traces(q):
     rows = query("SELECT id, icao_hex, start_time, end_time FROM v_flights WHERE id = ANY(%s)",
                  [ids])
     pad = 120
-    by_hex = {}        # hex_low24 -> [(flight_id, lo, hi), ...]
+    out = {}
+    by_hex = {}        # hex_low24 -> [(flight_id, lo, hi), ...]  (only flights w/o a trace file)
     bases = set()
     for r in rows:
         hexid = (r["icao_hex"] or "").strip().lower().lstrip("~")
         if not hexid or any(c not in "0123456789abcdef" for c in hexid):
             continue
+        # Prefer the same per-aircraft trace file the single-flight view uses.
+        pts, _ = _trace_file_points(hexid, r["start_time"], r["end_time"], pad)
+        if pts:
+            out[r["id"]] = pts
+            continue
+        # No trace file for this flight -> queue it for the shared heatmap pass.
         target = int(hexid, 16) & 0xFFFFFF
         lo = r["start_time"].timestamp() - pad
         hi = r["end_time"].timestamp() + pad
@@ -377,10 +392,12 @@ def traces(q):
         bases.update(_chunk_bases(lo, hi))
 
     if len(bases) > MAX_TRACE_CHUNKS:
-        return {"flights": {}, "truncated": True, "chunks": len(bases),
+        # Too many heatmap chunks to scan, but still return any trace-file trails we have.
+        for v in out.values():
+            v.sort(key=lambda p: p[0])
+        return {"flights": out, "truncated": True, "chunks": len(bases),
                 "max_chunks": MAX_TRACE_CHUNKS}
 
-    out = {}
     for cbase in sorted(bases):
         path = _cbase_path(cbase)
         if not os.path.exists(path):
