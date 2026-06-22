@@ -80,16 +80,19 @@ EXPOSE 8090
 # Trails: the replay page reconstructs each trail from readsb's heatmap chunks
 # (globe_history/.../heatmap/NN.bin.ttf), which readsb ALWAYS writes -- the same data the
 # native ?replay animates from -- so it works against whatever history you already have,
-# with no extra setting. For sharper trails on NEW flights you can additionally set
-# READSB_ENABLE_TRACES=true (writes a per-aircraft trace_full_*.json the API prefers when
-# present); we leave it OFF by default because it's one file per aircraft per day and the
-# only way to bound it, MAX_GLOBE_HISTORY, also deletes the older heatmap history you want
-# to keep. Persist /var/globe_history on a real volume.
+# with no extra setting. We also set READSB_ENABLE_TRACES=true (below): it makes readsb
+# write the per-aircraft trace_full_*.json files the trace API PREFERS, which is what makes
+# clicking a single flight on the replay page reliably load and zoom to its full trail.
+# (Without it those files are never written and a single-flight click can come back empty.)
+# It's one small file per aircraft per day; bound disk with MAX_GLOBE_HISTORY=<days> if
+# needed (note that also trims older heatmap history), and persist /var/globe_history on a
+# real volume. Set READSB_ENABLE_TRACES=false to opt out.
 # Alerts: the alert engine watches the live feed and publishes matches over MQTT to Home
 # Assistant (configure the broker + rules in the Alerts/Settings tabs; tables auto-create
 # in your database). It idles until a broker + rules are set. Set ENABLE_ALERTS=false to
 # turn the service off entirely.
-ENV ENABLE_LOGGER=true \
+ENV READSB_ENABLE_TRACES=true \
+    ENABLE_LOGGER=true \
     ENABLE_HISTORY_API=true \
     ENABLE_ALERTS=true \
     LOG_POSITIONS=false \
