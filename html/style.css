@@ -400,10 +400,49 @@ select.error, textarea.error, input.error {
     padding-left: calc( 20px * var(--SCALE));
 }
 
-@media screen and (max-width: 1 calc(000px * var(--SCALE))) {
+@media screen and (max-width: 1000px) {
     .dateTime {
         display: none;
     }
+}
+
+/* ----- Phone / touch layout tweaks ----- */
+html.onMobile .dateTime {
+    display: none;
+}
+
+/* Larger, easier to tap rows in the aircraft list */
+html.onMobile .plane_table_row {
+    height: calc( 30px * var(--SCALE));
+}
+html.onMobile #planesTable td {
+    padding-top: calc( 6px * var(--SCALE));
+    padding-bottom: calc( 6px * var(--SCALE));
+}
+html.onMobile .aircraft_table_header td {
+    padding-top: calc( 8px * var(--SCALE));
+    padding-bottom: calc( 8px * var(--SCALE));
+}
+
+/* The list takes the whole width on phones - drop the splitter handle and any
+   left margin the info panel logic would otherwise reserve. */
+html.onMobile #splitter {
+    display: none !important;
+}
+html.onMobile #sidebar_container {
+    margin-left: 0 !important;
+}
+
+/* Keep the selected-aircraft info panel from covering the whole small screen;
+   render it as a bottom sheet that does not block the map behind it. */
+html.onMobile #selected_infoblock {
+    width: 100% !important;
+    height: auto !important;
+    max-height: 45%;
+    top: auto;
+    bottom: 0;
+    border-top: calc( 2px * var(--SCALE)) solid var(--ACCENT);
+    box-shadow: 0 -2px 6px -1px rgba(0, 0, 0, 0.5);
 }
 
 .sectionTitle {

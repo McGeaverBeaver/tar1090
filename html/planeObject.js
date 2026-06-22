@@ -2168,7 +2168,14 @@ PlaneObject.prototype.makeTR = function (trTemplate) {
         }
 
         if(!mapIsVisible) {
-            selectPlaneByHex(this.icao, {follow: true});
+            if (onMobile && toggles['sidebar_visible']) {
+                // Phone full-screen list: tapping a flight jumps back to the map,
+                // framed on that flight's full trail.
+                toggles['sidebar_visible'].toggle(false);
+                selectPlaneByHex(this.icao, {follow: false, zoomToTrail: true});
+            } else {
+                selectPlaneByHex(this.icao, {follow: true});
+            }
         } else {
             // selecting from the table: zoom the map to frame the full trail
             selectPlaneByHex(this.icao, {follow: false, zoomToTrail: true});

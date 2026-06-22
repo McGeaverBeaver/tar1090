@@ -938,3 +938,8 @@ let onMobile = (
     }
 }
 )();
+
+// expose mobile state to CSS so the stylesheet can adapt touch targets / layout
+if (onMobile) {
+    document.documentElement.classList.add('onMobile');
+}
