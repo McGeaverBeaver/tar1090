@@ -49,6 +49,7 @@
   tbody tr.sel { background: #243a5e; }
   td.swatch { width: 4px; padding: 0; }
   .mil { color: #ff6b6b; font-weight: 600; }
+  .live { color: #2ec86b; font-weight: 600; font-size: 11px; white-space: nowrap; }
   #status { padding: 6px 12px; color: #9aa3b2; }
   #replay { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 500; background: rgba(20,22,26,.92);
             border: 1px solid #2c313a; border-radius: 6px; padding: 6px 10px; display: none; align-items: center; gap: 8px; }
@@ -114,6 +115,7 @@
     <div id="status">Pick a time range (or a preset) and search.</div>
     <table><thead><tr>
       <th class="swatch"></th>
+      <th data-k="active" title="Active = still being tracked (trail may be incomplete)">Live</th>
       <th data-k="callsign">Callsign</th><th data-k="registration">Reg</th><th data-k="icao_type">Type</th>
       <th data-k="operator">Operator</th><th data-k="military">Mil</th>
       <th data-k="start">Start (UTC)</th><th data-k="duration_s">Dur</th><th data-k="max_alt">Max alt</th>
@@ -233,6 +235,7 @@ function render(){
     tr.dataset.id = f.id;
     const sw = f.military ? '#ff4d4d' : hue(f.icao_hex || String(f.id));
     tr.innerHTML = `<td class="swatch" style="background:${sw}"></td>`
+      + `<td>${f.active ? '<span class="live" title="Active – still being tracked; the trail is still recording and may be incomplete">● LIVE</span>' : ''}</td>`
       + `<td>${f.callsign||''}</td><td>${f.registration||''}</td><td>${f.icao_type||''}</td>`
       + `<td>${f.operator||''}</td><td class="${f.military?'mil':''}">${f.military?'MIL':''}</td>`
       + `<td>${fmtUTC(f.start)}</td><td>${fmtDur(f.duration_s)}</td><td>${f.max_alt!=null?f.max_alt:''}</td>`;

@@ -50,6 +50,10 @@ MAX_RESULTS = int(os.environ.get("HISTORY_MAX_RESULTS", "2000"))
 # heatmap chunks we'll read for one overview request (bounds work for wide time ranges).
 MAX_TRAILS       = int(os.environ.get("HISTORY_MAX_TRAILS", "300"))
 MAX_TRACE_CHUNKS = int(os.environ.get("HISTORY_MAX_TRACE_CHUNKS", "400"))
+# A flight is "active" (still in the air / being tracked) if the logger has refreshed its
+# end_time within this many seconds -- its trail is still being recorded, so it may be
+# incomplete or not yet archived to globe_history.
+ACTIVE_WINDOW_SEC = int(os.environ.get("HISTORY_ACTIVE_WINDOW_SEC", "120"))
 
 # --- database ---------------------------------------------------------------
 _conn = None
@@ -155,15 +159,17 @@ def search(q):
 
     sql = ("SELECT id, icao_hex, callsign, registration, icao_type, operator, military, "
            "start_time, end_time, max_alt, "
-           "EXTRACT(EPOCH FROM (end_time - start_time))::int AS duration_s "
+           "EXTRACT(EPOCH FROM (end_time - start_time))::int AS duration_s, "
+           "(end_time >= now() - make_interval(secs => %s)) AS active "
            "FROM v_flights WHERE " + where_sql +
            " ORDER BY start_time DESC LIMIT %s OFFSET %s")
 
-    rows = query(sql, list(params) + [limit, offset])
+    rows = query(sql, [ACTIVE_WINDOW_SEC] + list(params) + [limit, offset])
     for r in rows:
         r["start"] = ms(r.pop("start_time"))
         r["end"] = ms(r.pop("end_time"))
         r["military"] = bool(r["military"])
+        r["active"] = bool(r["active"])
     return {"flights": rows, "from": ms(t_from), "to": ms(t_to),
             "count": len(rows), "total": total, "limit": limit, "offset": offset}
 
