@@ -48,6 +48,26 @@ RUN curl -fsSL --retry 5 --retry-delay 2 -o /usr/local/share/tar1090/aircraft.cs
  && [ "$(stat -c%s /usr/local/share/tar1090/aircraft.csv.gz)" -gt 1000000 ] \
  && echo "bundled aircraft.csv.gz ($(stat -c%s /usr/local/share/tar1090/aircraft.csv.gz) bytes)"
 
+# --- This fork's web UI changes ----------------------------------------------
+# The base image ships UPSTREAM tar1090's GUI with cache-busted asset filenames
+# (e.g. script_<md5>.js). Overlay the files this fork modified onto whatever the
+# installed names are, so the container serves OUR UI (mobile layout, etc.) and
+# not the stock interface. Fail loudly if the html dir or a target file is missing
+# so we never silently ship the wrong UI.
+COPY html/early.js html/script.js html/planeObject.js html/style.css /tmp/uioverlay/
+RUN set -eux; \
+    htmldir=/usr/local/share/tar1090/html; \
+    [ -d "$htmldir" ] || { echo "ERROR: tar1090 html dir not found at $htmldir"; exit 1; }; \
+    for pair in early:js script:js planeObject:js style:css; do \
+        name="${pair%:*}"; ext="${pair#*:}"; \
+        target="$(ls "$htmldir/${name}_"*."$ext" 2>/dev/null | head -n1 || true)"; \
+        [ -n "$target" ] || target="$htmldir/${name}.${ext}"; \
+        [ -f "$target" ] || { echo "ERROR: no overlay target for ${name}.${ext} in $htmldir"; exit 1; }; \
+        cp "/tmp/uioverlay/${name}.${ext}" "$target"; \
+        echo "overlaid ${name}.${ext} -> $target"; \
+    done; \
+    rm -rf /tmp/uioverlay
+
 # --- s6 services: logger + history/replay API + alert engine ----------------
 COPY allinone/rootfs/ /
 RUN chmod +x /etc/s6-overlay/s6-rc.d/tar1090-logger/run \
