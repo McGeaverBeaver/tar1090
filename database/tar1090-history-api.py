@@ -491,12 +491,32 @@ def live(q):
         out.append({
             "hex": a.get("hex"), "flight": (a.get("flight") or "").strip(),
             "r": a.get("r"), "t": a.get("t"), "desc": a.get("desc"),
+            "operator": None, "military": False,
             "lat": a.get("lat"), "lon": a.get("lon"),
             "alt": a.get("alt_baro"), "alt_geom": a.get("alt_geom"),
             "gs": a.get("gs"), "track": a.get("track"), "baro_rate": a.get("baro_rate"),
             "squawk": a.get("squawk"), "category": a.get("category"),
             "seen": a.get("seen"), "seen_pos": a.get("seen_pos"), "rssi": a.get("rssi"),
         })
+    # readsb's aircraft.json rarely carries registration/type, so fill those (and the
+    # military flag) from our own aircraft index -- the same source the History table uses.
+    hexes = [a["hex"] for a in out if a.get("hex")]
+    if hexes:
+        try:
+            meta = {r["icao_hex"]: r for r in query(
+                "SELECT icao_hex, registration, icao_type, type_desc, operator, military "
+                "FROM aircraft WHERE icao_hex = ANY(%s)", (hexes,))}
+            for a in out:
+                m = meta.get(a["hex"])
+                if not m:
+                    continue
+                a["r"] = a["r"] or m["registration"]
+                a["t"] = a["t"] or m["icao_type"]
+                a["desc"] = a["desc"] or m["type_desc"]
+                a["operator"] = m["operator"]
+                a["military"] = bool(m["military"])
+        except Exception:                                # noqa: BLE001 -- DB down: still serve live
+            log.warning("live: aircraft-index enrichment skipped (db unavailable)")
     return {"now": doc.get("now"), "messages": doc.get("messages"),
             "count_total": len(acs), "count_pos": len(out), "aircraft": out}
 

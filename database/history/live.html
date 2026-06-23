@@ -24,6 +24,12 @@
   #count { color: #cdd5e0; font-size: 12px; font-variant-numeric: tabular-nums; }
   #count b { color: #fff; }
   #updated { color: #8a93a2; font-size: 11px; margin-left: auto; font-variant-numeric: tabular-nums; }
+  .toggles { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tgl { background: rgba(42,47,56,.55); color: #cdd5e0; border: 1px solid #313845; border-radius: 999px;
+         padding: 5px 13px; font-size: 12px; font-weight: 600; cursor: pointer; transition: background .12s, color .12s, border-color .12s; }
+  .tgl:hover { background: #353c47; color: #fff; }
+  .tgl.on { background: #2d6cdf; border-color: #3b78e8; color: #fff; box-shadow: 0 0 0 1px rgba(61,120,232,.4); }
+  .tgl:active { transform: translateY(1px); }
   #main { flex: 1; min-height: 0; position: relative; }
   #map { position: absolute; inset: 0; background: #0b0d10; }
   .leaflet-tile-pane { filter: brightness(0.6) contrast(1.05) saturate(0.9); }
@@ -67,6 +73,12 @@
 </header>
 <div id="bar">
   <input id="find" type="text" placeholder="Find callsign / hex / reg…" autocomplete="off">
+  <div class="toggles">
+    <button class="tgl" id="t-labels" title="Show a callsign label on every aircraft">🏷 Labels</button>
+    <button class="tgl" id="t-trails" title="Draw a short recent trail behind each aircraft">〰 Trails</button>
+    <button class="tgl on" id="t-ground" title="Show aircraft on the ground">⏚ Ground</button>
+    <button class="tgl" id="t-recenter" title="Zoom to fit every aircraft">⤢ Fit</button>
+  </div>
   <span id="count">—</span>
   <span id="updated"></span>
 </div>
@@ -159,7 +171,18 @@ function isMil(sq){ return sq && /^(7[5-7])/.test(sq); } // emergency/special sq
 
 // ---- live polling + marker management ------------------------------------------------------
 const markers = new Map();   // hex -> { marker, key }  (key = rounded track|altband for cheap diffing)
+const trails = new Map();     // hex -> [[lat,lon],...]   recent positions, when Trails is on
+const trailLayers = new Map();// hex -> L.polyline
 let selectedHex = null, lastData = new Map(), fitted = false, filter = '';
+let showLabels = false, showTrails = false, showGround = true;
+
+function planeColor(a){ return (a.military || isMil(a.squawk)) ? '#ff4d4d' : altColor(a.alt); }
+function tipOpts(){ return { permanent: showLabels, direction: showLabels ? 'right' : 'top',
+  offset: showLabels ? [10,0] : [0,-10], opacity: .95, className: 'actip' }; }
+function tipText(a){
+  const alt = a.alt === 'ground' ? ' · grnd' : (a.alt != null ? ' · ' + a.alt.toLocaleString() + ' ft' : '');
+  return (a.flight || a.r || a.hex || '') + alt;
+}
 
 async function poll(){
   if (document.hidden) return;
@@ -177,11 +200,12 @@ function render(j){
   const pts = [];
   for (const a of acs){
     if (a.lat==null || a.lon==null) continue;
+    if (!showGround && a.alt === 'ground') continue;
     lastData.set(a.hex, a);
     seen.add(a.hex);
     const sel = a.hex === selectedHex;
     const size = sel ? 32 : 22;
-    const col  = isMil(a.squawk) ? '#ff4d4d' : altColor(a.alt);
+    const col  = planeColor(a);
     const trk  = a.track || 0;
     const key  = `${Math.round(trk/3)}|${col}|${size}`;
     let e = markers.get(a.hex);
@@ -189,18 +213,29 @@ function render(j){
       const m = L.marker([a.lat, a.lon], { icon: makePlaneIcon(classifyType(a.t), col, trk, size, sel),
         interactive:true, keyboard:false, riseOnHover:true });
       m.on('click', ()=> select(a.hex));
-      m.bindTooltip('', { direction:'top', offset:[0,-10], opacity:.9, className:'actip' });
+      m.bindTooltip(tipText(a), tipOpts());
       m.addTo(map);
       e = { marker:m, key:'' };
       markers.set(a.hex, e);
     }
     e.marker.setLatLng([a.lat, a.lon]);
     if (e.key !== key){ e.marker.setIcon(makePlaneIcon(classifyType(a.t), col, trk, size, sel)); e.key = key; }
-    e.marker.setTooltipContent((a.flight || a.r || a.hex) + (a.alt!=null && a.alt!=='ground' ? ' · '+a.alt.toLocaleString()+' ft' : ''));
+    e.marker.setTooltipContent(tipText(a));
+    if (showTrails){
+      let tr = trails.get(a.hex); if (!tr){ tr = []; trails.set(a.hex, tr); }
+      const last = tr[tr.length-1];
+      if (!last || last[0] !== a.lat || last[1] !== a.lon){ tr.push([a.lat, a.lon]); if (tr.length > 90) tr.shift(); }
+      let pl = trailLayers.get(a.hex);
+      if (tr.length > 1){
+        if (!pl){ pl = L.polyline(tr, { color: col, weight: 2, opacity: .5 }); pl.addTo(map); trailLayers.set(a.hex, pl); }
+        else { pl.setLatLngs(tr); pl.setStyle({ color: col }); }
+      }
+    }
     if (!fitted) pts.push([a.lat, a.lon]);
   }
-  // drop aircraft that are no longer in the feed
-  for (const [hex, e] of markers){ if (!seen.has(hex)){ map.removeLayer(e.marker); markers.delete(hex); } }
+  // drop aircraft that are no longer in the feed (and their trails)
+  for (const [hex, e] of markers){ if (!seen.has(hex)){ map.removeLayer(e.marker); markers.delete(hex);
+    const pl = trailLayers.get(hex); if (pl){ map.removeLayer(pl); trailLayers.delete(hex); } trails.delete(hex); } }
 
   if (!fitted && pts.length){ map.fitBounds(L.latLngBounds(pts).pad(0.15)); fitted = true; }
   applyFilter();
@@ -219,7 +254,7 @@ function select(hex){
   for (const e of markers.values()) e.key = '';     // force halo/size refresh on next render
   const a = lastData.get(hex), e = markers.get(hex);
   if (a && e){                                       // highlight the picked aircraft immediately
-    e.marker.setIcon(makePlaneIcon(classifyType(a.t), isMil(a.squawk)?'#ff4d4d':altColor(a.alt), a.track||0, 32, true));
+    e.marker.setIcon(makePlaneIcon(classifyType(a.t), planeColor(a), a.track||0, 32, true));
   }
   renderInfo(a); showPhoto(a);
   $('card').classList.add('on');
@@ -229,15 +264,17 @@ function deselect(){ selectedHex = null; $('card').classList.remove('on'); for (
 function renderInfo(a){
   if (!a){ return; }
   const sub = [a.r, a.t, a.desc].filter(Boolean).join(' · ') || 'unknown aircraft';
-  const emer = isMil(a.squawk) ? ' <span class="mil">⚠</span>' : '';
+  const tag = a.military ? ' <span class="mil">MIL</span>'
+            : isMil(a.squawk) ? ' <span class="mil">⚠</span>' : '';
   $('info').innerHTML =
-    `<div class="hd"><div><div class="cs">${a.flight || a.r || a.hex}${emer}</div><div class="sub">${sub}</div></div>`
+    `<div class="hd"><div><div class="cs">${a.flight || a.r || a.hex}${tag}</div><div class="sub">${sub}</div></div>`
     + `<div class="x" title="Deselect">✕</div></div>`
     + `<div class="grid">`
     + cell('Altitude', fmtAlt(a.alt)) + cell('Ground speed', fmtSpd(a.gs))
     + cell('Track', fmtTrk(a.track)) + cell('Vertical rate', fmtRate(a.baro_rate))
     + cell('Squawk', a.squawk || '—') + cell('Last seen', fmtSeen(a.seen))
     + cell('ICAO hex', (a.hex||'—').toUpperCase()) + cell('Signal', a.rssi!=null ? a.rssi+' <small>dBFS</small>' : '—')
+    + (a.operator ? cell('Operator', a.operator, true) : '')
     + cell('Position', `${a.lat.toFixed(4)}, ${a.lon.toFixed(4)}`, true)
     + `</div>`;
   $('info').querySelector('.x').onclick = deselect;
@@ -288,6 +325,20 @@ function applyFilter(){
   }
   if (hit && hit[0]!=null) map.panTo(hit, { animate:true });
 }
+
+// ---- toggle buttons (tar1090-style, but matching our modern card) --------------------------
+function applyLabels(){
+  for (const [hex, e] of markers){ const a = lastData.get(hex) || { hex };
+    e.marker.unbindTooltip(); e.marker.bindTooltip(tipText(a), tipOpts()); }
+}
+function clearTrails(){ for (const pl of trailLayers.values()) map.removeLayer(pl); trailLayers.clear(); trails.clear(); }
+function fitAll(){ const pts = []; for (const e of markers.values()){ const ll = e.marker.getLatLng(); pts.push([ll.lat, ll.lng]); }
+  if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.15)); }
+
+$('t-labels').onclick   = e => { showLabels = !showLabels; e.currentTarget.classList.toggle('on', showLabels); applyLabels(); };
+$('t-trails').onclick    = e => { showTrails = !showTrails; e.currentTarget.classList.toggle('on', showTrails); if (!showTrails) clearTrails(); poll(); };
+$('t-ground').onclick    = e => { showGround = !showGround; e.currentTarget.classList.toggle('on', showGround); poll(); };
+$('t-recenter').onclick  = () => fitAll();
 
 map.on('click', deselect);
 poll();
