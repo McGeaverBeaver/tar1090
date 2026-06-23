@@ -90,6 +90,8 @@
   #list-tbl td.n { text-align: right; font-variant-numeric: tabular-nums; color: #cdd5e0; }
   #list-tbl td.cs { font-weight: 600; max-width: 78px; overflow: hidden; text-overflow: ellipsis; }
   #list-tbl:not(.has-dist) .dist { display: none; }   /* hide Distance until a site location is known */
+  #list-tbl.hide-t .c-t, #list-tbl.hide-alt .c-alt, #list-tbl.hide-gs .c-gs,
+  #list-tbl.hide-squawk .c-squawk, #list-tbl.hide-dist .c-dist { display: none; }   /* user column toggles */
   #list-tbl thead th .u { color: #6b7585; font-weight: 400; }
   #list-hd .m.gear { font-size: 14px; }
   /* settings popover */
@@ -102,6 +104,8 @@
                         border-radius: 7px; padding: 5px 0; font-size: 11px; font-weight: 600; cursor: pointer; }
   #list-settings .seg:hover { background: #353c47; color: #fff; }
   #list-settings .seg.on { background: #2d6cdf; border-color: #3b78e8; color: #fff; }
+  #list-settings .sgv.wrap { flex-wrap: wrap; }
+  #list-settings .sgv.wrap .seg { flex: 0 0 auto; padding: 5px 10px; }
   #list-tbl tr.lr { cursor: pointer; }
   #list-tbl tr.lr:hover { background: rgba(255,255,255,.06); }
   #list-tbl tr.lr.sel { background: rgba(45,108,223,.32); }
@@ -128,7 +132,7 @@
   <input id="find" type="text" placeholder="Find callsign / hex / reg…" autocomplete="off">
   <div class="toggles">
     <button class="tgl" id="t-labels" title="Show a callsign label on every aircraft">🏷 Labels</button>
-    <button class="tgl" id="t-trails" title="Draw a short recent trail behind each aircraft">〰 Trails</button>
+    <button class="tgl" id="t-trails" title="Show the selected aircraft's trail">〰 Trails</button>
     <button class="tgl on" id="t-ground" title="Show aircraft on the ground">⏚ Ground</button>
     <button class="tgl" id="t-recenter" title="Zoom to fit every aircraft">⤢ Fit</button>
   </div>
@@ -147,9 +151,9 @@
     <div id="list-body">
       <table id="list-tbl">
         <thead><tr>
-          <th data-k="flight" data-label="Flight">Flight</th><th data-k="t" data-label="Type">Type</th>
-          <th data-k="alt" data-label="Alt" class="n">Alt</th><th data-k="gs" data-label="Spd" class="n">Spd</th>
-          <th data-k="squawk" data-label="Sqk" class="n">Sqk</th><th data-k="dist" data-label="Dist" class="n dist">Dist</th>
+          <th data-k="flight" data-label="Flight" class="c-flight">Flight</th><th data-k="t" data-label="Type" class="c-t">Type</th>
+          <th data-k="alt" data-label="Alt" class="n c-alt">Alt</th><th data-k="gs" data-label="Spd" class="n c-gs">Spd</th>
+          <th data-k="squawk" data-label="Sqk" class="n c-squawk">Sqk</th><th data-k="dist" data-label="Dist" class="n dist c-dist">Dist</th>
         </tr></thead>
         <tbody id="list-rows"></tbody>
       </table>
@@ -243,8 +247,10 @@ const UNITS = {
   alt:   { ft:{f:1,s:'ft'}, m:{f:0.3048,s:'m'} },
   dist:  { nm:{f:1,s:'nm'}, km:{f:1.852,s:'km'}, mi:{f:1.15078,s:'mi'} },
 };
-function loadSettings(){ const d = { speed:'kt', alt:'ft', dist:'nm' };
-  try { return Object.assign(d, JSON.parse(localStorage.getItem('liveUnits') || '{}')); } catch(e){ return d; } }
+function loadSettings(){ const d = { speed:'kt', alt:'ft', dist:'nm',
+    cols: { t:true, alt:true, gs:true, squawk:true, dist:true } };
+  try { const s = JSON.parse(localStorage.getItem('liveUnits') || '{}');
+    return Object.assign(d, s, { cols: Object.assign(d.cols, s.cols || {}) }); } catch(e){ return d; } }
 let settings = loadSettings();
 function saveSettings(){ try { localStorage.setItem('liveUnits', JSON.stringify(settings)); } catch(e){} }
 const uSpeed = () => UNITS.speed[settings.speed].s, uAlt = () => UNITS.alt[settings.alt].s, uDist = () => UNITS.dist[settings.dist].s;
@@ -267,9 +273,7 @@ function isMil(sq){ return sq && /^(7[5-7])/.test(sq); } // emergency/special sq
 
 // ---- live polling + marker management ------------------------------------------------------
 const markers = new Map();   // hex -> { marker, key }  (key = rounded track|altband for cheap diffing)
-const trails = new Map();     // hex -> [[lat,lon],...]   recent positions, when Trails is on
-const trailLayers = new Map();// hex -> L.polyline
-const selLayer = L.layerGroup().addTo(map);   // selected aircraft's loaded (historical) trail
+const selLayer = L.layerGroup().addTo(map);   // selected aircraft's trail (only when Trails is on)
 let selTrailReq = 0;
 let selectedHex = null, lastData = new Map(), fitted = false, filter = '';
 let showLabels = false, showTrails = false, showGround = true;
@@ -329,26 +333,16 @@ function render(j){
     e.marker.setLatLng([a.lat, a.lon]);
     if (e.key !== key){ e.marker.setIcon(makePlaneIcon(classifyType(a.t), col, trk, size, sel)); e.key = key; }
     e.marker.setTooltipContent(tipText(a));
-    if (showTrails){
-      let tr = trails.get(a.hex); if (!tr){ tr = []; trails.set(a.hex, tr); }
-      const last = tr[tr.length-1];
-      if (!last || last[0] !== a.lat || last[1] !== a.lon){ tr.push([a.lat, a.lon]); if (tr.length > 90) tr.shift(); }
-      let pl = trailLayers.get(a.hex);
-      if (tr.length > 1){
-        if (!pl){ pl = L.polyline(tr, { color: col, weight: 2, opacity: .5 }); pl.addTo(map); trailLayers.set(a.hex, pl); }
-        else { pl.setLatLngs(tr); pl.setStyle({ color: col }); }
-      }
-    }
     if (!fitted) pts.push([a.lat, a.lon]);
   }
-  // drop aircraft that are no longer in the feed (and their trails)
-  for (const [hex, e] of markers){ if (!seen.has(hex)){ map.removeLayer(e.marker); markers.delete(hex);
-    const pl = trailLayers.get(hex); if (pl){ map.removeLayer(pl); trailLayers.delete(hex); } trails.delete(hex); } }
+  // drop aircraft that are no longer shown (gone from the feed, or hidden by the Ground filter)
+  for (const [hex, e] of markers){ if (!seen.has(hex)){ map.removeLayer(e.marker); markers.delete(hex); } }
 
   if (!fitted && pts.length){ map.fitBounds(L.latLngBounds(pts).pad(0.15)); fitted = true; }
   applyFilter();
 
-  $('count').innerHTML = `<b>${j.count_pos ?? acs.length}</b> aircraft with position` +
+  $('count').innerHTML = `<b>${lastData.size}</b> shown` +
+    (j.count_pos!=null ? ` · ${j.count_pos} with position` : '') +
     (j.count_total ? ` · ${j.count_total} tracked` : '');
   $('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
   $('status').style.display = acs.length ? 'none' : 'block';
@@ -374,10 +368,10 @@ function renderList(acs){
     const alt = a.alt==='ground' ? 'grnd' : (a.alt!=null ? Math.round(cvAlt(a.alt)).toLocaleString() : '—');
     const d = cvDist(distNm(a));
     return `<tr class="lr${a.hex===selectedHex?' sel':''}${a.military?' mil':''}" data-hex="${a.hex}">`
-      + `<td class="cs">${a.flight || a.r || a.hex}</td><td>${a.t || ''}</td>`
-      + `<td class="n">${alt}</td><td class="n">${a.gs!=null ? Math.round(cvSpeed(a.gs)) : '—'}</td>`
-      + `<td class="n">${a.squawk || '—'}</td>`
-      + `<td class="n dist">${d!=null ? (d<10 ? d.toFixed(1) : Math.round(d)) : '—'}</td></tr>`;
+      + `<td class="cs c-flight">${a.flight || a.r || a.hex}</td><td class="c-t">${a.t || ''}</td>`
+      + `<td class="n c-alt">${alt}</td><td class="n c-gs">${a.gs!=null ? Math.round(cvSpeed(a.gs)) : '—'}</td>`
+      + `<td class="n c-squawk">${a.squawk || '—'}</td>`
+      + `<td class="n dist c-dist">${d!=null ? (d<10 ? d.toFixed(1) : Math.round(d)) : '—'}</td></tr>`;
   }).join('');
   body.scrollTop = keep;
   if (pendingScroll && selectedHex){                 // bring a map-picked aircraft into view
@@ -401,7 +395,8 @@ function select(hex){
   if (a && e){                                       // highlight the picked aircraft immediately
     e.marker.setIcon(makePlaneIcon(classifyType(a.t), planeColor(a), a.track||0, 32, true));
   }
-  renderInfo(a); showPhoto(a); loadSelTrail(hex);
+  renderInfo(a); showPhoto(a);
+  if (showTrails) loadSelTrail(hex); else { selTrailReq++; selLayer.clearLayers(); }
   $('card').classList.add('on');
   pendingScroll = true; renderList([...lastData.values()]);   // highlight + scroll the list row now
 }
@@ -495,12 +490,14 @@ function applyLabels(){
   for (const [hex, e] of markers){ const a = lastData.get(hex) || { hex };
     e.marker.unbindTooltip(); e.marker.bindTooltip(tipText(a), tipOpts()); }
 }
-function clearTrails(){ for (const pl of trailLayers.values()) map.removeLayer(pl); trailLayers.clear(); trails.clear(); }
 function fitAll(){ const pts = []; for (const e of markers.values()){ const ll = e.marker.getLatLng(); pts.push([ll.lat, ll.lng]); }
   if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.15)); }
 
 $('t-labels').onclick   = e => { showLabels = !showLabels; e.currentTarget.classList.toggle('on', showLabels); applyLabels(); };
-$('t-trails').onclick    = e => { showTrails = !showTrails; e.currentTarget.classList.toggle('on', showTrails); if (!showTrails) clearTrails(); poll(); };
+// Trails: show/hide the SELECTED aircraft's trail. With it off, picking a plane shows no trail.
+$('t-trails').onclick    = e => { showTrails = !showTrails; e.currentTarget.classList.toggle('on', showTrails);
+  if (showTrails && selectedHex) loadSelTrail(selectedHex);
+  else { selTrailReq++; selLayer.clearLayers(); } };
 $('t-ground').onclick    = e => { showGround = !showGround; e.currentTarget.classList.toggle('on', showGround); poll(); };
 $('t-recenter').onclick  = () => fitAll();
 
@@ -519,17 +516,23 @@ function buildLegend(){
 buildLegend();
 
 // ---- settings gear: unit preferences, persisted -------------------------------------------
+const COLS = [['t','Type'],['alt','Alt'],['gs','Spd'],['squawk','Sqk'],['dist','Dist']];
 function buildSettings(){
   const groups = [
     ['speed', 'Speed',    { kt:'kt', kmh:'km/h', mph:'mph' }],
     ['alt',   'Altitude', { ft:'ft', m:'m' }],
     ['dist',  'Distance', { nm:'nm', km:'km', mi:'mi' }],
   ];
-  $('list-settings').innerHTML = groups.map(([key,label,opts]) =>
+  let html = groups.map(([key,label,opts]) =>
     `<div class="sg"><div class="sgk">${label}</div><div class="sgv">`
     + Object.entries(opts).map(([v,t]) => `<button class="seg${settings[key]===v?' on':''}" data-g="${key}" data-v="${v}">${t}</button>`).join('')
     + `</div></div>`).join('');
+  html += `<div class="sg"><div class="sgk">Columns</div><div class="sgv wrap">`
+    + COLS.map(([k,t]) => `<button class="seg${settings.cols[k]?' on':''}" data-g="col" data-v="${k}">${t}</button>`).join('')
+    + `</div></div>`;
+  $('list-settings').innerHTML = html;
 }
+function applyCols(){ COLS.forEach(([k]) => $('list-tbl').classList.toggle('hide-'+k, !settings.cols[k])); }
 function applyUnits(){
   buildLegend();
   if (lastData.size) renderList([...lastData.values()]);
@@ -537,10 +540,12 @@ function applyUnits(){
   applyLabels();
 }
 buildSettings();
+applyCols();
 $('list-gear').onclick = e => { e.stopPropagation(); $('list-settings').classList.toggle('on'); };
 $('list-settings').addEventListener('click', e => {
   const b = e.target.closest('.seg'); if (!b) return;
-  settings[b.dataset.g] = b.dataset.v; saveSettings(); buildSettings(); applyUnits();
+  if (b.dataset.g === 'col'){ settings.cols[b.dataset.v] = !settings.cols[b.dataset.v]; saveSettings(); buildSettings(); applyCols(); }
+  else { settings[b.dataset.g] = b.dataset.v; saveSettings(); buildSettings(); applyUnits(); }
 });
 
 // live-list: sort on header click, select on row click, minimize/expand on header click
