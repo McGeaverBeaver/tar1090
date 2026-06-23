@@ -61,10 +61,40 @@
   #info .v small { color: #8a93a2; font-size: 11px; font-weight: 400; }
   #info .up { color: #4dd08a; } #info .dn { color: #ff7a7a; }
   #info .mil { color: #ff6b6b; }
-  #status { position: absolute; left: 10px; bottom: 10px; z-index: 600; background: rgba(20,22,26,.9); border: 1px solid #2c313a;
-            border-radius: 8px; padding: 6px 11px; color: #cdd5e0; font-size: 12px; max-width: 60%; }
+  #status { position: absolute; left: 304px; bottom: 10px; z-index: 600; background: rgba(20,22,26,.9); border: 1px solid #2c313a;
+            border-radius: 8px; padding: 6px 11px; color: #cdd5e0; font-size: 12px; max-width: 50%; }
+
+  /* live aircraft list — transparent glass panel, docked left, minimizable */
+  #list { position: absolute; left: 10px; top: 78px; bottom: 10px; width: 284px; z-index: 610;
+          background: rgba(18,21,26,.62); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+          border: 1px solid #313845; border-radius: 14px; box-shadow: 0 12px 34px rgba(0,0,0,.55);
+          display: flex; flex-direction: column; overflow: hidden; }
+  #list-hd { display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: pointer; user-select: none;
+             background: linear-gradient(135deg, rgba(45,108,223,.22), rgba(45,108,223,0)); }
+  #list-hd .t { font-weight: 700; font-size: 13px; }
+  #list-hd .c { color: #9aa3b2; font-size: 11px; font-variant-numeric: tabular-nums; }
+  #list-hd .m { margin-left: auto; color: #9aa3b2; font-size: 15px; width: 22px; height: 22px; display: flex;
+                align-items: center; justify-content: center; border-radius: 6px; }
+  #list-hd:hover .m { background: #2a2f38; color: #fff; }
+  #list-body { flex: 1; min-height: 0; overflow: auto; }
+  #list.min { bottom: auto; }
+  #list.min #list-body { display: none; }
+  #list-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #list-tbl thead th { position: sticky; top: 0; background: rgba(20,23,28,.94); color: #8a93a2; font-size: 10px;
+                       text-transform: uppercase; letter-spacing: .4px; text-align: left; padding: 6px 10px; cursor: pointer; white-space: nowrap; }
+  #list-tbl thead th.n { text-align: right; }
+  #list-tbl thead th:hover { color: #fff; }
+  #list-tbl thead th .ar { color: #4d9bff; font-size: 9px; }
+  #list-tbl td { padding: 5px 10px; border-bottom: 1px solid rgba(255,255,255,.05); white-space: nowrap; }
+  #list-tbl td.n { text-align: right; font-variant-numeric: tabular-nums; color: #cdd5e0; }
+  #list-tbl td.cs { font-weight: 600; }
+  #list-tbl tr.lr { cursor: pointer; }
+  #list-tbl tr.lr:hover { background: rgba(255,255,255,.06); }
+  #list-tbl tr.lr.sel { background: rgba(45,108,223,.32); }
+  #list-tbl tr.lr.mil td.cs { color: #ff6b6b; }
+
   /* modern altitude colour legend */
-  #legend { position: absolute; top: 78px; left: 10px; z-index: 600; background: rgba(20,23,28,.78);
+  #legend { position: absolute; right: 10px; bottom: 26px; z-index: 600; background: rgba(20,23,28,.78);
             -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border: 1px solid #313845;
             border-radius: 12px; padding: 9px 11px; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
   #legend .lg-title { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: #8a93a2; margin-bottom: 6px; text-align: center; }
@@ -72,7 +102,7 @@
   #legend .lg-bar { width: 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,.12); }
   #legend .lg-ticks { display: flex; flex-direction: column; justify-content: space-between; font-size: 10px;
                       color: #cdd5e0; font-variant-numeric: tabular-nums; }
-  @media (max-width: 760px) { #card { width: 200px; } #bar input { width: 130px; } #legend { display: none; } }
+  @media (max-width: 760px) { #card { width: 200px; } #bar input { width: 130px; } #legend, #list { display: none; } #status { left: 10px; } }
 </style>
 </head>
 <body>
@@ -93,6 +123,21 @@
 </div>
 <div id="main">
   <div id="map"></div>
+  <div id="list" class="open">
+    <div id="list-hd">
+      <span class="t">Live aircraft</span><span class="c" id="list-count">—</span>
+      <span class="m" id="list-min" title="Minimize / expand">─</span>
+    </div>
+    <div id="list-body">
+      <table id="list-tbl">
+        <thead><tr>
+          <th data-k="flight">Flight</th><th data-k="t">Type</th>
+          <th data-k="alt" class="n">Alt</th><th data-k="gs" class="n">Spd</th>
+        </tr></thead>
+        <tbody id="list-rows"></tbody>
+      </table>
+    </div>
+  </div>
   <div id="legend">
     <div class="lg-title">Altitude</div>
     <div class="lg-body">
@@ -193,6 +238,7 @@ const selLayer = L.layerGroup().addTo(map);   // selected aircraft's loaded (his
 let selTrailReq = 0;
 let selectedHex = null, lastData = new Map(), fitted = false, filter = '';
 let showLabels = false, showTrails = false, showGround = true;
+let listSort = { key: 'alt', dir: -1 };   // live-list sort (default: highest altitude first)
 
 function planeColor(a){ return (a.military || isMil(a.squawk)) ? '#ff4d4d' : altColor(a.alt); }
 function tipOpts(){ return { permanent: showLabels, direction: showLabels ? 'right' : 'top',
@@ -264,7 +310,33 @@ function render(j){
   $('status').style.display = acs.length ? 'none' : 'block';
   if (!acs.length) $('status').textContent = 'No aircraft with a position right now.';
 
+  renderList(acs);
   if (selectedHex) renderInfo(lastData.get(selectedHex));   // keep the bubble live
+}
+
+// ---- live aircraft list (tar1090-style, modern glass, sortable + minimizable) -------------
+function renderList(acs){
+  let rows = acs.filter(a => a.lat!=null && (showGround || a.alt!=='ground'));
+  if (filter) rows = rows.filter(a => `${a.flight||''} ${a.hex} ${a.r||''} ${a.t||''}`.toLowerCase().includes(filter));
+  const k = listSort.key, dir = listSort.dir;
+  const val = a => k==='alt' ? (a.alt==='ground' ? -1 : (a.alt ?? -2))
+                 : k==='gs'  ? (a.gs ?? -1)
+                 : (a[k] || '').toString().toLowerCase();
+  rows.sort((x,y)=>{ const vx=val(x), vy=val(y); return vx<vy ? -dir : vx>vy ? dir : 0; });
+  const body = $('list-body'), keep = body.scrollTop;
+  $('list-rows').innerHTML = rows.map(a => {
+    const alt = a.alt==='ground' ? 'grnd' : (a.alt!=null ? a.alt.toLocaleString() : '—');
+    return `<tr class="lr${a.hex===selectedHex?' sel':''}${a.military?' mil':''}" data-hex="${a.hex}">`
+      + `<td class="cs">${a.flight || a.r || a.hex}</td><td>${a.t || ''}</td>`
+      + `<td class="n">${alt}</td><td class="n">${a.gs!=null ? Math.round(a.gs) : '—'}</td></tr>`;
+  }).join('');
+  body.scrollTop = keep;
+  $('list-count').textContent = `· ${rows.length}`;
+  // reflect the active sort column in the header
+  document.querySelectorAll('#list-tbl thead th').forEach(th => {
+    const ar = th.dataset.k===listSort.key ? `<span class="ar">${dir<0?'▼':'▲'}</span>` : '';
+    th.innerHTML = th.textContent.replace(/[▼▲]/g,'').trim() + ' ' + ar;
+  });
 }
 
 function select(hex){
@@ -382,6 +454,25 @@ $('t-recenter').onclick  = () => fitAll();
   for (let i=0;i<=steps;i++){ const a = max*i/steps; stops.push(`${altColor(a)} ${(i/steps*100).toFixed(1)}%`); }
   $('lgbar').style.background = `linear-gradient(to top, ${stops.join(',')})`;
 })();
+
+// live-list: sort on header click, select on row click, minimize/expand on header click
+document.querySelectorAll('#list-tbl thead th').forEach(th => th.addEventListener('click', () => {
+  const k = th.dataset.k;
+  if (listSort.key === k) listSort.dir *= -1;
+  else listSort = { key: k, dir: (k==='alt' || k==='gs') ? -1 : 1 };
+  renderList([...lastData.values()]);
+}));
+$('list-rows').addEventListener('click', e => {
+  const tr = e.target.closest('tr'); if (!tr) return;
+  const a = lastData.get(tr.dataset.hex);
+  select(tr.dataset.hex);
+  if (a) map.panTo([a.lat, a.lon], { animate: true });
+});
+$('list-hd').onclick = () => {
+  const min = $('list').classList.toggle('min');
+  $('list-min').textContent = min ? '▢' : '─';
+  $('list-min').title = min ? 'Expand' : 'Minimize';
+};
 
 map.on('click', deselect);
 poll();
