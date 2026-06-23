@@ -38,20 +38,35 @@
   #pager button:disabled { opacity: .45; cursor: default; }
   #pageinfo { color: #cdd5e0; font-size: 12px; font-variant-numeric: tabular-nums; }
   #main { flex: 1; min-height: 0; display: flex; }
-  #left { width: 46%; min-width: 320px; overflow: auto; border-right: 1px solid #2c313a; }
-  #right { flex: 1; position: relative; }
+  #left { flex: 0 0 46%; width: 46%; min-width: 260px; overflow: auto; }
+  #dragbar { flex: 0 0 6px; background: #2c313a; cursor: col-resize; }
+  #dragbar:hover, #dragbar.drag { background: #3b78e8; }
+  #right { flex: 1 1 0; min-width: 200px; position: relative; }
   #map { position: absolute; inset: 0; background: #0b0d10; }
   /* Slight dark tint on the basemap only (mirrors the dimmed main tar1090 map) so the
      altitude-coloured trails stand out. Trails/markers live in the SVG overlay pane above
      the tiles, so only the basemap is dimmed -- the trails stay fully vivid. */
   .leaflet-tile-pane { filter: brightness(0.6) contrast(1.05) saturate(0.9); }
-  table { width: 100%; border-collapse: collapse; }
+  table { width: auto; min-width: 100%; border-collapse: collapse; table-layout: fixed; }
   th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid #23262d; white-space: nowrap; }
-  th { position: sticky; top: 0; background: #1d2026; cursor: pointer; font-size: 11px; color: #9aa3b2; }
+  td { overflow: hidden; text-overflow: ellipsis; }
+  th { position: sticky; top: 0; background: #1d2026; font-size: 11px; color: #9aa3b2; user-select: none; }
+  th .thlbl { cursor: pointer; display: inline-block; overflow: hidden; text-overflow: ellipsis; max-width: calc(100% - 10px); vertical-align: bottom; }
+  th .grip { position: absolute; top: 0; right: 0; width: 8px; height: 100%; cursor: col-resize; }
+  th .grip:hover { background: #3b78e8; }
   tbody tr { cursor: pointer; }
   tbody tr:hover { background: #20242b; }
   tbody tr.sel { background: #243a5e; }
-  td.swatch { width: 4px; padding: 0; }
+  th.swatch, td.swatch { width: 6px; padding: 0; }
+  /* columns show/hide menu */
+  #colmenu-wrap { position: relative; margin-left: auto; }
+  #colbtn { background: #2a2f38; color: #e6e6e6; border: 0; border-radius: 4px; padding: 5px 10px; cursor: pointer; font-size: 12px; }
+  #colbtn:hover { background: #353c47; }
+  #colmenu { position: absolute; right: 0; top: 112%; z-index: 1000; background: #1d2026; border: 1px solid #2c313a;
+             border-radius: 6px; padding: 6px; display: none; min-width: 150px; box-shadow: 0 6px 20px rgba(0,0,0,.5); }
+  #colmenu.on { display: block; }
+  #colmenu label { display: flex; align-items: center; gap: 6px; padding: 4px 6px; color: #cdd5e0; font-size: 12px; cursor: pointer; border-radius: 4px; }
+  #colmenu label:hover { background: #262b33; }
   .mil { color: #ff6b6b; font-weight: 600; }
   .live { color: #2ec86b; font-weight: 600; font-size: 11px; white-space: nowrap; }
   #status { padding: 6px 12px; color: #9aa3b2; }
@@ -68,7 +83,8 @@
   #acphoto .cr { font-size: 10px; color: #8a93a2; padding: 2px 4px 0; text-align: right; }
   @media (max-width: 760px) {
     #main { flex-direction: column; }
-    #left { width: 100%; min-width: 0; max-height: 40vh; border-right: 0; border-bottom: 1px solid #2c313a; }
+    #left { width: 100% !important; flex-basis: auto !important; min-width: 0; max-height: 40vh; border-bottom: 1px solid #2c313a; }
+    #dragbar { display: none; }
     #right { min-height: 50vh; }
     #controls button, #presets button { padding: 9px 12px; }
     #ptlabel { min-width: 0; }
@@ -112,19 +128,18 @@
   <button id="prev" disabled>‹ Prev</button>
   <span id="pageinfo"></span>
   <button id="next" disabled>Next ›</button>
+  <div id="colmenu-wrap">
+    <button id="colbtn" title="Show / hide columns">Columns ▾</button>
+    <div id="colmenu"></div>
+  </div>
 </div>
 
 <div id="main">
   <div id="left">
     <div id="status">Pick a time range (or a preset) and search.</div>
-    <table><thead><tr>
-      <th class="swatch"></th>
-      <th data-k="active" title="Active = still being tracked (trail may be incomplete)">Live</th>
-      <th data-k="callsign">Callsign</th><th data-k="registration">Reg</th><th data-k="icao_type">Type</th>
-      <th data-k="operator">Operator</th><th data-k="military">Mil</th>
-      <th data-k="start">Start (UTC)</th><th data-k="duration_s">Dur</th><th data-k="max_alt">Max alt</th>
-    </tr></thead><tbody id="rows"></tbody></table>
+    <table><thead><tr id="headrow"></tr></thead><tbody id="rows"></tbody></table>
   </div>
+  <div id="dragbar" title="Drag to resize the list / map"></div>
   <div id="right">
     <div id="map"></div>
     <div id="acphoto"></div>
@@ -158,6 +173,126 @@ let marker = null, pts = [], anim = null;
 
 let flights = [], byId = new Map(), selected = new Set(), multiMode = false;
 let sortKey = 'start', sortDir = -1, searchMsg = '';
+
+// ---- columns: order, resize, show/hide (all persisted to localStorage) ------
+function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+// Order here IS the on-screen order. Operator is last (it's wide); the flight metrics
+// (Start / Dur / Max alt) sit right after the identity columns.
+const COLUMNS = [
+  { key:'active',       label:'Live',        w:60,  sort:'active',       title:'Active = still being tracked (trail may be incomplete)',
+    html:f=> f.active ? '<span class="live" title="Active – still recording; trail may be incomplete">● LIVE</span>' : '' },
+  { key:'callsign',     label:'Callsign',    w:96,  sort:'callsign',     html:f=> esc(f.callsign) },
+  { key:'registration', label:'Reg',         w:84,  sort:'registration', html:f=> esc(f.registration) },
+  { key:'icao_type',    label:'Type',        w:64,  sort:'icao_type',    html:f=> esc(f.icao_type) },
+  { key:'military',     label:'Mil',         w:50,  sort:'military',     html:f=> f.military ? '<span class="mil">MIL</span>' : '' },
+  { key:'start',        label:'Start (UTC)', w:150, sort:'start',        html:f=> fmtUTC(f.start) },
+  { key:'duration_s',   label:'Dur',         w:74,  sort:'duration_s',   html:f=> fmtDur(f.duration_s) },
+  { key:'max_alt',      label:'Max alt',     w:78,  sort:'max_alt',      html:f=> f.max_alt!=null ? f.max_alt : '' },
+  { key:'operator',     label:'Operator',    w:170, sort:'operator',     html:f=> esc(f.operator) },
+];
+let colW = {}, hiddenCols = new Set();
+try { colW = JSON.parse(localStorage.getItem('histColW') || '{}') || {}; } catch(e){ colW = {}; }
+try { hiddenCols = new Set(JSON.parse(localStorage.getItem('histHiddenCols') || '[]')); } catch(e){ hiddenCols = new Set(); }
+const saveColW   = ()=>{ try{ localStorage.setItem('histColW', JSON.stringify(colW)); }catch(e){} };
+const saveHidden = ()=>{ try{ localStorage.setItem('histHiddenCols', JSON.stringify([...hiddenCols])); }catch(e){} };
+
+function applyColVis(){
+  let el = document.getElementById('colhide');
+  if (!el){ el = document.createElement('style'); el.id = 'colhide'; document.head.appendChild(el); }
+  el.textContent = [...hiddenCols].map(k=>`.c_${k}{display:none}`).join('');
+  document.querySelectorAll('#colmenu input').forEach(cb=> cb.checked = !hiddenCols.has(cb.dataset.key));
+}
+
+function buildHead(){
+  const tr = document.getElementById('headrow');
+  tr.innerHTML = '';
+  const sw = document.createElement('th'); sw.className = 'swatch c_swatch'; tr.appendChild(sw);
+  for (const c of COLUMNS){
+    const th = document.createElement('th');
+    th.className = 'c_' + c.key;
+    th.style.width = (colW[c.key] || c.w) + 'px';
+    if (c.title) th.title = c.title;
+    const lbl = document.createElement('span'); lbl.className = 'thlbl'; lbl.textContent = c.label;
+    lbl.onclick = ()=>{ sortDir = (sortKey === c.sort) ? -sortDir : 1; sortKey = c.sort; render(); };
+    th.appendChild(lbl);
+    const grip = document.createElement('span'); grip.className = 'grip';
+    grip.addEventListener('mousedown', (e)=> startColResize(e, c.key, th));
+    th.appendChild(grip);
+    tr.appendChild(th);
+  }
+}
+
+let colResize = null;
+function startColResize(e, key, th){
+  e.preventDefault(); e.stopPropagation();
+  colResize = { key, th, x: e.clientX, w: th.getBoundingClientRect().width };
+  document.body.style.cursor = 'col-resize';
+  window.addEventListener('mousemove', onColResize);
+  window.addEventListener('mouseup', endColResize);
+}
+function onColResize(e){
+  if (!colResize) return;
+  const w = Math.max(28, Math.round(colResize.w + (e.clientX - colResize.x)));
+  colResize.th.style.width = w + 'px';
+  colW[colResize.key] = w;
+}
+function endColResize(){
+  if (!colResize) return;
+  window.removeEventListener('mousemove', onColResize);
+  window.removeEventListener('mouseup', endColResize);
+  document.body.style.cursor = '';
+  saveColW();
+  colResize = null;
+}
+
+function buildColMenu(){
+  const m = document.getElementById('colmenu'), btn = document.getElementById('colbtn');
+  m.innerHTML = '';
+  for (const c of COLUMNS){
+    const lab = document.createElement('label');
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.dataset.key = c.key; cb.checked = !hiddenCols.has(c.key);
+    cb.onchange = ()=>{ cb.checked ? hiddenCols.delete(c.key) : hiddenCols.add(c.key); saveHidden(); applyColVis(); };
+    lab.appendChild(cb); lab.appendChild(document.createTextNode(' ' + c.label));
+    m.appendChild(lab);
+  }
+  btn.onclick = (e)=>{ e.stopPropagation(); m.classList.toggle('on'); };
+  document.addEventListener('click', (e)=>{ if (!m.contains(e.target) && e.target !== btn) m.classList.remove('on'); });
+}
+
+// ---- splitter: drag to resize the list vs. the map -------------------------
+let split = null;
+function initSplit(){
+  const L = document.getElementById('left');
+  const saved = localStorage.getItem('histLeftW');
+  if (saved){ L.style.flex = '0 0 ' + saved; L.style.width = saved; }
+  document.getElementById('dragbar').addEventListener('mousedown', (e)=>{
+    e.preventDefault();
+    split = { x: e.clientX, w: L.getBoundingClientRect().width };
+    document.getElementById('dragbar').classList.add('drag');
+    document.body.style.cursor = 'col-resize';
+    window.addEventListener('mousemove', onSplit);
+    window.addEventListener('mouseup', endSplit);
+  });
+}
+function onSplit(e){
+  if (!split) return;
+  const main = document.getElementById('main').getBoundingClientRect();
+  const w = Math.min(main.width - 210, Math.max(240, split.w + (e.clientX - split.x)));
+  const L = document.getElementById('left');
+  L.style.flex = '0 0 ' + w + 'px'; L.style.width = w + 'px';
+  map.invalidateSize();
+}
+function endSplit(){
+  if (!split) return;
+  window.removeEventListener('mousemove', onSplit);
+  window.removeEventListener('mouseup', endSplit);
+  document.getElementById('dragbar').classList.remove('drag');
+  document.body.style.cursor = '';
+  const L = document.getElementById('left');
+  localStorage.setItem('histLeftW', L.style.width || (L.getBoundingClientRect().width + 'px'));
+  map.invalidateSize();
+  split = null;
+}
 let pageOffset = 0, pageSize = 500, total = 0;
 const MAX_DRAW = 300;   // mirrors the API's HISTORY_MAX_TRAILS
 
@@ -273,19 +408,14 @@ function render(){
     const tr = document.createElement('tr');
     tr.dataset.id = f.id;
     const sw = f.military ? '#ff4d4d' : hue(f.icao_hex || String(f.id));
-    tr.innerHTML = `<td class="swatch" style="background:${sw}"></td>`
-      + `<td>${f.active ? '<span class="live" title="Active – still being tracked; the trail is still recording and may be incomplete">● LIVE</span>' : ''}</td>`
-      + `<td>${f.callsign||''}</td><td>${f.registration||''}</td><td>${f.icao_type||''}</td>`
-      + `<td>${f.operator||''}</td><td class="${f.military?'mil':''}">${f.military?'MIL':''}</td>`
-      + `<td>${fmtUTC(f.start)}</td><td>${fmtDur(f.duration_s)}</td><td>${f.max_alt!=null?f.max_alt:''}</td>`;
+    let html = `<td class="swatch c_swatch" style="background:${sw}"></td>`;
+    for (const c of COLUMNS) html += `<td class="c_${c.key}">${c.html(f)}</td>`;
+    tr.innerHTML = html;
     if (selected.has(f.id)) tr.classList.add('sel');
     tr.onclick = (ev)=> onRow(f, ev);
     tb.appendChild(tr);
   }
 }
-
-document.querySelectorAll('th[data-k]').forEach(th=>th.onclick=()=>{
-  const k=th.dataset.k; sortDir = (sortKey===k)? -sortDir : 1; sortKey=k; render(); });
 
 function markRows(){ document.querySelectorAll('#rows tr').forEach(tr=>
   tr.classList.toggle('sel', selected.has(+tr.dataset.id))); }
@@ -452,6 +582,11 @@ $('bell').onclick = async ()=>{
 
 document.querySelectorAll('#controls input').forEach(el=>el.addEventListener('keydown',e=>{ if(e.key==='Enter') doSearch(); }));
 
+// build the table header / column menu, apply saved widths+visibility+split, then search
+buildHead();
+buildColMenu();
+applyColVis();
+initSplit();
 doSearch();
 </script>
 </body>
