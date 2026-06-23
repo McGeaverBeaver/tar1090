@@ -60,9 +60,11 @@
   tbody tr.sel { background: #243a5e; }
   th.swatch, td.swatch { width: 6px; padding: 0; }
   /* columns show/hide menu */
-  #colmenu-wrap { position: relative; margin-left: auto; }
-  #colbtn { background: #2a2f38; color: #e6e6e6; border: 0; border-radius: 4px; padding: 5px 10px; cursor: pointer; font-size: 12px; }
-  #colbtn:hover { background: #353c47; }
+  #colmenu-wrap { position: relative; }
+  #colbtn { background: #2a2f38; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 4px; padding: 5px 10px; cursor: pointer; font-size: 12px; font-weight: 600; }
+  #colbtn:hover { background: #2d6cdf; border-color: #2d6cdf; }
+  #viewbtn { margin-left: auto; min-width: 132px; background: #2a2f38; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 4px; padding: 5px 10px; cursor: pointer; font-size: 12px; font-weight: 600; }
+  #viewbtn:hover { background: #353c47; }
   #colmenu { position: absolute; right: 0; top: 112%; z-index: 1000; background: #1d2026; border: 1px solid #2c313a;
              border-radius: 6px; padding: 6px; display: none; min-width: 150px; box-shadow: 0 6px 20px rgba(0,0,0,.5); }
   #colmenu.on { display: block; }
@@ -129,6 +131,7 @@
   <button id="prev" disabled>‹ Prev</button>
   <span id="pageinfo"></span>
   <button id="next" disabled>Next ›</button>
+  <button id="viewbtn" title="Switch the map between altitude-coloured trails and directional aircraft icons">〰 Altitude trails</button>
   <div id="colmenu-wrap">
     <button id="colbtn" title="Show / hide columns">Columns ▾</button>
     <div id="colmenu"></div>
@@ -171,6 +174,7 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
   { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(map);
 let trailLayer = L.layerGroup().addTo(map);
 let marker = null, pts = [], anim = null, markerCat = 'jet';
+let iconMode = false;   // false = altitude trails, true = directional aircraft icons (no trails)
 
 let flights = [], byId = new Map(), selected = new Set(), multiMode = false;
 let sortKey = 'start', sortDir = -1, searchMsg = '';
@@ -507,7 +511,7 @@ async function drawSingle(f){
   catch(e){ setStatus('trail request failed: ' + e); return; }
   pts = j.points || [];
   if (!pts.length){ setStatus(`${f.callsign||f.icao_hex}: no trail on disk (aged out, or before globe-history was collected)`); return; }
-  for (let i=1;i<pts.length;i++){
+  if (!iconMode) for (let i=1;i<pts.length;i++){
     const seg = L.polyline([[pts[i-1][1],pts[i-1][2]],[pts[i][1],pts[i][2]]],
       { color: altColor(pts[i][3]), weight: 3, opacity: .9 });
     seg.on('click', ()=> toggleId(f.id));
@@ -537,13 +541,19 @@ async function drawMany(ids, isAll){
     const tp = fl[id]; if (!tp || tp.length < 2) continue;
     const f = byId.get(id);
     const col = (f && f.military) ? '#ff4d4d' : hue((f && f.icao_hex) || String(id));
-    const line = L.polyline(tp.map(p=>[p[1],p[2]]), { color: col, weight: (f && f.military)?3:2, opacity: .72 });
-    line.on('click', ()=> { selected.clear(); selected.add(id); markRows(); renderMap(); });
-    line.addTo(trailLayer);
-    // a small directional plane icon at the latest position of each trail
-    const last = tp[tp.length-1], prev = tp[tp.length-2] || last;
-    L.marker([last[1], last[2]], { icon: makePlaneIcon(classifyType(f), col,
-      bearingDeg([prev[1],prev[2]],[last[1],last[2]]), 20), interactive:false, keyboard:false }).addTo(trailLayer);
+    const focus = ()=> { selected.clear(); selected.add(id); markRows(); renderMap(); };
+    if (iconMode){
+      // directional aircraft icon at the START of the trail, pointed along travel; no line
+      const a = tp[0], b = tp[1] || a;
+      const m = L.marker([a[1], a[2]], { icon: makePlaneIcon(classifyType(f), col,
+        bearingDeg([a[1],a[2]],[b[1],b[2]]), 22), interactive:true, keyboard:false });
+      m.on('click', focus);
+      m.addTo(trailLayer);
+    } else {
+      const line = L.polyline(tp.map(p=>[p[1],p[2]]), { color: col, weight: (f && f.military)?3:2, opacity: .72 });
+      line.on('click', focus);
+      line.addTo(trailLayer);
+    }
     for (const p of tp) bounds.push([p[1],p[2]]);
     count++;
   }
@@ -643,6 +653,13 @@ $('bell').onclick = async ()=>{
 };
 
 document.querySelectorAll('#controls input').forEach(el=>el.addEventListener('keydown',e=>{ if(e.key==='Enter') doSearch(); }));
+
+// Trail / no-trail toggle: trails (altitude-coloured lines) vs directional aircraft icons.
+$('viewbtn').onclick = () => {
+  iconMode = !iconMode;
+  $('viewbtn').textContent = iconMode ? '✈ Aircraft icons' : '〰 Altitude trails';
+  renderMap();
+};
 
 // build the table header / column menu, apply saved widths+visibility+split, then search
 buildHead();
