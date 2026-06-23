@@ -502,7 +502,7 @@ async function drawSingle(f){
   // multi-flight overview), plus the replay marker.
   for (let i=1;i<pts.length;i++){
     const seg = L.polyline([[pts[i-1][1],pts[i-1][2]],[pts[i][1],pts[i][2]]],
-      { color: altColor(pts[i][3]), weight: 3, opacity: .9 });
+      { color: altColor(pts[i][3]), weight: 3, opacity: .9, bubblingMouseEvents: false });
     seg.on('click', ()=> toggleId(f.id));
     seg.addTo(trailLayer);
   }
@@ -543,7 +543,7 @@ async function drawMany(ids, isAll){
       m.on('click', focus);
       m.addTo(trailLayer);
     } else {
-      const line = L.polyline(tp.map(p=>[p[1],p[2]]), { color: col, weight: (f && f.military)?3:2, opacity: .72 });
+      const line = L.polyline(tp.map(p=>[p[1],p[2]]), { color: col, weight: (f && f.military)?3:2, opacity: .72, bubblingMouseEvents: false });
       line.on('click', focus);
       line.addTo(trailLayer);
     }
@@ -665,6 +665,8 @@ initSplit();
   for (let i=0;i<=steps;i++){ const a = max*i/steps; stops.push(`${altColor(a)} ${(i/steps*100).toFixed(1)}%`); }
   $('lgbar').style.background = `linear-gradient(to top, ${stops.join(',')})`;
 })();
+// Clicking empty map (not a trail/marker) deselects, returning to the overview.
+map.on('click', ()=>{ if (selected.size){ selected.clear(); markRows(); renderMap(); } });
 doSearch();
 </script>
 <script src="auth.js"></script>
