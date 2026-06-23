@@ -84,6 +84,15 @@
   #acphoto.on { display: block; }
   #acphoto img { display: block; max-width: 220px; max-height: 150px; border-radius: 4px; }
   #acphoto .cr { font-size: 10px; color: #8a93a2; padding: 2px 4px 0; text-align: right; }
+  /* modern altitude colour legend (matches the Live map) */
+  #legend { position: absolute; top: 78px; left: 10px; z-index: 600; background: rgba(20,23,28,.78);
+            -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border: 1px solid #313845;
+            border-radius: 12px; padding: 9px 11px; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
+  #legend .lg-title { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: #8a93a2; margin-bottom: 6px; text-align: center; }
+  #legend .lg-body { display: flex; gap: 7px; height: 124px; }
+  #legend .lg-bar { width: 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,.12); }
+  #legend .lg-ticks { display: flex; flex-direction: column; justify-content: space-between; font-size: 10px;
+                      color: #cdd5e0; font-variant-numeric: tabular-nums; }
   @media (max-width: 760px) {
     #main { flex-direction: column; }
     #left { width: 100% !important; flex-basis: auto !important; min-width: 0; max-height: 40vh; border-bottom: 1px solid #2c313a; }
@@ -91,6 +100,7 @@
     #right { min-height: 50vh; }
     #controls button, #presets button { padding: 9px 12px; }
     #ptlabel { min-width: 0; }
+    #legend { display: none; }
   }
 </style>
 </head>
@@ -146,6 +156,13 @@
   <div id="dragbar" title="Drag to resize the list / map"></div>
   <div id="right">
     <div id="map"></div>
+    <div id="legend">
+      <div class="lg-title">Altitude</div>
+      <div class="lg-body">
+        <div class="lg-bar" id="lgbar"></div>
+        <div class="lg-ticks"><span>40k+</span><span>30k</span><span>20k</span><span>10k</span><span>0 ft</span></div>
+      </div>
+    </div>
     <div id="acphoto"></div>
     <div id="replay">
       <button id="play">▶</button>
@@ -666,6 +683,12 @@ buildHead();
 buildColMenu();
 applyColVis();
 initSplit();
+// altitude legend bar, built straight from altColor() so it always matches the trails
+(function buildLegend(){
+  const max = 45000, steps = 30, stops = [];
+  for (let i=0;i<=steps;i++){ const a = max*i/steps; stops.push(`${altColor(a)} ${(i/steps*100).toFixed(1)}%`); }
+  $('lgbar').style.background = `linear-gradient(to top, ${stops.join(',')})`;
+})();
 doSearch();
 </script>
 </body>
