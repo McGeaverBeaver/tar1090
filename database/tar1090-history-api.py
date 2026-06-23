@@ -97,6 +97,9 @@ OIDC_COOKIE_SECURE  = os.environ.get("OIDC_COOKIE_SECURE", "true").lower() == "t
 OIDC_SESSION_SECRET = (os.environ.get("OIDC_SESSION_SECRET")
                        or OIDC_CLIENT_SECRET or secrets.token_hex(32)).encode()
 OIDC_LOGOUT_REDIRECT = os.environ.get("OIDC_LOGOUT_REDIRECT", "")
+# Some reverse proxies / WAFs (Cloudflare, nginx) 403 the default "Python-urllib" agent, so we
+# send a normal one for the back-channel calls (discovery / token / userinfo). Override if needed.
+OIDC_USER_AGENT = os.environ.get("OIDC_USER_AGENT", "Mozilla/5.0 (compatible; tar1090-history-api)")
 
 SESSION_COOKIE = "tar1090_session"
 TX_COOKIE      = "tar1090_oidc_tx"
@@ -169,21 +172,28 @@ def oidc_meta():
     global _oidc_meta
     if _oidc_meta is None:
         url = OIDC_ISSUER + "/.well-known/openid-configuration"
-        with urllib.request.urlopen(url, timeout=10) as r:
-            _oidc_meta = json.loads(r.read().decode())
+        req = urllib.request.Request(url, headers={"User-Agent": OIDC_USER_AGENT,
+                                                   "Accept": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                _oidc_meta = json.loads(r.read().decode())
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"GET {url} returned {e.code} {e.reason}") from e
     return _oidc_meta
 
 
 def _oidc_post_form(url, data):
     body = urlencode(data).encode()
-    req = urllib.request.Request(url, data=body, headers={"Accept": "application/json"})
+    req = urllib.request.Request(url, data=body, headers={"Accept": "application/json",
+                                                          "User-Agent": OIDC_USER_AGENT})
     with urllib.request.urlopen(req, timeout=10) as r:
         return json.loads(r.read().decode())
 
 
 def _oidc_get_json(url, bearer):
     req = urllib.request.Request(url, headers={"Authorization": "Bearer " + bearer,
-                                               "Accept": "application/json"})
+                                               "Accept": "application/json",
+                                               "User-Agent": OIDC_USER_AGENT})
     with urllib.request.urlopen(req, timeout=10) as r:
         return json.loads(r.read().decode())
 
