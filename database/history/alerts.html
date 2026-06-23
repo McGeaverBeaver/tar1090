@@ -33,9 +33,20 @@
   .rule .rh .sp { flex: 1; }
   .rule .rs { color: #8a93a2; font-size: 11.5px; margin-top: 4px; }
   h3 { margin: 16px 0 6px; font-size: 12px; color: #9aa3b2; text-transform: uppercase; letter-spacing: .04em; }
-  .logitem { border-bottom: 1px solid #23262d; padding: 5px 2px; font-size: 12.5px; }
+  .logitem { border-bottom: 1px solid #23262d; padding: 5px 2px; font-size: 12.5px; cursor: pointer; border-radius: 4px; }
+  .logitem:hover { background: #1f232b; }
+  .logitem.sel { background: #243049; }
   .logitem .lt { color: #7e8794; font-variant-numeric: tabular-nums; }
   .mil { color: #ff6b6b; font-weight: 600; }
+  /* clicked-alert view: the flight's trail + a plane icon at the trigger point */
+  #alertview { flex: 1; min-height: 0; min-width: 0; display: none; flex-direction: column; }
+  #alertview.on { display: flex; }
+  #av_head { padding: 9px 14px; border-bottom: 1px solid #2c313a; background: #1a1d23; }
+  #av_head .x { float: right; }
+  #av_head .t { font-size: 14px; font-weight: 600; }
+  #av_head .s { color: #8a93a2; font-size: 12px; margin-top: 3px; }
+  #amap { flex: 1; min-height: 0; }
+  .planeicon { background: none; border: 0; }
   fieldset { border: 1px solid #2c313a; border-radius: 8px; margin: 0 0 12px; padding: 10px 12px; }
   legend { color: #9aa3b2; font-size: 12px; padding: 0 6px; }
   .f { display: flex; align-items: center; gap: 8px; margin: 6px 0; flex-wrap: wrap; }
@@ -109,6 +120,15 @@
       <button id="del" class="danger" style="display:none">Delete</button>
     </div>
   </div>
+
+  <div id="alertview">
+    <div id="av_head">
+      <button id="av_close" class="ghost mini x">Close</button>
+      <div class="t" id="av_title">Alert</div>
+      <div class="s" id="av_sub"></div>
+    </div>
+    <div id="amap"></div>
+  </div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -181,6 +201,8 @@ function openEditor(r){
   $('w_start').value = (w && w.start) || '08:00'; $('w_end').value = (w && w.end) || '22:00';
   $('del').style.display = r ? '' : 'none';
   $('ederr').textContent = '';
+  $('alertview').classList.remove('on');
+  document.querySelectorAll('#log .logitem.sel').forEach(el => el.classList.remove('sel'));
   $('editor').classList.add('on');
   initMap(); loadZoneToMap();
 }
@@ -254,6 +276,70 @@ function loadZoneToMap(){
 function zoneLabel(){ $('zonelabel').textContent = zone ? (zone.type === 'circle' ? ('circle, ' + Math.round(zone.radius_m/1000) + ' km radius') : ('polygon, ' + zone.points.length + ' points')) : 'anywhere in range (no zone)'; }
 $('zoneclear').onclick = () => { if (drawn) drawn.clearLayers(); zone = null; zoneLabel(); };
 
+// ---- clicked-alert view: draw the flight's trail + a plane icon at the trigger point ----
+let amap, atrail, amapInited = false;
+function initAmap(){
+  if (amapInited){ setTimeout(() => amap.invalidateSize(), 60); return; }
+  amap = L.map('amap', { worldCopyJump:true }).setView([44.4, -79.4], 7);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:18, attribution:'© OpenStreetMap' }).addTo(amap);
+  atrail = L.layerGroup().addTo(amap);
+  amapInited = true;
+  setTimeout(() => amap.invalidateSize(), 60);
+}
+function bearingDeg(a, b){ // a,b = [lat,lon]
+  const r = Math.PI/180, dLon = (b[1]-a[1])*r, la1 = a[0]*r, la2 = b[0]*r;
+  const y = Math.sin(dLon)*Math.cos(la2);
+  const x = Math.cos(la1)*Math.sin(la2) - Math.sin(la1)*Math.cos(la2)*Math.cos(dLon);
+  return (Math.atan2(y, x)*180/Math.PI + 360) % 360;
+}
+// Bearing of travel at the trail point nearest the trigger position, so the icon points
+// the way the aircraft was heading when the alert fired.
+function bearingAtTrail(pts, lat, lon){
+  if (!pts || pts.length < 2) return 0;
+  let bi = 0, bd = Infinity;
+  for (let i = 0; i < pts.length; i++){ const dy = pts[i][1]-lat, dx = pts[i][2]-lon, d = dy*dy+dx*dx; if (d < bd){ bd = d; bi = i; } }
+  const j = Math.max(1, bi), k = j - 1;
+  return bearingDeg([pts[k][1], pts[k][2]], [pts[j][1], pts[j][2]]);
+}
+function planeIcon(color, deg){
+  const html = `<div style="transform:rotate(${(deg||0).toFixed(0)}deg);filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.7))">`
+    + `<svg viewBox="0 0 24 24" width="30" height="30"><path d="M12 2 L13.4 9 L22 13.6 L22 15.4 L13.4 12.6 L13.4 18.6 L16 20.6 L16 22 L12 20.8 L8 22 L8 20.6 L10.6 18.6 L10.6 12.6 L2 15.4 L2 13.6 L10.6 9 Z" `
+    + `fill="${color}" stroke="#0b0d10" stroke-width="1"/></svg></div>`;
+  return L.divIcon({ className:'planeicon', html, iconSize:[30,30], iconAnchor:[15,15] });
+}
+async function openAlert(x){
+  closeEditor();
+  $('alertview').classList.add('on');
+  document.querySelectorAll('#log .logitem').forEach(el => el.classList.toggle('sel', el.dataset.id === String(x.id)));
+  $('av_title').textContent = x.rule_name || 'Alert';
+  $('av_sub').textContent = [ (x.callsign || x.icao_hex || '').trim(), x.icao_type, fmtTime(x.fired_at),
+    (x.alt != null ? x.alt + ' ft' : null), (x.squawk ? 'squawk ' + x.squawk : null) ].filter(Boolean).join(' · ');
+  initAmap();
+  atrail.clearLayers();
+  // Pull the aircraft's trail around the time the alert fired (the log keeps only the trigger
+  // point, so we ask the trace reader for a window either side of fired_at).
+  let pts = [];
+  if (x.icao_hex){
+    const win = 6 * 3600 * 1000;
+    try { pts = ((await (await fetch('api/trace?' + new URLSearchParams({ hex:x.icao_hex, start:x.fired_at-win, end:x.fired_at+win }))).json()).points) || []; }
+    catch(e){ pts = []; }
+  }
+  const bounds = [];
+  if (pts.length > 1){
+    L.polyline(pts.map(p=>[p[1],p[2]]), { color:'#38bdf8', weight:3, opacity:.85 }).addTo(atrail);
+    for (const p of pts) bounds.push([p[1],p[2]]);
+  }
+  if (x.lat != null && x.lon != null){
+    L.marker([x.lat, x.lon], { icon: planeIcon(x.military ? '#ff6b6b' : '#fbbf24', bearingAtTrail(pts, x.lat, x.lon)), zIndexOffset:1000 })
+      .addTo(atrail)
+      .bindPopup(`<b>${esc(x.rule_name||'Alert')}</b><br>${esc((x.callsign||x.icao_hex||'').trim())} ${esc(x.icao_type||'')}<br>${esc(fmtTime(x.fired_at))}${x.alt!=null?' · '+x.alt+' ft':''}`);
+    bounds.push([x.lat, x.lon]);
+  }
+  if (bounds.length) setTimeout(() => amap.fitBounds(L.latLngBounds(bounds).pad(0.25), { maxZoom: 12 }), 80);
+  else $('av_sub').textContent += ' · no position or trail on disk';
+}
+$('av_close').onclick = () => { $('alertview').classList.remove('on'); document.querySelectorAll('#log .logitem.sel').forEach(el => el.classList.remove('sel')); };
+
 // ---- live alert log + notifications ----
 let lastId = 0, firstLoad = true, muted = false;
 let notifyOK = (typeof Notification !== 'undefined' && Notification.permission === 'granted');
@@ -268,8 +354,10 @@ function renderLogItems(items, prepend){
   const el = $('log');
   if (el.firstChild && el.firstChild.classList && el.firstChild.classList.contains('muted')) el.innerHTML = '';
   for (const x of items){
-    const div = document.createElement('div'); div.className = 'logitem';
+    const div = document.createElement('div'); div.className = 'logitem'; div.dataset.id = x.id;
+    div.title = "Show this flight's trail and where the alert fired";
     div.innerHTML = `<span class="lt">${esc(fmtTime(x.fired_at))}</span> · <b>${esc(x.rule_name||'')}</b> — ${esc(x.callsign||x.icao_hex||'')} ${esc(x.icao_type||'')} ${x.military?'<span class="mil">MIL</span>':''}`;
+    div.onclick = () => openAlert(x);
     if (prepend) el.insertBefore(div, el.firstChild); else el.appendChild(div);
   }
   while (el.children.length > 200) el.removeChild(el.lastChild);
