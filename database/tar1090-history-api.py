@@ -166,6 +166,11 @@ def _is_admin_path(path):
 
 
 _oidc_meta = None
+# Authorization codes are single-use. Reverse proxies (or a HEAD probe) can deliver the callback
+# twice; we serialize callbacks and remember a code's result briefly so a duplicate delivery
+# re-issues the same session instead of failing the second exchange with invalid_grant.
+_code_lock = threading.Lock()
+_code_done = {}      # code -> (expires_at, session_cookie_value, next_url)
 
 
 def oidc_meta():
@@ -1084,48 +1089,60 @@ class Handler(BaseHTTPRequestHandler):
         if not code or not txd or txd.get("s") != q.get("state", [None])[0]:
             self._send(400, {"error": "invalid login state -- please retry from /oidc/login"})
             return
-        try:
-            meta = oidc_meta()
-            tok = _oidc_post_form(meta["token_endpoint"], {
-                "grant_type": "authorization_code", "code": code,
-                "redirect_uri": self._redirect_uri(),
-                "client_id": OIDC_CLIENT_ID, "client_secret": OIDC_CLIENT_SECRET,
-                "code_verifier": txd["v"]})
-        except urllib.error.HTTPError as e:
-            self._send(502, {"error": "token exchange failed", "detail": e.read().decode()[:300]})
-            return
-        except Exception as e:                       # noqa: BLE001
-            self._send(502, {"error": "token exchange failed: " + str(e)})
-            return
-        claims = _jwt_payload(tok.get("id_token", "")) or {}
-        aud = claims.get("aud")
-        aud = aud if isinstance(aud, list) else [aud]
-        if (claims.get("nonce") != txd["n"]
-                or claims.get("iss", "").rstrip("/") != OIDC_ISSUER
-                or OIDC_CLIENT_ID not in aud
-                or claims.get("exp", 0) < time.time()):
-            self._send(400, {"error": "id token validation failed"})
-            return
-        groups = claims.get("groups") or []
-        name = claims.get("name") or claims.get("preferred_username")
-        email = claims.get("email")
-        access = tok.get("access_token")
-        if access and meta.get("userinfo_endpoint"):
+        # Serialize per-code so a duplicate callback delivery reuses the first result instead of
+        # trying to redeem the (now-consumed) single-use code again.
+        with _code_lock:
+            now = time.time()
+            for k in [k for k, v in _code_done.items() if v[0] < now]:
+                del _code_done[k]
+            cached = _code_done.get(code)
+            if cached:
+                self._redirect(cached[2], cookies=[(SESSION_COOKIE, cached[1], OIDC_SESSION_TTL),
+                                                   (TX_COOKIE, "", 0)])
+                return
             try:
-                ui = _oidc_get_json(meta["userinfo_endpoint"], access)
-                groups = ui.get("groups") or groups
-                name = name or ui.get("name") or ui.get("preferred_username")
-                email = email or ui.get("email")
-            except Exception:                        # noqa: BLE001
-                pass
-        role = _role_for(groups)
-        if role is None:
-            self._send(403, {"error": "your account is not in an authorized group for this site"})
-            return
-        sess = _sign(json.dumps({"sub": claims.get("sub"), "name": name, "email": email,
-                                 "role": role, "exp": time.time() + OIDC_SESSION_TTL}).encode())
-        self._redirect(txd.get("next", "/"),
-                       cookies=[(SESSION_COOKIE, sess, OIDC_SESSION_TTL), (TX_COOKIE, "", 0)])
+                meta = oidc_meta()
+                tok = _oidc_post_form(meta["token_endpoint"], {
+                    "grant_type": "authorization_code", "code": code,
+                    "redirect_uri": self._redirect_uri(),
+                    "client_id": OIDC_CLIENT_ID, "client_secret": OIDC_CLIENT_SECRET,
+                    "code_verifier": txd["v"]})
+            except urllib.error.HTTPError as e:
+                self._send(502, {"error": "token exchange failed", "detail": e.read().decode()[:300]})
+                return
+            except Exception as e:                       # noqa: BLE001
+                self._send(502, {"error": "token exchange failed: " + str(e)})
+                return
+            claims = _jwt_payload(tok.get("id_token", "")) or {}
+            aud = claims.get("aud")
+            aud = aud if isinstance(aud, list) else [aud]
+            if (claims.get("nonce") != txd["n"]
+                    or claims.get("iss", "").rstrip("/") != OIDC_ISSUER
+                    or OIDC_CLIENT_ID not in aud
+                    or claims.get("exp", 0) < time.time()):
+                self._send(400, {"error": "id token validation failed"})
+                return
+            groups = claims.get("groups") or []
+            name = claims.get("name") or claims.get("preferred_username")
+            email = claims.get("email")
+            access = tok.get("access_token")
+            if access and meta.get("userinfo_endpoint"):
+                try:
+                    ui = _oidc_get_json(meta["userinfo_endpoint"], access)
+                    groups = ui.get("groups") or groups
+                    name = name or ui.get("name") or ui.get("preferred_username")
+                    email = email or ui.get("email")
+                except Exception:                        # noqa: BLE001
+                    pass
+            role = _role_for(groups)
+            if role is None:
+                self._send(403, {"error": "your account is not in an authorized group for this site"})
+                return
+            sess = _sign(json.dumps({"sub": claims.get("sub"), "name": name, "email": email,
+                                     "role": role, "exp": time.time() + OIDC_SESSION_TTL}).encode())
+            nxt = txd.get("next", "/")
+            _code_done[code] = (now + 120, sess, nxt)
+        self._redirect(nxt, cookies=[(SESSION_COOKIE, sess, OIDC_SESSION_TTL), (TX_COOKIE, "", 0)])
 
     def _oidc_logout(self):
         loc = OIDC_LOGOUT_REDIRECT or "/"
@@ -1164,7 +1181,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/me":                        # always reachable (drives the UI)
             self._send(200, self._me())
             return
-        if OIDC_ENABLED:
+        if OIDC_ENABLED and self.command == "GET":    # flow is GET-only (a HEAD must not redeem the code)
             if path == "/oidc/login":
                 self._oidc_login(u)
                 return
