@@ -78,7 +78,8 @@
     group:  ["Cleared for… nothing.", "Your account signed in fine — but it isn’t in an authorized group for this site. Ask an admin to add you to the crew list."],
     state:  ["That one drifted off the runway.", "The sign-in attempt lost its bearings (state/session mismatch). Give it another go."],
     token:  ["We hit some turbulence.", "Couldn’t complete the handshake with the identity provider. Try again in a moment."],
-    idtoken:["Flight plan didn’t check out.", "The sign-in token failed validation. Please try signing in again."]
+    idtoken:["Flight plan didn’t check out.", "The sign-in token failed validation. Please try signing in again."],
+    blocked:["This aircraft is grounded.", "An administrator has blocked your access to this site. Contact them if you think this is a mistake."]
   };
   var c = copy[reason] || copy.group;
   document.getElementById('title').textContent = c[0];

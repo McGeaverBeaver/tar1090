@@ -104,7 +104,7 @@ OIDC_USER_AGENT = os.environ.get("OIDC_USER_AGENT", "Mozilla/5.0 (compatible; ta
 SESSION_COOKIE = "tar1090_session"
 TX_COOKIE      = "tar1090_oidc_tx"
 # Anything under these is admin-only; viewers get 403 (and the UI hides it too).
-ADMIN_PREFIXES = ("/api/alerts", "/api/import")
+ADMIN_PREFIXES = ("/api/alerts", "/api/import", "/api/users")
 ADMIN_PAGES    = ("/alerts.html", "/settings.html")
 
 
@@ -839,6 +839,88 @@ def alerts_log_get(q):
     return {"alerts": rows}
 
 
+# --- users (login log + block list) -----------------------------------------
+# Every successful OIDC sign-in is recorded here, keyed by the stable OIDC subject. An admin
+# can flip `blocked` from the Settings -> Users tab to deny someone: blocked subjects are kept
+# in a short-lived cache and rejected on every request (active sessions die within ~20s) and
+# their next sign-in is refused at the callback.
+USERS_DDL = """
+CREATE TABLE IF NOT EXISTS app_users (
+  sub         text PRIMARY KEY,
+  email       text,
+  name        text,
+  role        text,
+  blocked     boolean NOT NULL DEFAULT false,
+  login_count int NOT NULL DEFAULT 0,
+  first_seen  timestamptz NOT NULL DEFAULT now(),
+  last_seen   timestamptz NOT NULL DEFAULT now());
+"""
+_users_ready = False
+
+
+def _ensure_users():
+    global _users_ready
+    if not _users_ready:
+        execute(USERS_DDL, ())
+        _users_ready = True
+
+
+_blocked = {"subs": set(), "ts": 0.0}
+
+
+def _blocked_subs():
+    """Set of blocked OIDC subjects, refreshed every ~20s. Fails open (keeps the last known
+    set) if the DB is briefly unavailable, so a blip can't lock everyone out."""
+    now = time.time()
+    if now - _blocked["ts"] > 20:
+        try:
+            _ensure_users()
+            _blocked["subs"] = {r["sub"] for r in query("SELECT sub FROM app_users WHERE blocked", ())}
+        except psycopg.Error:
+            pass
+        _blocked["ts"] = now
+    return _blocked["subs"]
+
+
+def _record_login(sub, email, name, role):
+    """Upsert a user on successful auth; return True if they're blocked. Blocked users still get
+    last_seen bumped (so the attempt shows up) but no login_count increment and no session."""
+    _ensure_users()
+    rows = execute(
+        "INSERT INTO app_users (sub, email, name, role, login_count, first_seen, last_seen) "
+        "VALUES (%s, %s, %s, %s, 1, now(), now()) "
+        "ON CONFLICT (sub) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name, "
+        "  role = EXCLUDED.role, last_seen = now(), "
+        "  login_count = app_users.login_count + CASE WHEN app_users.blocked THEN 0 ELSE 1 END "
+        "RETURNING blocked",
+        [sub, email, name, role])
+    blocked = bool(rows and rows[0].get("blocked"))
+    if blocked:
+        _blocked["subs"].add(sub)
+    return blocked
+
+
+def users_get(q):
+    _ensure_users()
+    rows = query("SELECT sub, email, name, role, blocked, login_count, first_seen, last_seen "
+                 "FROM app_users ORDER BY last_seen DESC", ())
+    for r in rows:
+        r["first_seen"] = ms(r["first_seen"])
+        r["last_seen"] = ms(r["last_seen"])
+    return {"users": rows}
+
+
+def users_block(body):
+    _ensure_users()
+    sub = (body.get("sub") or "").strip()
+    if not sub:
+        return {"error": "sub required"}
+    blocked = bool(body.get("blocked"))
+    execute("UPDATE app_users SET blocked = %s WHERE sub = %s", [blocked, sub])
+    _blocked["ts"] = 0.0          # force a cache refresh on the next request
+    return {"ok": True, "sub": sub, "blocked": blocked}
+
+
 # --- historical import (heatmap .ttf -> searchable index) -------------------
 # A resumable background job: walk globe_history heatmap chunks and fill the aircraft/flights
 # index (see tar1090_heatmap_import). Progress + a checkpoint live in import_state so the
@@ -987,10 +1069,12 @@ def _resume_import_on_start():
 ROUTES = {"/api/search": search, "/api/options": options,
           "/api/trace": trace, "/api/traces": traces, "/api/live": live,
           "/api/alerts/rules": alerts_rules_get, "/api/alerts/config": alerts_config_get,
-          "/api/alerts/log": alerts_log_get, "/api/import/status": import_status}
+          "/api/alerts/log": alerts_log_get, "/api/import/status": import_status,
+          "/api/users": users_get}
 POST_ROUTES = {"/api/alerts/rules": alerts_rule_save, "/api/alerts/rules/delete": alerts_rule_delete,
                "/api/alerts/config": alerts_config_save, "/api/alerts/test": alerts_test,
-               "/api/import/start": import_start, "/api/import/stop": import_stop}
+               "/api/import/start": import_start, "/api/import/stop": import_stop,
+               "/api/users/block": users_block}
 CONTENT = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
            ".css": "text/css", ".json": "application/json", ".ico": "image/x-icon",
            ".svg": "image/svg+xml", ".webmanifest": "application/manifest+json",
@@ -1026,7 +1110,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _session(self):
         c = self._cookie(SESSION_COOKIE)
-        return _unsign(c) if c else None
+        s = _unsign(c) if c else None
+        if s and s.get("sub") in _blocked_subs():     # cut a blocked user's live session
+            return None
+        return s
 
     def _cookie_str(self, name, value, max_age):
         parts = [f"{name}={value}", "Path=/", "HttpOnly", "SameSite=Lax",
@@ -1058,7 +1145,7 @@ class Handler(BaseHTTPRequestHandler):
         if not s:
             return {"enabled": True, "authenticated": False, "role": None}
         return {"enabled": True, "authenticated": True, "role": s.get("role"),
-                "name": s.get("name"), "email": s.get("email")}
+                "name": s.get("name"), "email": s.get("email"), "sub": s.get("sub")}
 
     def _oidc_login(self, u):
         nxt = parse_qs(u.query).get("next", ["/"])[0]
@@ -1144,6 +1231,15 @@ class Handler(BaseHTTPRequestHandler):
                 log.info("oidc: %s authenticated but in no authorized group (%s)", email or name, groups)
                 self._redirect("/denied?reason=group", cookies=[(TX_COOKIE, "", 0)])
                 return
+            # Record the sign-in (drives the Settings -> Users tab) and honour the block list.
+            sub = claims.get("sub")
+            try:
+                if sub and _record_login(sub, email, name, role):
+                    log.info("oidc: blocked user %s tried to sign in", email or name or sub)
+                    self._redirect("/denied?reason=blocked", cookies=[(TX_COOKIE, "", 0)])
+                    return
+            except psycopg.Error as e:
+                log.warning("user login record failed: %s", e)     # don't block sign-in on a DB blip
             sess = _sign(json.dumps({"sub": claims.get("sub"), "name": name, "email": email,
                                      "role": role, "exp": time.time() + OIDC_SESSION_TTL}).encode())
             nxt = txd.get("next", "/")

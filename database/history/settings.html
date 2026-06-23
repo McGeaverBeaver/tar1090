@@ -3,18 +3,23 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>tar1090 — alert settings</title>
+<title>tar1090 — settings</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   body { margin: 0; font: 13px/1.5 system-ui, sans-serif; background: #14161a; color: #e6e6e6; }
   header { padding: 8px 12px 0; background: #1d2026; border-bottom: 1px solid #2c313a; }
-  header h1 { margin: 0 0 6px; font-size: 15px; font-weight: 600; }
   #tabs { display: flex; gap: 2px; }
   #tabs a { color: #9aa3b2; text-decoration: none; padding: 7px 14px; border-radius: 6px 6px 0 0; font-size: 13px; }
   #tabs a:hover { background: #23272f; color: #e6e6e6; }
   #tabs a.active { background: #2d6cdf; color: #fff; }
-  main { max-width: 680px; margin: 0 auto; padding: 16px 12px 40px; }
+  main { max-width: 740px; margin: 0 auto; padding: 16px 12px 40px; }
+  .subtabs { display: flex; gap: 6px; margin: 0 0 16px; flex-wrap: wrap; }
+  .subtab { background: #21252c; color: #cdd5e0; border: 1px solid #2c313a; border-radius: 8px; padding: 7px 14px; cursor: pointer; font-size: 13px; }
+  .subtab:hover { background: #262b33; }
+  .subtab.on { background: #2d6cdf; color: #fff; border-color: #3b78e8; }
+  .panel { display: none; }
+  .panel.on { display: block; }
   fieldset { border: 1px solid #2c313a; border-radius: 8px; margin: 0 0 16px; padding: 12px 14px; }
   legend { color: #9aa3b2; font-size: 12px; padding: 0 6px; }
   .row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
@@ -24,16 +29,29 @@
   input[type=checkbox] { width: 16px; height: 16px; }
   button { background: #2d6cdf; color: #fff; border: 0; border-radius: 5px; padding: 8px 16px; cursor: pointer; font-size: 13px; }
   button.ghost { background: #2a2f38; }
+  button.danger { background: #b3403a; }
+  button.mini { padding: 4px 10px; font-size: 12px; }
   button:hover { filter: brightness(1.1); }
+  button:disabled { opacity: .5; cursor: default; filter: none; }
   .actions { display: flex; gap: 8px; margin-top: 4px; }
   #status { margin-top: 12px; color: #9aa3b2; min-height: 18px; }
   .help { color: #7e8794; font-size: 11.5px; margin: 2px 0 0 160px; }
+  .panel .help.wide { margin-left: 0; margin-bottom: 8px; }
   code { background: #0f1115; padding: 1px 5px; border-radius: 3px; color: #cbd3df; }
   #imp_bar { height: 8px; background: #0f1115; border: 1px solid #2c313a; border-radius: 5px; overflow: hidden; margin: 12px 0 6px; }
   #imp_fill { height: 100%; width: 0; background: #2d6cdf; transition: width .3s; }
   #imp_status { color: #9aa3b2; font-size: 12.5px; }
   #imp_status b.run { color: #4ea1ff; } #imp_status b.done { color: #2e9e6b; }
   #imp_status b.err { color: #ff6b6b; } #imp_status b.idle { color: #b9c1cd; }
+  .tblwrap { overflow-x: auto; }
+  table.users { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.users th, table.users td { text-align: left; padding: 8px; border-bottom: 1px solid #23262d; vertical-align: top; white-space: nowrap; }
+  table.users th { color: #9aa3b2; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+  table.users td .sub { color: #7e8794; font-size: 11px; white-space: normal; }
+  table.users tr.blk td { color: #8a93a2; }
+  .pill { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; }
+  .pill.ok { background: rgba(46,158,107,.16); color: #7bdcab; border: 1px solid #2e6e52; }
+  .pill.no { background: rgba(179,64,58,.18); color: #ffb4a8; border: 1px solid #6e2d2a; }
 </style>
 </head>
 <body>
@@ -41,53 +59,101 @@
   <nav id="tabs"><a href="live.html">Live</a><a href="index.html">History</a><a href="alerts.html" class="admin-only">Alerts</a><a href="settings.html" class="active admin-only">Settings</a></nav>
 </header>
 <main>
-  <fieldset>
-    <legend>MQTT broker → Home Assistant</legend>
-    <div class="row"><label>Alerting enabled</label><input type="checkbox" id="enabled"></div>
-    <div class="row"><label>Broker host</label><input type="text" id="mqtt_host" placeholder="192.168.1.x (your Mosquitto / HA broker)"></div>
-    <div class="row"><label>Port</label><input type="number" id="mqtt_port" value="1883" style="max-width:120px"></div>
-    <div class="row"><label>Username</label><input type="text" id="mqtt_username" placeholder="(optional)"></div>
-    <div class="row"><label>Password</label><input type="password" id="mqtt_password" placeholder="(optional)"></div>
-    <div class="row"><label>Use TLS</label><input type="checkbox" id="mqtt_tls"></div>
-  </fieldset>
-
-  <fieldset>
-    <legend>Topics & Home Assistant</legend>
-    <div class="row"><label>Base topic</label><input type="text" id="base_topic" value="tar1090"></div>
-    <div class="help">Events publish to <code>&lt;base&gt;/event</code>; per-rule sensors to <code>&lt;base&gt;/rule/&lt;id&gt;/state</code>.</div>
-    <div class="row"><label>HA MQTT Discovery</label><input type="checkbox" id="ha_discovery"></div>
-    <div class="help">Auto-creates a <code>binary_sensor</code> in Home Assistant per rule — no YAML. It pulses on for each detection.</div>
-    <div class="row"><label>Discovery prefix</label><input type="text" id="discovery_prefix" value="homeassistant"></div>
-  </fieldset>
-
-  <div class="actions">
-    <button id="save">Save</button>
-    <button id="test" class="ghost">Save &amp; send test</button>
+  <div class="subtabs">
+    <button class="subtab" data-p="integrations">Integrations</button>
+    <button class="subtab" data-p="import">Historical import</button>
+    <button class="subtab" data-p="users">Users</button>
   </div>
-  <div id="status">Configure your broker, Save, then use the Alerts tab to add rules.</div>
 
-  <fieldset>
-    <legend>Historical import — globe_history heatmap → searchable index</legend>
-    <div class="row"><label>globe_history path</label><input type="text" id="globe_dir" placeholder="/var/globe_history"></div>
-    <div class="help">Scans readsb's heatmap <code>.ttf</code> chunks under this path and fills the flight
-      index, so traffic from before logging began (or with traces off) becomes searchable. Runs in the
-      background and <b>resumes automatically</b> if it crashes or the container restarts. Imported flights
-      have <b>no callsign</b> (the heatmap doesn't store it) — search them by registration / type / operator
-      / military / time.</div>
+  <!-- Integrations: MQTT / Home Assistant -->
+  <section class="panel" id="p_integrations">
+    <fieldset>
+      <legend>MQTT broker → Home Assistant</legend>
+      <div class="row"><label>Alerting enabled</label><input type="checkbox" id="enabled"></div>
+      <div class="row"><label>Broker host</label><input type="text" id="mqtt_host" placeholder="192.168.1.x (your Mosquitto / HA broker)"></div>
+      <div class="row"><label>Port</label><input type="number" id="mqtt_port" value="1883" style="max-width:120px"></div>
+      <div class="row"><label>Username</label><input type="text" id="mqtt_username" placeholder="(optional)"></div>
+      <div class="row"><label>Password</label><input type="password" id="mqtt_password" placeholder="(optional)"></div>
+      <div class="row"><label>Use TLS</label><input type="checkbox" id="mqtt_tls"></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Topics & Home Assistant</legend>
+      <div class="row"><label>Base topic</label><input type="text" id="base_topic" value="tar1090"></div>
+      <div class="help">Events publish to <code>&lt;base&gt;/event</code>; per-rule sensors to <code>&lt;base&gt;/rule/&lt;id&gt;/state</code>.</div>
+      <div class="row"><label>HA MQTT Discovery</label><input type="checkbox" id="ha_discovery"></div>
+      <div class="help">Auto-creates a <code>binary_sensor</code> in Home Assistant per rule — no YAML. It pulses on for each detection.</div>
+      <div class="row"><label>Discovery prefix</label><input type="text" id="discovery_prefix" value="homeassistant"></div>
+    </fieldset>
+
     <div class="actions">
-      <button id="imp_start">Start / resume import</button>
-      <button id="imp_restart" class="ghost">Restart from scratch</button>
-      <button id="imp_stop" class="ghost">Stop</button>
+      <button id="save">Save</button>
+      <button id="test" class="ghost">Save &amp; send test</button>
     </div>
-    <div id="imp_bar"><div id="imp_fill"></div></div>
-    <div id="imp_status"></div>
-  </fieldset>
+    <div id="status">Configure your broker, Save, then use the Alerts tab to add rules.</div>
+  </section>
+
+  <!-- Historical import -->
+  <section class="panel" id="p_import">
+    <fieldset>
+      <legend>Historical import — globe_history heatmap → searchable index</legend>
+      <div class="row"><label>globe_history path</label><input type="text" id="globe_dir" placeholder="/var/globe_history"></div>
+      <div class="help">Scans readsb's heatmap <code>.ttf</code> chunks under this path and fills the flight
+        index, so traffic from before logging began (or with traces off) becomes searchable. Runs in the
+        background and <b>resumes automatically</b> if it crashes or the container restarts. Imported flights
+        have <b>no callsign</b> (the heatmap doesn't store it) — search them by registration / type / operator
+        / military / time.</div>
+      <div class="actions">
+        <button id="imp_start">Start / resume import</button>
+        <button id="imp_restart" class="ghost">Restart from scratch</button>
+        <button id="imp_stop" class="ghost">Stop</button>
+      </div>
+      <div id="imp_bar"><div id="imp_fill"></div></div>
+      <div id="imp_status"></div>
+    </fieldset>
+  </section>
+
+  <!-- Users -->
+  <section class="panel" id="p_users">
+    <fieldset>
+      <legend>Users</legend>
+      <div class="help wide">Everyone who has signed in appears here. <b>Block</b> someone to deny them access —
+        any active session is cut within ~20&nbsp;seconds and their next sign-in is refused. Blocking only takes
+        effect when OIDC login is enabled.</div>
+      <div id="users_msg" class="help wide"></div>
+      <div class="tblwrap">
+        <table class="users">
+          <thead><tr><th>User</th><th>Role</th><th>Logins</th><th>First seen</th><th>Last seen</th><th>Access</th></tr></thead>
+          <tbody id="users_rows"></tbody>
+        </table>
+      </div>
+      <div class="actions" style="margin-top:12px"><button id="users_refresh" class="ghost mini">Refresh</button></div>
+    </fieldset>
+  </section>
 </main>
 
 <script>
 const $ = id => document.getElementById(id);
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
 function setMsg(t){ $('status').textContent = t; }
+async function post(path, body){
+  const r = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  return r.json();
+}
 
+// ---- sub-tabs ----
+const PANELS = ['integrations', 'import', 'users'];
+function showPanel(name){
+  if (!PANELS.includes(name)) name = 'integrations';
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('on', p.id === 'p_' + name));
+  document.querySelectorAll('.subtab').forEach(b => b.classList.toggle('on', b.dataset.p === name));
+  if (location.hash.slice(1) !== name) history.replaceState(null, '', '#' + name);
+  if (name === 'users') loadUsers();
+  if (name === 'import') loadImport();
+}
+document.querySelectorAll('.subtab').forEach(b => b.onclick = () => showPanel(b.dataset.p));
+
+// ---- integrations (MQTT / HA) ----
 async function load(){
   try {
     const j = await (await fetch('api/alerts/config')).json();
@@ -116,10 +182,6 @@ function collect(){
     ha_discovery: $('ha_discovery').checked,
     discovery_prefix: $('discovery_prefix').value.trim() || 'homeassistant',
   };
-}
-async function post(path, body){
-  const r = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
-  return r.json();
 }
 $('save').onclick = async ()=>{
   setMsg('Saving…');
@@ -174,9 +236,55 @@ async function startImport(restart){
 $('imp_start').onclick = () => startImport(false);
 $('imp_restart').onclick = () => startImport(true);
 $('imp_stop').onclick = async () => { await post('api/import/stop', {}); setTimeout(loadImport, 300); };
+// keep the import progress fresh while its panel is open
+setInterval(() => { if ($('p_import').classList.contains('on')) loadImport(); }, 3000);
 
-loadImport();
-setInterval(loadImport, 3000);
+// ---- users ----
+let meSub = null;
+function fmtWhen(ms){ return ms ? new Date(ms).toLocaleString() : '—'; }
+async function loadUsers(){
+  $('users_msg').textContent = 'Loading…';
+  try {
+    const meP = fetch('api/me').then(r => r.json()).catch(() => ({}));
+    const j = await (await fetch('api/users')).json();
+    if (j.error){ $('users_msg').textContent = 'Could not load users: ' + j.error; return; }
+    meSub = (await meP).sub || null;
+    const list = j.users || [];
+    renderUsers(list);
+    $('users_msg').textContent = list.length ? '' : 'No sign-ins recorded yet.';
+  } catch(e){ $('users_msg').textContent = 'Could not load users: ' + e; }
+}
+function renderUsers(list){
+  const tb = $('users_rows'); tb.innerHTML = '';
+  for (const u of list){
+    const self = meSub && u.sub === meSub;
+    const tr = document.createElement('tr'); if (u.blocked) tr.className = 'blk';
+    tr.innerHTML = `<td><b>${esc(u.name || '(no name)')}</b>${self ? ' <span class="help" style="margin:0">(you)</span>' : ''}`
+      + `<div class="sub">${esc(u.email || u.sub || '')}</div></td>`
+      + `<td>${esc(u.role || '')}</td><td>${u.login_count || 0}</td>`
+      + `<td>${esc(fmtWhen(u.first_seen))}</td><td>${esc(fmtWhen(u.last_seen))}</td>`
+      + `<td><span class="pill ${u.blocked ? 'no' : 'ok'}">${u.blocked ? 'Blocked' : 'Allowed'}</span></td>`;
+    const btn = document.createElement('button');
+    btn.className = 'mini ' + (u.blocked ? 'ghost' : 'danger');
+    btn.textContent = u.blocked ? 'Unblock' : 'Block';
+    btn.style.marginLeft = '8px';
+    btn.disabled = !!self;
+    btn.title = self ? "You can't block your own account" : '';
+    btn.onclick = async () => {
+      if (!u.blocked && !confirm('Block ' + (u.name || u.email || 'this user') + "? They'll be signed out and can't log back in.")) return;
+      btn.disabled = true;
+      const r = await post('api/users/block', { sub: u.sub, blocked: !u.blocked });
+      if (r.error){ $('users_msg').textContent = 'Error: ' + r.error; btn.disabled = false; return; }
+      loadUsers();
+    };
+    tr.lastElementChild.appendChild(btn);
+    tb.appendChild(tr);
+  }
+}
+$('users_refresh').onclick = loadUsers;
+
+// open the panel named in the URL hash (e.g. settings.html#users), else Integrations
+showPanel((location.hash || '').slice(1));
 </script>
 <script src="auth.js"></script>
 </body>

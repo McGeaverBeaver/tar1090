@@ -46,13 +46,12 @@
       if (me.enabled && me.authenticated) {
         var tabs = document.getElementById('tabs');
         if (tabs && !document.getElementById('whoami')) {
+          // Just a Logout button, pushed to the right -- no name/role on the page.
           var chip = document.createElement('span');
           chip.id = 'whoami';
-          chip.style.cssText = 'margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;color:#9aa3b2;';
-          var who = me.name || me.email || 'signed in';
-          chip.innerHTML = '<span>' + who + ' · <b style="color:#cdd5e0">' + (me.role || '') + '</b></span>'
-            + '<a href="oidc/logout" style="color:#9aa3b2;text-decoration:none;border:1px solid #313845;'
-            + 'border-radius:6px;padding:3px 8px">Logout</a>';
+          chip.style.cssText = 'margin-left:auto;display:flex;align-items:center;';
+          chip.innerHTML = '<a href="oidc/logout" style="color:#9aa3b2;text-decoration:none;border:1px solid #313845;'
+            + 'border-radius:6px;padding:3px 8px;font-size:12px">Logout</a>';
           tabs.style.flex = '1';
           tabs.appendChild(chip);
         }
