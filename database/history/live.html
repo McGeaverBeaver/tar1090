@@ -63,7 +63,16 @@
   #info .mil { color: #ff6b6b; }
   #status { position: absolute; left: 10px; bottom: 10px; z-index: 600; background: rgba(20,22,26,.9); border: 1px solid #2c313a;
             border-radius: 8px; padding: 6px 11px; color: #cdd5e0; font-size: 12px; max-width: 60%; }
-  @media (max-width: 760px) { #card { width: 200px; } #bar input { width: 130px; } }
+  /* modern altitude colour legend */
+  #legend { position: absolute; top: 78px; left: 10px; z-index: 600; background: rgba(20,23,28,.78);
+            -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border: 1px solid #313845;
+            border-radius: 12px; padding: 9px 11px; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
+  #legend .lg-title { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: #8a93a2; margin-bottom: 6px; text-align: center; }
+  #legend .lg-body { display: flex; gap: 7px; height: 124px; }
+  #legend .lg-bar { width: 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,.12); }
+  #legend .lg-ticks { display: flex; flex-direction: column; justify-content: space-between; font-size: 10px;
+                      color: #cdd5e0; font-variant-numeric: tabular-nums; }
+  @media (max-width: 760px) { #card { width: 200px; } #bar input { width: 130px; } #legend { display: none; } }
 </style>
 </head>
 <body>
@@ -84,6 +93,13 @@
 </div>
 <div id="main">
   <div id="map"></div>
+  <div id="legend">
+    <div class="lg-title">Altitude</div>
+    <div class="lg-body">
+      <div class="lg-bar" id="lgbar"></div>
+      <div class="lg-ticks"><span>40k+</span><span>30k</span><span>20k</span><span>10k</span><span>0 ft</span></div>
+    </div>
+  </div>
   <div id="card">
     <div id="photo"></div>
     <div id="info"></div>
@@ -173,6 +189,8 @@ function isMil(sq){ return sq && /^(7[5-7])/.test(sq); } // emergency/special sq
 const markers = new Map();   // hex -> { marker, key }  (key = rounded track|altband for cheap diffing)
 const trails = new Map();     // hex -> [[lat,lon],...]   recent positions, when Trails is on
 const trailLayers = new Map();// hex -> L.polyline
+const selLayer = L.layerGroup().addTo(map);   // selected aircraft's loaded (historical) trail
+let selTrailReq = 0;
 let selectedHex = null, lastData = new Map(), fitted = false, filter = '';
 let showLabels = false, showTrails = false, showGround = true;
 
@@ -256,10 +274,28 @@ function select(hex){
   if (a && e){                                       // highlight the picked aircraft immediately
     e.marker.setIcon(makePlaneIcon(classifyType(a.t), planeColor(a), a.track||0, 32, true));
   }
-  renderInfo(a); showPhoto(a);
+  renderInfo(a); showPhoto(a); loadSelTrail(hex);
   $('card').classList.add('on');
 }
-function deselect(){ selectedHex = null; $('card').classList.remove('on'); for (const e of markers.values()) e.key=''; }
+function deselect(){ selectedHex = null; $('card').classList.remove('on'); selTrailReq++; selLayer.clearLayers();
+  for (const e of markers.values()) e.key=''; }
+
+// Pull the selected aircraft's actual trail (readsb's live run-dir trace) and draw it
+// altitude-coloured, the same way the History map draws a single flight.
+async function loadSelTrail(hex){
+  const my = ++selTrailReq;
+  selLayer.clearLayers();
+  const end = Math.floor(Date.now()/1000), start = end - 6*3600;
+  let j;
+  try { j = await (await fetch(`api/trace?hex=${encodeURIComponent(hex)}&start=${start}&end=${end}`)).json(); }
+  catch(e){ return; }
+  if (my !== selTrailReq || hex !== selectedHex) return;     // superseded / deselected
+  const p = j.points || [];
+  for (let i=1;i<p.length;i++){
+    L.polyline([[p[i-1][1],p[i-1][2]],[p[i][1],p[i][2]]],
+      { color: altColor(p[i][3]), weight: 3, opacity: .9 }).addTo(selLayer);
+  }
+}
 
 function renderInfo(a){
   if (!a){ return; }
@@ -339,6 +375,13 @@ $('t-labels').onclick   = e => { showLabels = !showLabels; e.currentTarget.class
 $('t-trails').onclick    = e => { showTrails = !showTrails; e.currentTarget.classList.toggle('on', showTrails); if (!showTrails) clearTrails(); poll(); };
 $('t-ground').onclick    = e => { showGround = !showGround; e.currentTarget.classList.toggle('on', showGround); poll(); };
 $('t-recenter').onclick  = () => fitAll();
+
+// build the altitude legend bar straight from altColor() so it always matches the icons/trails
+(function buildLegend(){
+  const max = 45000, steps = 30, stops = [];
+  for (let i=0;i<=steps;i++){ const a = max*i/steps; stops.push(`${altColor(a)} ${(i/steps*100).toFixed(1)}%`); }
+  $('lgbar').style.background = `linear-gradient(to top, ${stops.join(',')})`;
+})();
 
 map.on('click', deselect);
 poll();
