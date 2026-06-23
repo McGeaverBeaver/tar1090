@@ -43,6 +43,7 @@
   #imp_status { color: #9aa3b2; font-size: 12.5px; }
   #imp_status b.run { color: #4ea1ff; } #imp_status b.done { color: #2e9e6b; }
   #imp_status b.err { color: #ff6b6b; } #imp_status b.idle { color: #b9c1cd; }
+  .imp-done { color: #2e9e6b; } .imp-err { color: #ff6b6b; } .imp-cancel { color: #b9c1cd; }
   .tblwrap { overflow-x: auto; }
   table.users { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   table.users th, table.users td { text-align: left; padding: 8px; border-bottom: 1px solid #23262d; vertical-align: top; white-space: nowrap; }
@@ -110,6 +111,17 @@
       </div>
       <div id="imp_bar"><div id="imp_fill"></div></div>
       <div id="imp_status"></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Previous imports</legend>
+      <div id="imp_runs_empty" class="help wide">No imports have finished yet.</div>
+      <div class="tblwrap">
+        <table class="users" id="imp_runs" style="display:none">
+          <thead><tr><th>Finished</th><th>Outcome</th><th>Chunks</th><th>Flights</th><th>Fixes</th><th>Details</th></tr></thead>
+          <tbody id="imp_runs_rows"></tbody>
+        </table>
+      </div>
     </fieldset>
   </section>
 
@@ -204,23 +216,44 @@ const fmtN = n => (n == null ? 0 : n).toLocaleString();
 function renderImport(r){
   $('globe_dir').placeholder = r.default_globe_dir || '/var/globe_history';
   if (!$('globe_dir').value && r.globe_dir) $('globe_dir').value = r.globe_dir;
-  const total = r.chunks_total || 0, done = r.chunks_done || 0;
-  const pct = total ? Math.round(100 * done / total) : (r.status === 'done' ? 100 : 0);
-  $('imp_fill').style.width = pct + '%';
-  if (r.available === false){
+  const running = !!r.running, ok = r.available !== false;
+  // The progress bar + live line only mean anything while a job is actually running; when idle
+  // the panel just says so and the history table below shows what previous runs did.
+  $('imp_bar').style.display = running ? '' : 'none';
+  if (!ok){
     $('imp_status').innerHTML = '<b class="err">the heatmap importer is not installed on this server</b>';
-  } else {
-    const cls = ({running:'run', done:'done', error:'err'})[r.status] || 'idle';
-    let line = `<b class="${cls}">${r.status || 'idle'}</b>`;
-    if (total || done) line += ` · ${fmtN(done)} / ${fmtN(total)} chunks (${pct}%)`;
-    line += ` · ${fmtN(r.flights_added)} flights · ${fmtN(r.fixes_seen)} fixes`;
+  } else if (running){
+    const total = r.chunks_total || 0, done = r.chunks_done || 0;
+    const pct = total ? Math.round(100 * done / total) : 0;
+    $('imp_fill').style.width = pct + '%';
+    let line = `<b class="run">running</b> · ${fmtN(done)} / ${fmtN(total)} chunks (${pct}%) · ${fmtN(r.flights_added)} flights · ${fmtN(r.fixes_seen)} fixes`;
     if (r.message) line += ` — ${r.message}`;
     $('imp_status').innerHTML = line;
+  } else {
+    $('imp_status').innerHTML = '<b class="idle">idle</b> — no import running';
   }
-  const running = !!r.running, ok = r.available !== false;
   $('imp_start').disabled = running || !ok;
   $('imp_restart').disabled = running || !ok;
   $('imp_stop').disabled = !running;
+  renderRuns(r.runs || []);
+}
+function renderRuns(runs){
+  const tb = $('imp_runs_rows'), tbl = $('imp_runs'), empty = $('imp_runs_empty');
+  tb.innerHTML = '';
+  if (!runs.length){ tbl.style.display = 'none'; empty.style.display = ''; return; }
+  empty.style.display = 'none'; tbl.style.display = '';
+  const cls = { done:'imp-done', cancelled:'imp-cancel', error:'imp-err' };
+  const label = { done:'completed', cancelled:'stopped', error:'error' };
+  for (const h of runs){
+    const pct = h.chunks_total ? Math.round(100 * (h.chunks_done||0) / h.chunks_total) : 0;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${esc(fmtWhen(h.finished_at))}</td>`
+      + `<td><b class="${cls[h.status]||'imp-cancel'}">${esc(label[h.status]||h.status||'')}</b></td>`
+      + `<td>${fmtN(h.chunks_done)} / ${fmtN(h.chunks_total)} (${pct}%)</td>`
+      + `<td>${fmtN(h.flights_added)}</td><td>${fmtN(h.fixes_seen)}</td>`
+      + `<td class="sub">${esc(h.message || '')}</td>`;
+    tb.appendChild(tr);
+  }
 }
 async function loadImport(){
   try { renderImport(await (await fetch('api/import/status')).json()); }

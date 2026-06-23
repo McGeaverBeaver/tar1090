@@ -928,13 +928,20 @@ def users_block(body):
 IMPORT_DDL = """
 CREATE TABLE IF NOT EXISTS import_state (
   id int PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-  status text NOT NULL DEFAULT 'idle',             -- idle|running|done|error|cancelled
+  status text NOT NULL DEFAULT 'idle',             -- live state only: idle|running
   globe_dir text,
   last_cbase double precision NOT NULL DEFAULT 0,  -- checkpoint: resume from this chunk epoch
   chunks_total int NOT NULL DEFAULT 0, chunks_done int NOT NULL DEFAULT 0,
   flights_added bigint NOT NULL DEFAULT 0, fixes_seen bigint NOT NULL DEFAULT 0,
   message text, started_at timestamptz, updated_at timestamptz NOT NULL DEFAULT now());
 INSERT INTO import_state (id, status) VALUES (1, 'idle') ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS import_runs (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  globe_dir text, status text,                     -- outcome: done|cancelled|error
+  chunks_total int, chunks_done int,
+  flights_added bigint, fixes_seen bigint, message text,
+  started_at timestamptz, finished_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS import_runs_finished_idx ON import_runs (finished_at DESC);
 """
 _import_ready = False
 _import_lock = threading.Lock()
@@ -947,6 +954,21 @@ def _ensure_import():
     if not _import_ready:
         execute(IMPORT_DDL, ())
         _import_ready = True
+
+
+# Copy the current import_state into the import_runs history with the given final outcome, then
+# return the live state to a clean 'idle' (counters zeroed). last_cbase is kept so "Start /
+# resume import" can still pick up where a stopped/finished run left off; "Restart from scratch"
+# is what zeroes the checkpoint.
+def _archive_and_idle(status, message=None):
+    execute("INSERT INTO import_runs (globe_dir, status, chunks_total, chunks_done, "
+            "flights_added, fixes_seen, message, started_at) "
+            "SELECT globe_dir, %s, chunks_total, chunks_done, flights_added, fixes_seen, "
+            "COALESCE(%s, message), started_at FROM import_state WHERE id=1",
+            (status, message))
+    execute("UPDATE import_state SET status='idle', chunks_total=0, chunks_done=0, "
+            "flights_added=0, fixes_seen=0, message=NULL, started_at=NULL, updated_at=now() "
+            "WHERE id=1")
 
 
 def _default_csv():
@@ -985,17 +1007,19 @@ def _import_worker(globe):
             result = imp.run(globe)
         finally:
             conn.close()
+        fin = "cancelled" if result == "cancelled" else "done"
         msg = ("stopped — press Start to resume" if result == "cancelled"
                else f"imported {imp.n_flights} flight legs from {imp.n_points} fixes")
-        execute("UPDATE import_state SET status=%s, message=%s, chunks_total=%s, chunks_done=%s, "
+        # Record the final tallies on the live row, then archive it to history and clear to idle.
+        execute("UPDATE import_state SET message=%s, chunks_total=%s, chunks_done=%s, "
                 "flights_added=%s, fixes_seen=%s, last_cbase=%s, updated_at=now() WHERE id=1",
-                ("cancelled" if result == "cancelled" else "done", msg, imp.total,
-                 imp.skipped + imp.processed, imp.n_flights, imp.n_points, imp.committed_checkpoint))
+                (msg, imp.total, imp.skipped + imp.processed, imp.n_flights, imp.n_points,
+                 imp.committed_checkpoint))
+        _archive_and_idle(fin)
     except Exception as e:                               # noqa: BLE001
         log.exception("historical import failed")
         try:
-            execute("UPDATE import_state SET status='error', message=%s, updated_at=now() WHERE id=1",
-                    (str(e),))
+            _archive_and_idle("error", str(e))
         except psycopg.Error:
             pass
 
@@ -1013,13 +1037,23 @@ def import_status(q):
     rows = query("SELECT status, globe_dir, last_cbase, chunks_total, chunks_done, flights_added, "
                  "fixes_seen, message, started_at, updated_at FROM import_state WHERE id=1", ())
     r = dict(rows[0]) if rows else {"status": "idle"}
+    running = bool(_import_thread and _import_thread.is_alive())
+    r["running"] = running
+    if not running:                                  # live row only ever reports idle/running
+        r["status"] = "idle"
     r["started_at"] = ms(r.get("started_at"))
     r["updated_at"] = ms(r.get("updated_at"))
-    r["running"] = bool(_import_thread and _import_thread.is_alive())
     r["default_globe_dir"] = GLOBE_DIR
     if not r.get("globe_dir"):
         r["globe_dir"] = GLOBE_DIR
     r["available"] = hm is not None
+    runs = query("SELECT id, globe_dir, status, chunks_total, chunks_done, flights_added, "
+                 "fixes_seen, message, started_at, finished_at FROM import_runs "
+                 "ORDER BY finished_at DESC LIMIT 20", ())
+    for h in runs:
+        h["started_at"] = ms(h.get("started_at"))
+        h["finished_at"] = ms(h.get("finished_at"))
+    r["runs"] = runs
     return r
 
 
@@ -1050,19 +1084,26 @@ def import_stop(body):
 
 
 def _resume_import_on_start():
-    """If the row says an import was running when the process died, continue from checkpoint."""
+    """On startup, settle whatever the import row was left in: a genuinely-interrupted 'running'
+    job resumes from its checkpoint; any leftover terminal state (done/cancelled/error) is moved
+    into the run history so the live state starts clean and idle."""
     if hm is None:
         return
     _ensure_import()
     row = query("SELECT status, globe_dir FROM import_state WHERE id=1", ())
-    if row and row[0]["status"] == "running":
+    if not row:
+        return
+    status = row[0]["status"]
+    if status == "running":
         globe = row[0]["globe_dir"] or GLOBE_DIR
         if os.path.isdir(globe):
             log.info("resuming interrupted historical import from checkpoint (%s)", globe)
             _launch_import(globe)
         else:
-            execute("UPDATE import_state SET status='error', message=%s, updated_at=now() WHERE id=1",
-                    ("globe_dir not found on restart: " + str(globe),))
+            _archive_and_idle("error", "globe_dir not found on restart: " + str(globe))
+    elif status != "idle":
+        # Leftover done/cancelled/error from before this build (or a prior version): archive + clear.
+        _archive_and_idle(status)
 
 
 # --- HTTP -------------------------------------------------------------------
