@@ -498,7 +498,9 @@ async function drawSingle(f){
   catch(e){ setStatus('trail request failed: ' + e); return; }
   pts = j.points || [];
   if (!pts.length){ setStatus(`${f.callsign||f.icao_hex}: no trail on disk (aged out, or before globe-history was collected)`); return; }
-  if (!iconMode) for (let i=1;i<pts.length;i++){
+  // A selected single flight always shows its trail (the icon/trail toggle only governs the
+  // multi-flight overview), plus the replay marker.
+  for (let i=1;i<pts.length;i++){
     const seg = L.polyline([[pts[i-1][1],pts[i-1][2]],[pts[i][1],pts[i][2]]],
       { color: altColor(pts[i][3]), weight: 3, opacity: .9 });
     seg.on('click', ()=> toggleId(f.id));
