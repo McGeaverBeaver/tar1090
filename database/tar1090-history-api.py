@@ -1243,7 +1243,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _serve_static(self, path):
         if path in ("/", ""):
-            path = "/index.html"
+            path = "/live.html"
         rel = os.path.normpath(path).lstrip("/\\")
         full = os.path.join(WEB_DIR, rel)
         if not os.path.abspath(full).startswith(os.path.abspath(WEB_DIR)) or not os.path.isfile(full):

@@ -225,6 +225,7 @@ const map = L.map('map', { worldCopyJump:true }).setView([40, -74], 4);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
   { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(map);
 let trailLayer = L.layerGroup().addTo(map);
+let lastBounds = null;  // bounds of whatever's currently drawn, so a hidden-then-shown map (mobile) can re-fit
 let marker = null, pts = [], anim = null, markerCat = 'jet';
 let iconMode = false;   // false = altitude trails, true = directional aircraft icons (no trails)
 
@@ -557,7 +558,8 @@ async function drawSingle(f){
   const last = pts.length - 1;
   marker = L.marker([pts[last][1],pts[last][2]], { icon: makePlaneIcon(markerCat, altColor(pts[last][3]), headingAt(last)),
     interactive:false, zIndexOffset:1000, keyboard:false }).addTo(trailLayer);
-  map.fitBounds(L.latLngBounds(pts.map(p=>[p[1],p[2]])).pad(0.1));
+  lastBounds = L.latLngBounds(pts.map(p=>[p[1],p[2]])).pad(0.1);
+  map.fitBounds(lastBounds);
   const s=$('slider'); s.max=last; s.value=last; showPoint(last);
   $('replay').classList.add('on');
   const srcLabel = j.source==='heatmap' ? 'heatmap' : j.source==='live' ? 'live (in progress)' : 'full trace';
@@ -595,7 +597,7 @@ async function drawMany(ids, isAll){
     for (const p of tp) bounds.push([p[1],p[2]]);
     count++;
   }
-  if (bounds.length) map.fitBounds(L.latLngBounds(bounds).pad(0.08));
+  if (bounds.length){ lastBounds = L.latLngBounds(bounds).pad(0.08); map.fitBounds(lastBounds); }
   const more = (isAll && flights.length > capped.length) ? ` (first ${capped.length} of ${flights.length})` : '';
   // Trace-file trails are always returned; only the heatmap fallback can be truncated for a
   // very wide range, so we still draw what we have and just note that some were skipped.
@@ -723,7 +725,9 @@ function setMView(v){
   document.body.classList.toggle('mv-map', v === 'map');
   $('mv-list').classList.toggle('on', v === 'list');
   $('mv-map').classList.toggle('on', v === 'map');
-  if (v === 'map') setTimeout(()=> map.invalidateSize(), 60);
+  // The map pane is display:none in list view (zero-size), so any fitBounds done while hidden
+  // can't compute zoom -- re-fit to the drawn trails once the pane is visible again.
+  if (v === 'map') setTimeout(()=>{ map.invalidateSize(); if (lastBounds) map.fitBounds(lastBounds); }, 60);
 }
 // collapsible advanced filters + the search-icon button
 $('advtoggle').onclick = ()=>{ $('adv').classList.toggle('on'); $('advtoggle').classList.toggle('on'); };
