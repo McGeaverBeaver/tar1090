@@ -506,11 +506,14 @@ async function drawSingle(f){
     seg.on('click', ()=> toggleId(f.id));
     seg.addTo(trailLayer);
   }
+  // Rest the plane at the END of the trail (latest position) with the trail behind it, like the
+  // Live map; pressing play replays from the start. Same altitude gradient as Live.
   markerCat = f.icao_type;
-  marker = L.marker([pts[0][1],pts[0][2]], { icon: makePlaneIcon(markerCat, altColor(pts[0][3]), headingAt(0)),
+  const last = pts.length - 1;
+  marker = L.marker([pts[last][1],pts[last][2]], { icon: makePlaneIcon(markerCat, altColor(pts[last][3]), headingAt(last)),
     interactive:false, zIndexOffset:1000, keyboard:false }).addTo(trailLayer);
   map.fitBounds(L.latLngBounds(pts.map(p=>[p[1],p[2]])).pad(0.1));
-  const s=$('slider'); s.max=pts.length-1; s.value=0; showPoint(0);
+  const s=$('slider'); s.max=last; s.value=last; showPoint(last);
   $('replay').classList.add('on');
   const srcLabel = j.source==='heatmap' ? 'heatmap' : j.source==='live' ? 'live (in progress)' : 'full trace';
   setStatus(`${f.callsign||f.icao_hex}: ${pts.length} points · ${srcLabel} — play to replay; click the trail or its row to deselect`);
@@ -532,10 +535,11 @@ async function drawMany(ids, isAll){
     const col = (f && f.military) ? '#ff4d4d' : hue((f && f.icao_hex) || String(id));
     const focus = ()=> { selected.clear(); selected.add(id); markRows(); renderMap(); };
     if (iconMode){
-      // directional aircraft icon at the START of the trail, pointed along travel; no line
-      const a = tp[0], b = tp[1] || a;
+      // directional aircraft icon at the END of the trail (latest position), pointed along
+      // travel -- matching the Live map (plane leads, trail behind); no line in this mode.
+      const n = tp.length, a = tp[n-1], b = tp[n-2] || a;
       const m = L.marker([a[1], a[2]], { icon: makePlaneIcon(f.icao_type, col,
-        bearingDeg([a[1],a[2]],[b[1],b[2]]), 22), interactive:true, keyboard:false });
+        bearingDeg([b[1],b[2]],[a[1],a[2]]), 22), interactive:true, keyboard:false });
       m.on('click', focus);
       m.addTo(trailLayer);
     } else {
