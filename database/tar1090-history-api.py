@@ -317,24 +317,29 @@ def _trace_doc_points(doc, lo, hi, pad=120):
     return out
 
 
-# Read a flight's still-live trail straight from readsb's run dir (it writes
-# traces/<xx>/trace_full_<hex>.json there for aircraft it's currently tracking, the same file
-# the main tar1090 map draws on click). Lets an in-progress ("LIVE") flight show its
-# trail-so-far before it's archived to globe_history. Returns clipped, time-sorted points.
+# Read a flight's still-live trail straight from readsb's run dir. readsb writes TWO files per
+# active aircraft: trace_full_<hex>.json (the whole flight, rewritten occasionally) and
+# trace_recent_<hex>.json (the last few minutes, rewritten constantly). The main tar1090 map
+# merges both; we do too, otherwise the freshest end of a live trail is missing. Lets an
+# in-progress ("LIVE") flight show its trail-so-far before it's archived to globe_history.
+# Returns clipped, de-duplicated, time-sorted points.
 def _live_trace_points(hexid, t_from, t_to, pad=120):
-    path = os.path.join(RUN_DIR, "traces", hexid[-2:], f"trace_full_{hexid}.json")
-    if not os.path.exists(path):
-        return []
-    try:
-        doc = _read_json_maybe_gzip(path)
-    except (OSError, ValueError) as e:
-        log.warning("live trace read failed %s: %s", path, e)
-        return []
+    base = os.path.join(RUN_DIR, "traces", hexid[-2:])
     lo = t_from.timestamp() if t_from else None
     hi = t_to.timestamp() if t_to else None
-    pts = _trace_doc_points(doc, lo, hi, pad)
-    pts.sort(key=lambda p: p[0])
-    return pts
+    merged = {}
+    for name in (f"trace_full_{hexid}.json", f"trace_recent_{hexid}.json"):
+        path = os.path.join(base, name)
+        if not os.path.exists(path):
+            continue
+        try:
+            doc = _read_json_maybe_gzip(path)
+        except (OSError, ValueError) as e:
+            log.warning("live trace read failed %s: %s", path, e)
+            continue
+        for p in _trace_doc_points(doc, lo, hi, pad):
+            merged[p[0]] = p                      # key by ms timestamp; recent extends full
+    return sorted(merged.values(), key=lambda p: p[0])
 
 
 # Read a flight's per-aircraft trace_full_<hex>.json from globe_history for the UTC day(s)

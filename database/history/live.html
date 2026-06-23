@@ -77,17 +77,20 @@
                 align-items: center; justify-content: center; border-radius: 6px; }
   #list-hd .m:hover { background: #2a2f38; color: #fff; }
   #list-gear { margin-left: auto; }
-  #list-body { flex: 0 1 auto; min-height: 0; overflow: auto; }   /* size to rows, scroll only when tall */
+  #list-body { flex: 0 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; }  /* vertical scroll only */
   #list.min #list-body, #list.min #list-settings { display: none; }
-  #list-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #list-tbl { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12px; }
   #list-tbl thead th { position: sticky; top: 0; background: rgba(20,23,28,.94); color: #8a93a2; font-size: 10px;
                        text-transform: uppercase; letter-spacing: .3px; text-align: left; padding: 6px 8px; cursor: pointer; white-space: nowrap; }
   #list-tbl thead th.n { text-align: right; }
   #list-tbl thead th:hover { color: #fff; }
   #list-tbl thead th .ar { color: #4d9bff; font-size: 9px; }
-  #list-tbl td { padding: 5px 8px; border-bottom: 1px solid rgba(255,255,255,.05); white-space: nowrap; }
+  #list-tbl td { padding: 5px 8px; border-bottom: 1px solid rgba(255,255,255,.05); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #list-tbl td.n { text-align: right; font-variant-numeric: tabular-nums; color: #cdd5e0; }
-  #list-tbl td.cs { font-weight: 600; max-width: 78px; overflow: hidden; text-overflow: ellipsis; }
+  #list-tbl td.cs { font-weight: 600; }
+  /* fixed column widths so the table always fits the panel (Flight takes the remainder) */
+  #list-tbl .c-t { width: 46px; } #list-tbl .c-alt { width: 54px; } #list-tbl .c-gs { width: 44px; }
+  #list-tbl .c-squawk { width: 48px; } #list-tbl .c-dist { width: 50px; }
   #list-tbl:not(.has-dist) .dist { display: none; }   /* hide Distance until a site location is known */
   #list-tbl.hide-t .c-t, #list-tbl.hide-alt .c-alt, #list-tbl.hide-gs .c-gs,
   #list-tbl.hide-squawk .c-squawk, #list-tbl.hide-dist .c-dist { display: none; }   /* user column toggles */
@@ -414,6 +417,13 @@ async function loadSelTrail(hex){
   catch(e){ return; }
   if (my !== selTrailReq || hex !== selectedHex) return;     // superseded / deselected
   const p = j.points || [];
+  // extend the trail to the aircraft's current live position so it reaches the marker
+  const a = lastData.get(hex);
+  if (a && a.lat!=null && p.length){
+    const last = p[p.length-1];
+    if (last[1] !== a.lat || last[2] !== a.lon)
+      p.push([Date.now(), a.lat, a.lon, a.alt==='ground' ? 0 : a.alt]);
+  }
   for (let i=1;i<p.length;i++){
     L.polyline([[p[i-1][1],p[i-1][2]],[p[i][1],p[i][2]]],
       { color: altColor(p[i][3]), weight: 3, opacity: .9 }).addTo(selLayer);
