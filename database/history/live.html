@@ -65,7 +65,7 @@
             border-radius: 8px; padding: 6px 11px; color: #cdd5e0; font-size: 12px; max-width: 50%; }
 
   /* live aircraft list — transparent glass panel, docked left, minimizable */
-  #list { position: absolute; left: 10px; top: 78px; bottom: 10px; width: 322px; z-index: 610;
+  #list { position: absolute; left: 10px; top: 10px; bottom: 10px; width: 322px; z-index: 610;
           background: rgba(18,21,26,.62); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
           border: 1px solid #313845; border-radius: 14px; box-shadow: 0 12px 34px rgba(0,0,0,.55);
           display: flex; flex-direction: column; overflow: hidden; }
@@ -73,12 +73,13 @@
              background: linear-gradient(135deg, rgba(45,108,223,.22), rgba(45,108,223,0)); }
   #list-hd .t { font-weight: 700; font-size: 13px; }
   #list-hd .c { color: #9aa3b2; font-size: 11px; font-variant-numeric: tabular-nums; }
-  #list-hd .m { margin-left: auto; color: #9aa3b2; font-size: 15px; width: 22px; height: 22px; display: flex;
+  #list-hd .m { color: #9aa3b2; font-size: 15px; width: 22px; height: 22px; display: flex;
                 align-items: center; justify-content: center; border-radius: 6px; }
-  #list-hd:hover .m { background: #2a2f38; color: #fff; }
+  #list-hd .m:hover { background: #2a2f38; color: #fff; }
+  #list-gear { margin-left: auto; }
   #list-body { flex: 1; min-height: 0; overflow: auto; }
   #list.min { bottom: auto; }
-  #list.min #list-body { display: none; }
+  #list.min #list-body, #list.min #list-settings { display: none; }
   #list-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
   #list-tbl thead th { position: sticky; top: 0; background: rgba(20,23,28,.94); color: #8a93a2; font-size: 10px;
                        text-transform: uppercase; letter-spacing: .3px; text-align: left; padding: 6px 8px; cursor: pointer; white-space: nowrap; }
@@ -89,6 +90,18 @@
   #list-tbl td.n { text-align: right; font-variant-numeric: tabular-nums; color: #cdd5e0; }
   #list-tbl td.cs { font-weight: 600; max-width: 78px; overflow: hidden; text-overflow: ellipsis; }
   #list-tbl:not(.has-dist) .dist { display: none; }   /* hide Distance until a site location is known */
+  #list-tbl thead th .u { color: #6b7585; font-weight: 400; }
+  #list-hd .m.gear { font-size: 14px; }
+  /* settings popover */
+  #list-settings { display: none; padding: 10px 12px; border-bottom: 1px solid #2a313c; background: rgba(20,23,28,.55); }
+  #list-settings.on { display: block; }
+  #list-settings .sg { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  #list-settings .sgk { width: 64px; font-size: 11px; color: #9aa3b2; }
+  #list-settings .sgv { display: flex; gap: 4px; flex: 1; }
+  #list-settings .seg { flex: 1; background: rgba(42,47,56,.6); color: #cdd5e0; border: 1px solid #313845;
+                        border-radius: 7px; padding: 5px 0; font-size: 11px; font-weight: 600; cursor: pointer; }
+  #list-settings .seg:hover { background: #353c47; color: #fff; }
+  #list-settings .seg.on { background: #2d6cdf; border-color: #3b78e8; color: #fff; }
   #list-tbl tr.lr { cursor: pointer; }
   #list-tbl tr.lr:hover { background: rgba(255,255,255,.06); }
   #list-tbl tr.lr.sel { background: rgba(45,108,223,.32); }
@@ -127,24 +140,26 @@
   <div id="list" class="open">
     <div id="list-hd">
       <span class="t">Live aircraft</span><span class="c" id="list-count">—</span>
+      <span class="m gear" id="list-gear" title="Settings">⚙</span>
       <span class="m" id="list-min" title="Minimize / expand">─</span>
     </div>
+    <div id="list-settings"></div>
     <div id="list-body">
       <table id="list-tbl">
         <thead><tr>
-          <th data-k="flight">Flight</th><th data-k="t">Type</th>
-          <th data-k="alt" class="n">Alt</th><th data-k="gs" class="n">Spd</th>
-          <th data-k="squawk" class="n">Sqk</th><th data-k="dist" class="n dist">Dist</th>
+          <th data-k="flight" data-label="Flight">Flight</th><th data-k="t" data-label="Type">Type</th>
+          <th data-k="alt" data-label="Alt" class="n">Alt</th><th data-k="gs" data-label="Spd" class="n">Spd</th>
+          <th data-k="squawk" data-label="Sqk" class="n">Sqk</th><th data-k="dist" data-label="Dist" class="n dist">Dist</th>
         </tr></thead>
         <tbody id="list-rows"></tbody>
       </table>
     </div>
   </div>
   <div id="legend">
-    <div class="lg-title">Altitude</div>
+    <div class="lg-title" id="lgtitle">Altitude</div>
     <div class="lg-body">
       <div class="lg-bar" id="lgbar"></div>
-      <div class="lg-ticks"><span>40k+</span><span>30k</span><span>20k</span><span>10k</span><span>0 ft</span></div>
+      <div class="lg-ticks" id="lgticks"></div>
     </div>
   </div>
   <div id="card">
@@ -157,7 +172,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 const $ = id => document.getElementById(id);
-const map = L.map('map', { worldCopyJump:true, zoomControl:true }).setView([40, -74], 7);
+const map = L.map('map', { worldCopyJump:true, zoomControl:false }).setView([40, -74], 7);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
   { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(map);
 
@@ -222,13 +237,31 @@ function makePlaneIcon(cat, color, deg, size, sel){
   return L.divIcon({ className:'planeicon' + (sel?' sel':''), html: svg, iconSize:[size,size], iconAnchor:[size/2, size/2] });
 }
 
+// ---- user-selectable units (persisted in the browser) -------------------------------------
+const UNITS = {
+  speed: { kt:{f:1,s:'kt'}, kmh:{f:1.852,s:'km/h'}, mph:{f:1.15078,s:'mph'} },
+  alt:   { ft:{f:1,s:'ft'}, m:{f:0.3048,s:'m'} },
+  dist:  { nm:{f:1,s:'nm'}, km:{f:1.852,s:'km'}, mi:{f:1.15078,s:'mi'} },
+};
+function loadSettings(){ const d = { speed:'kt', alt:'ft', dist:'nm' };
+  try { return Object.assign(d, JSON.parse(localStorage.getItem('liveUnits') || '{}')); } catch(e){ return d; } }
+let settings = loadSettings();
+function saveSettings(){ try { localStorage.setItem('liveUnits', JSON.stringify(settings)); } catch(e){} }
+const uSpeed = () => UNITS.speed[settings.speed].s, uAlt = () => UNITS.alt[settings.alt].s, uDist = () => UNITS.dist[settings.dist].s;
+const cvSpeed = g => g==null ? null : g*UNITS.speed[settings.speed].f;
+const cvAlt   = a => (a==null || a==='ground') ? null : a*UNITS.alt[settings.alt].f;
+const cvDist  = d => d==null ? null : d*UNITS.dist[settings.dist].f;
+
 // ---- formatting helpers for the flight-data bubble ----------------------------------------
 function cardinal(deg){ const c=['N','NE','E','SE','S','SW','W','NW']; return c[Math.round(deg/45)%8]; }
-function fmtAlt(a){ if (a==null) return '—'; if (a==='ground') return 'on ground'; return a.toLocaleString()+' <small>ft</small>'; }
-function fmtSpd(g){ return g==null ? '—' : Math.round(g)+' <small>kt</small>'; }
+function fmtAlt(a){ if (a==null) return '—'; if (a==='ground') return 'on ground';
+  return Math.round(cvAlt(a)).toLocaleString()+' <small>'+uAlt()+'</small>'; }
+function fmtSpd(g){ const v=cvSpeed(g); return v==null ? '—' : Math.round(v)+' <small>'+uSpeed()+'</small>'; }
 function fmtTrk(t){ return t==null ? '—' : Math.round(t)+'° <small>'+cardinal(t)+'</small>'; }
-function fmtRate(r){ if (r==null||r===0) return r===0?'level':'—';
-  return `<span class="${r>0?'up':'dn'}">${r>0?'▲':'▼'} ${Math.abs(r).toLocaleString()} <small>fpm</small></span>`; }
+function fmtRate(r){ if (r==null) return '—'; if (r===0) return 'level';
+  let v=r, unit='fpm'; if (settings.alt==='m'){ v=r*0.00508; unit='m/s'; }
+  const txt = settings.alt==='m' ? Math.abs(v).toFixed(1) : Math.abs(v).toLocaleString();
+  return `<span class="${r>0?'up':'dn'}">${r>0?'▲':'▼'} ${txt} <small>${unit}</small></span>`; }
 function fmtSeen(s){ if (s==null) return '—'; if (s<1) return 'now'; return Math.round(s)+'s ago'; }
 function isMil(sq){ return sq && /^(7[5-7])/.test(sq); } // emergency/special squawks (highlight)
 
@@ -253,7 +286,8 @@ function planeColor(a){ return (a.military || isMil(a.squawk)) ? '#ff4d4d' : alt
 function tipOpts(){ return { permanent: showLabels, direction: showLabels ? 'right' : 'top',
   offset: showLabels ? [10,0] : [0,-10], opacity: .95, className: 'actip' }; }
 function tipText(a){
-  const alt = a.alt === 'ground' ? ' · grnd' : (a.alt != null ? ' · ' + a.alt.toLocaleString() + ' ft' : '');
+  const alt = a.alt === 'ground' ? ' · grnd'
+            : (a.alt != null ? ' · ' + Math.round(cvAlt(a.alt)).toLocaleString() + ' ' + uAlt() : '');
   return (a.flight || a.r || a.hex || '') + alt;
 }
 
@@ -337,11 +371,11 @@ function renderList(acs){
   rows.sort((x,y)=>{ const vx=val(x), vy=val(y); return vx<vy ? -dir : vx>vy ? dir : 0; });
   const body = $('list-body'), keep = body.scrollTop;
   $('list-rows').innerHTML = rows.map(a => {
-    const alt = a.alt==='ground' ? 'grnd' : (a.alt!=null ? a.alt.toLocaleString() : '—');
-    const d = distNm(a);
+    const alt = a.alt==='ground' ? 'grnd' : (a.alt!=null ? Math.round(cvAlt(a.alt)).toLocaleString() : '—');
+    const d = cvDist(distNm(a));
     return `<tr class="lr${a.hex===selectedHex?' sel':''}${a.military?' mil':''}" data-hex="${a.hex}">`
       + `<td class="cs">${a.flight || a.r || a.hex}</td><td>${a.t || ''}</td>`
-      + `<td class="n">${alt}</td><td class="n">${a.gs!=null ? Math.round(a.gs) : '—'}</td>`
+      + `<td class="n">${alt}</td><td class="n">${a.gs!=null ? Math.round(cvSpeed(a.gs)) : '—'}</td>`
       + `<td class="n">${a.squawk || '—'}</td>`
       + `<td class="n dist">${d!=null ? (d<10 ? d.toFixed(1) : Math.round(d)) : '—'}</td></tr>`;
   }).join('');
@@ -351,10 +385,12 @@ function renderList(acs){
     if (r){ r.scrollIntoView({ block: 'nearest' }); pendingScroll = false; }
   }
   $('list-count').textContent = `· ${rows.length}`;
-  // reflect the active sort column in the header
+  // reflect the active sort column + chosen units in the header
   document.querySelectorAll('#list-tbl thead th').forEach(th => {
-    const ar = th.dataset.k===listSort.key ? `<span class="ar">${dir<0?'▼':'▲'}</span>` : '';
-    th.innerHTML = th.textContent.replace(/[▼▲]/g,'').trim() + ' ' + ar;
+    const k = th.dataset.k;
+    const u = k==='alt' ? uAlt() : k==='gs' ? uSpeed() : k==='dist' ? uDist() : '';
+    const ar = k===listSort.key ? ` <span class="ar">${dir<0?'▼':'▲'}</span>` : '';
+    th.innerHTML = th.dataset.label + (u ? ` <span class="u">${u}</span>` : '') + ar;
   });
 }
 
@@ -468,12 +504,44 @@ $('t-trails').onclick    = e => { showTrails = !showTrails; e.currentTarget.clas
 $('t-ground').onclick    = e => { showGround = !showGround; e.currentTarget.classList.toggle('on', showGround); poll(); };
 $('t-recenter').onclick  = () => fitAll();
 
-// build the altitude legend bar straight from altColor() so it always matches the icons/trails
-(function buildLegend(){
+// altitude legend bar, built straight from altColor() so it always matches the icons/trails;
+// tick labels follow the chosen altitude unit
+function buildLegend(){
   const max = 45000, steps = 30, stops = [];
   for (let i=0;i<=steps;i++){ const a = max*i/steps; stops.push(`${altColor(a)} ${(i/steps*100).toFixed(1)}%`); }
   $('lgbar').style.background = `linear-gradient(to top, ${stops.join(',')})`;
-})();
+  $('lgtitle').textContent = 'Altitude · ' + uAlt();
+  $('lgticks').innerHTML = [40000,30000,20000,10000,0].map(ft => {
+    const v = ft * UNITS.alt[settings.alt].f;
+    return `<span>${v>=1000 ? (v/1000).toFixed(v>=10000?0:1)+'k' : Math.round(v)}</span>`;
+  }).join('');
+}
+buildLegend();
+
+// ---- settings gear: unit preferences, persisted -------------------------------------------
+function buildSettings(){
+  const groups = [
+    ['speed', 'Speed',    { kt:'kt', kmh:'km/h', mph:'mph' }],
+    ['alt',   'Altitude', { ft:'ft', m:'m' }],
+    ['dist',  'Distance', { nm:'nm', km:'km', mi:'mi' }],
+  ];
+  $('list-settings').innerHTML = groups.map(([key,label,opts]) =>
+    `<div class="sg"><div class="sgk">${label}</div><div class="sgv">`
+    + Object.entries(opts).map(([v,t]) => `<button class="seg${settings[key]===v?' on':''}" data-g="${key}" data-v="${v}">${t}</button>`).join('')
+    + `</div></div>`).join('');
+}
+function applyUnits(){
+  buildLegend();
+  if (lastData.size) renderList([...lastData.values()]);
+  if (selectedHex) renderInfo(lastData.get(selectedHex));
+  applyLabels();
+}
+buildSettings();
+$('list-gear').onclick = e => { e.stopPropagation(); $('list-settings').classList.toggle('on'); };
+$('list-settings').addEventListener('click', e => {
+  const b = e.target.closest('.seg'); if (!b) return;
+  settings[b.dataset.g] = b.dataset.v; saveSettings(); buildSettings(); applyUnits();
+});
 
 // live-list: sort on header click, select on row click, minimize/expand on header click
 document.querySelectorAll('#list-tbl thead th').forEach(th => th.addEventListener('click', () => {
