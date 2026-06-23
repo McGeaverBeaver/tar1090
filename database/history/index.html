@@ -173,6 +173,7 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="acicons.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const pad = n => String(n).padStart(2, '0');
@@ -455,46 +456,15 @@ function onRow(f, ev){
 }
 function toggleId(id){ selected.has(id) ? selected.delete(id) : selected.add(id); markRows(); renderMap(); }
 
-// ---- directional aircraft icons (type-shaped, pointed along travel) --------
-// Top-down silhouettes in a 0..64 viewBox, nose at the top (north); we rotate by the
-// trail's travel bearing. Shape is picked from the ICAO type so a tanker, a C-130 and a
-// fighter look different. The trace has no heading field, so direction comes from the
-// movement between consecutive points.
-const PLANE_PATHS = {
-  jet:    'M32 4 L34 14 L34 26 L60 40 L60 43 L36 38 L35 50 L43 58 L43 60 L32 57 L21 60 L21 58 L29 50 L28 38 L4 43 L4 40 L30 26 L30 14 Z',
-  heavy:  'M32 3 L35 13 L35 24 L62 38 L62 42 L37 36 L36 51 L46 59 L46 61 L32 58 L18 61 L18 59 L28 51 L27 36 L2 42 L2 38 L29 24 L29 13 Z',
-  prop:   'M32 5 L34 15 L34 23 L58 28 L58 32 L34 33 L34 50 L42 57 L42 59 L32 56 L22 59 L22 57 L30 50 L30 33 L6 32 L6 28 L30 23 L30 15 Z',
-  fighter:'M32 3 L34 30 L52 47 L52 51 L35 43 L36 55 L41 61 L32 57 L23 61 L28 55 L29 43 L12 51 L12 47 L30 30 Z',
-};
-const _HELI    = /^(EC[0-9]|AS[0-9]|A109|A119|A139|A169|A189|B06|B47[0-9]|B407|B412|B429|R22|R44|R66|S76|S92|S61|S64|S70|EH10|H60|H64|H47|UH[0-9]|CH[0-9]|AH[0-9]|MI[0-9]|H500|EXPL|GAZL)/;
-const _FIGHTER = /^(F1[0-9]|F2[0-9]|F35|F22|F15|F16|F18|F5|F4|EUFI|TOR|MIG|SU[0-9]|A10|AV8B|GR4|RFAL|JAS|J10|J20|HAWK|T38)/;
-const _HEAVY   = /^(A38|A34|A33|A35|A30|A31|B74|B76|B77|B78|C5|C17|A124|A225|B52|IL76|IL96|AN12|AN22|AN24|AN26|E3|E6|K35|R135|B703|MD11|DC10|VC10)/;
-const _PROP    = /^(C30|C13|P3|B35|BE[0-9]|DH8|DHC|AT4|AT5|AT7|AT8|SF3|SW4|E110|E120|C208|PC12|PC6|D28|D328|TBM|PA[0-9]|C1[0-9][0-9]|C2[0-9][0-9]|M20|SR2|DA4|L410|F406|SB20|SH36|AN2)/;
-function classifyType(f){
-  const t = ((f && f.icao_type) || '').toUpperCase().trim();
-  if (!t) return 'jet';
-  if (_HELI.test(t))    return 'heli';
-  if (_FIGHTER.test(t)) return 'fighter';
-  if (_HEAVY.test(t))   return 'heavy';
-  if (_PROP.test(t))    return 'prop';
-  return 'jet';
-}
-function planeShape(cat, color){
-  if (cat === 'heli') return (
-    `<g stroke="#0b0d10" stroke-width="2.2" stroke-linejoin="round" fill="${color}">`
-    + `<rect x="26" y="22" width="12" height="24" rx="6"/><rect x="30.5" y="44" width="3" height="15"/>`
-    + `<rect x="25" y="55" width="14" height="3" rx="1.5"/></g>`
-    + `<g stroke="${color}" stroke-width="2.4" stroke-linecap="round" opacity="0.92">`
-    + `<line x1="9" y1="28" x2="55" y2="36"/><line x1="9" y1="36" x2="55" y2="28"/></g>`
-  );
-  return `<path d="${PLANE_PATHS[cat] || PLANE_PATHS.jet}" fill="${color}" stroke="#0b0d10" stroke-width="2.4" stroke-linejoin="round"/>`;
-}
-function makePlaneIcon(cat, color, deg, size){
-  size = size || 30;
-  const svg = `<svg viewBox="0 0 64 64" width="${size}" height="${size}" `
-    + `style="transform:rotate(${(deg||0).toFixed(0)}deg);display:block;filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.7))">`
-    + `${planeShape(cat, color)}</svg>`;
-  return L.divIcon({ className:'planeicon', html: svg, iconSize:[size,size], iconAnchor:[size/2, size/2] });
+// ---- realistic type-shaped aircraft icons (tar1090's own marker set, via acicons.js) -------
+// Shape is picked from the ICAO type, pointed along the trail's travel bearing (the trace has
+// no heading field, so direction comes from movement between consecutive points).
+function makePlaneIcon(type, color, deg, size, category){
+  const r = aircraftShapeSVG(type, category, null, color, '#0b0d10', size || 30);
+  const rot = r.noRotate ? 0 : (deg || 0);
+  const html = `<div style="transform:rotate(${rot.toFixed(0)}deg);width:${r.w.toFixed(1)}px;height:${r.h.toFixed(1)}px;`
+    + `filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.7))">${r.svg}</div>`;
+  return L.divIcon({ className:'planeicon', html, iconSize:[r.w, r.h], iconAnchor:[r.w/2, r.h/2] });
 }
 function bearingDeg(a, b){ // a,b = [lat,lon]
   const r = Math.PI/180, dLon = (b[1]-a[1])*r, la1 = a[0]*r, la2 = b[0]*r;
@@ -534,7 +504,7 @@ async function drawSingle(f){
     seg.on('click', ()=> toggleId(f.id));
     seg.addTo(trailLayer);
   }
-  markerCat = classifyType(f);
+  markerCat = f.icao_type;
   marker = L.marker([pts[0][1],pts[0][2]], { icon: makePlaneIcon(markerCat, altColor(pts[0][3]), headingAt(0)),
     interactive:false, zIndexOffset:1000, keyboard:false }).addTo(trailLayer);
   map.fitBounds(L.latLngBounds(pts.map(p=>[p[1],p[2]])).pad(0.1));
@@ -562,7 +532,7 @@ async function drawMany(ids, isAll){
     if (iconMode){
       // directional aircraft icon at the START of the trail, pointed along travel; no line
       const a = tp[0], b = tp[1] || a;
-      const m = L.marker([a[1], a[2]], { icon: makePlaneIcon(classifyType(f), col,
+      const m = L.marker([a[1], a[2]], { icon: makePlaneIcon(f.icao_type, col,
         bearingDeg([a[1],a[2]],[b[1],b[2]]), 22), interactive:true, keyboard:false });
       m.on('click', focus);
       m.addTo(trailLayer);
