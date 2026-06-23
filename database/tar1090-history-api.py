@@ -1081,13 +1081,14 @@ class Handler(BaseHTTPRequestHandler):
     def _oidc_callback(self, u):
         q = parse_qs(u.query)
         if "error" in q:
-            self._send(400, {"error": "login failed: " + q.get("error_description", q["error"])[0]})
+            log.warning("oidc callback error: %s", q.get("error_description", q["error"])[0])
+            self._redirect("/denied?reason=token", cookies=[(TX_COOKIE, "", 0)])
             return
         code = q.get("code", [None])[0]
         tx = self._cookie(TX_COOKIE)
         txd = _unsign(tx) if tx else None
         if not code or not txd or txd.get("s") != q.get("state", [None])[0]:
-            self._send(400, {"error": "invalid login state -- please retry from /oidc/login"})
+            self._redirect("/denied?reason=state", cookies=[(TX_COOKIE, "", 0)])
             return
         # Serialize per-code so a duplicate callback delivery reuses the first result instead of
         # trying to redeem the (now-consumed) single-use code again.
@@ -1108,10 +1109,12 @@ class Handler(BaseHTTPRequestHandler):
                     "client_id": OIDC_CLIENT_ID, "client_secret": OIDC_CLIENT_SECRET,
                     "code_verifier": txd["v"]})
             except urllib.error.HTTPError as e:
-                self._send(502, {"error": "token exchange failed", "detail": e.read().decode()[:300]})
+                log.warning("oidc token exchange failed: %s", e.read().decode()[:300])
+                self._redirect("/denied?reason=token", cookies=[(TX_COOKIE, "", 0)])
                 return
             except Exception as e:                       # noqa: BLE001
-                self._send(502, {"error": "token exchange failed: " + str(e)})
+                log.warning("oidc token exchange failed: %s", e)
+                self._redirect("/denied?reason=token", cookies=[(TX_COOKIE, "", 0)])
                 return
             claims = _jwt_payload(tok.get("id_token", "")) or {}
             aud = claims.get("aud")
@@ -1120,7 +1123,7 @@ class Handler(BaseHTTPRequestHandler):
                     or claims.get("iss", "").rstrip("/") != OIDC_ISSUER
                     or OIDC_CLIENT_ID not in aud
                     or claims.get("exp", 0) < time.time()):
-                self._send(400, {"error": "id token validation failed"})
+                self._redirect("/denied?reason=idtoken", cookies=[(TX_COOKIE, "", 0)])
                 return
             groups = claims.get("groups") or []
             name = claims.get("name") or claims.get("preferred_username")
@@ -1136,7 +1139,8 @@ class Handler(BaseHTTPRequestHandler):
                     pass
             role = _role_for(groups)
             if role is None:
-                self._send(403, {"error": "your account is not in an authorized group for this site"})
+                log.info("oidc: %s authenticated but in no authorized group (%s)", email or name, groups)
+                self._redirect("/denied?reason=group", cookies=[(TX_COOKIE, "", 0)])
                 return
             sess = _sign(json.dumps({"sub": claims.get("sub"), "name": name, "email": email,
                                      "role": role, "exp": time.time() + OIDC_SESSION_TTL}).encode())
@@ -1145,14 +1149,8 @@ class Handler(BaseHTTPRequestHandler):
         self._redirect(nxt, cookies=[(SESSION_COOKIE, sess, OIDC_SESSION_TTL), (TX_COOKIE, "", 0)])
 
     def _oidc_logout(self):
-        loc = OIDC_LOGOUT_REDIRECT or "/"
-        try:
-            end = oidc_meta().get("end_session_endpoint")
-            if end:
-                home = OIDC_LOGOUT_REDIRECT or self._redirect_uri().replace("/oidc/callback", "/")
-                loc = end + "?" + urlencode({"post_logout_redirect_uri": home})
-        except Exception:                            # noqa: BLE001
-            pass
+        # Clear our session and land on the branded "signed out" splash (no auto sign-in).
+        loc = OIDC_LOGOUT_REDIRECT or "/login?loggedout=1"
         self._redirect(loc, cookies=[(SESSION_COOKIE, "", 0)])
 
     def _gate(self, path, is_api):
@@ -1165,7 +1163,7 @@ class Handler(BaseHTTPRequestHandler):
             if is_api:
                 self._send(401, {"error": "authentication required"})
             else:
-                self._redirect("/oidc/login?next=" + quote(self.path))
+                self._redirect("/login?next=" + quote(self.path))
             return False
         if sess.get("role") != "admin" and _is_admin_path(path):
             if is_api:
@@ -1181,6 +1179,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/me":                        # always reachable (drives the UI)
             self._send(200, self._me())
             return
+        if OIDC_ENABLED:
+            if path in ("/login", "/login.html"):     # branded sign-in splash (public)
+                self._serve_static("/login.html")
+                return
+            if path in ("/denied", "/denied.html"):    # friendly access-denied page (public)
+                self._serve_static("/denied.html")
+                return
         if OIDC_ENABLED and self.command == "GET":    # flow is GET-only (a HEAD must not redeem the code)
             if path == "/oidc/login":
                 self._oidc_login(u)

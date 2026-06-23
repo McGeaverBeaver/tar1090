@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>You can't park here · tar1090 reports</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font: 15px/1.5 system-ui, sans-serif; color: #e6e6e6; display: flex; align-items: center; justify-content: center;
+         background: radial-gradient(1200px 700px at 50% -10%, #20283e 0%, #11131a 55%, #0b0d10 100%); overflow: hidden; }
+  .card { position: relative; width: 460px; max-width: 94vw; padding: 26px 28px 24px; text-align: center;
+          background: rgba(20,23,28,.72); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+          border: 1px solid #2c3340; border-radius: 22px; box-shadow: 0 26px 80px rgba(0,0,0,.62); }
+  .badge { display: inline-block; font-size: 11px; letter-spacing: .16em; text-transform: uppercase; font-weight: 700;
+           color: #ffb4a8; background: rgba(179,64,58,.18); border: 1px solid #6e2d2a; border-radius: 999px; padding: 4px 12px; }
+  /* the scene */
+  .scene { position: relative; height: 188px; margin: 8px 0 6px; }
+  .ground { position: absolute; left: 0; right: 0; bottom: 26px; height: 30px;
+            background: linear-gradient(#222836, #171b25); border-top: 2px solid #39414f; }
+  .ground::after { content: ""; position: absolute; left: 0; right: 0; top: 13px; height: 3px;
+                   background: repeating-linear-gradient(90deg, #d8b54a, #d8b54a 22px, transparent 22px, transparent 40px); opacity: .8; }
+  .nopark { position: absolute; left: 50%; bottom: 56px; transform: translateX(-50%);
+            width: 46px; height: 46px; border-radius: 50%; border: 4px solid #e0534c; color: #e0534c; font-weight: 800;
+            display: flex; align-items: center; justify-content: center; font-size: 11px; letter-spacing: .04em;
+            background: #1a1d23; box-shadow: 0 6px 14px rgba(0,0,0,.5); }
+  .nopark::before { content: ""; position: absolute; left: 4px; right: 4px; top: 50%; height: 4px; background: #e0534c; transform: rotate(-45deg); }
+  .plane { position: absolute; left: 20%; bottom: 40px; font-size: 64px; transform: rotate(125deg);
+           filter: drop-shadow(0 6px 8px rgba(0,0,0,.55)); animation: judder .5s ease-in-out infinite; }
+  @keyframes judder { 0%,100% { transform: rotate(125deg) translate(0,0); } 50% { transform: rotate(123deg) translate(1px,-1px); } }
+  .boom { position: absolute; left: 28%; bottom: 58px; font-size: 40px; animation: pop 1.6s ease-in-out infinite; }
+  @keyframes pop { 0%,100% { transform: scale(.92) rotate(-4deg); opacity: .9; } 50% { transform: scale(1.08) rotate(4deg); opacity: 1; } }
+  .smoke { position: absolute; left: 30%; bottom: 84px; font-size: 26px; opacity: .0; animation: rise 3.2s linear infinite; }
+  .smoke.b { left: 36%; animation-delay: 1s; } .smoke.c { left: 24%; animation-delay: 2s; }
+  @keyframes rise { 0% { transform: translateY(0) scale(.6); opacity: 0; } 20% { opacity: .7; }
+                    100% { transform: translateY(-70px) scale(1.3); opacity: 0; } }
+  .pilot { position: absolute; right: 12%; bottom: 40px; font-size: 52px; animation: stomp .9s ease-in-out infinite; }
+  @keyframes stomp { 0%,100% { transform: translateY(0) rotate(2deg); } 50% { transform: translateY(-3px) rotate(-2deg); } }
+  .bubble { position: absolute; right: 7%; bottom: 116px; max-width: 190px; background: #fff; color: #16181d;
+            font-weight: 800; font-size: 14px; line-height: 1.25; padding: 9px 12px; border-radius: 12px;
+            box-shadow: 0 8px 20px rgba(0,0,0,.45); transform: rotate(-3deg); }
+  .bubble::after { content: ""; position: absolute; left: 22px; bottom: -10px; border: 7px solid transparent;
+                   border-top-color: #fff; border-bottom: 0; }
+  h1 { font-size: 24px; margin: 14px 0 4px; }
+  p { color: #9aa3b2; margin: 0 auto 20px; font-size: 14.5px; max-width: 380px; }
+  .btns { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .btn { text-decoration: none; background: #2d6cdf; color: #fff; font-weight: 600; padding: 11px 20px; border-radius: 10px;
+         border: 1px solid #3b78e8; transition: background .12s, transform .06s; }
+  .btn:hover { background: #3b78e8; } .btn:active { transform: translateY(1px); }
+  .btn.ghost { background: #2a2f38; border-color: #3a4150; color: #cdd5e0; }
+  .btn.ghost:hover { background: #353c47; }
+  @media (max-width: 480px) { .scene { height: 168px; } .plane { font-size: 52px; } .pilot { font-size: 44px; } }
+</style>
+</head>
+<body>
+<div class="card">
+  <span class="badge">⛔ Access denied</span>
+  <div class="scene">
+    <div class="ground"></div>
+    <div class="nopark">P</div>
+    <div class="smoke">💨</div><div class="smoke b">💨</div><div class="smoke c">💨</div>
+    <div class="boom">💥</div>
+    <div class="plane">🛩️</div>
+    <div class="bubble" id="bubble">YOU CAN’T PARK HERE!!</div>
+    <div class="pilot">🧑‍✈️</div>
+  </div>
+  <h1 id="title">Cleared for… nothing.</h1>
+  <p id="msg">Your name isn’t on the crew list for this airfield.</p>
+  <div class="btns">
+    <a class="btn" href="login">Try again</a>
+    <a class="btn ghost" href="oidc/logout">Use a different account</a>
+  </div>
+</div>
+<script>
+  var reason = new URLSearchParams(location.search).get('reason') || 'group';
+  var copy = {
+    group:  ["Cleared for… nothing.", "Your account signed in fine — but it isn’t in an authorized group for this site. Ask an admin to add you to the crew list."],
+    state:  ["That one drifted off the runway.", "The sign-in attempt lost its bearings (state/session mismatch). Give it another go."],
+    token:  ["We hit some turbulence.", "Couldn’t complete the handshake with the identity provider. Try again in a moment."],
+    idtoken:["Flight plan didn’t check out.", "The sign-in token failed validation. Please try signing in again."]
+  };
+  var c = copy[reason] || copy.group;
+  document.getElementById('title').textContent = c[0];
+  document.getElementById('msg').textContent = c[1];
+  if (reason !== 'group') document.getElementById('bubble').textContent = "GO AROUND!";
+</script>
+</body>
+</html>
