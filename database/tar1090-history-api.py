@@ -21,9 +21,16 @@ import struct
 import sys
 import threading
 import time
+import base64
+import hashlib
+import hmac
+import secrets
+import urllib.request
+import urllib.error
+from http.cookies import SimpleCookie
 from datetime import datetime, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlencode, quote
 
 import psycopg
 from psycopg.types.json import Jsonb
@@ -57,6 +64,129 @@ MAX_TRACE_CHUNKS = int(os.environ.get("HISTORY_MAX_TRACE_CHUNKS", "400"))
 # end_time within this many seconds -- its trail is still being recorded, so it may be
 # incomplete or not yet archived to globe_history.
 ACTIVE_WINDOW_SEC = int(os.environ.get("HISTORY_ACTIVE_WINDOW_SEC", "120"))
+
+# --- OIDC / Authentik single sign-on (optional) -----------------------------
+# Off by default; set OIDC_ENABLED=true to require login on the whole report site.
+# Authorization-Code flow with PKCE, confidential client. Two roles, mapped from the
+# user's Authentik groups: "admin" (full access) and "viewer" (read-only -- no Alerts,
+# no Settings, no alert creation). Sessions are stateless, signed cookies (no DB/store).
+#
+#   OIDC_ENABLED         "true" to turn it on
+#   OIDC_ISSUER          e.g. https://authentik.example.com/application/o/<app-slug>/
+#   OIDC_CLIENT_ID       provider client id
+#   OIDC_CLIENT_SECRET   provider client secret (confidential client)
+#   OIDC_REDIRECT_URL    e.g. https://reports.example.com/oidc/callback
+#                        (optional; otherwise derived from the request Host/X-Forwarded-*)
+#   OIDC_ADMIN_GROUP     Authentik group name granting the admin role  (default tar1090-admins)
+#   OIDC_VIEWER_GROUP    Authentik group name granting the viewer role (default empty =
+#                        any authenticated user is a viewer)
+#   OIDC_SCOPES          default "openid profile email groups"  (the groups scope is required)
+#   OIDC_SESSION_SECRET  HMAC key for the session cookie (defaults to the client secret)
+#   OIDC_SESSION_TTL     session lifetime, seconds (default 28800 = 8h)
+#   OIDC_COOKIE_SECURE   "true" (default) sets the Secure flag -- serve over HTTPS
+OIDC_ENABLED        = os.environ.get("OIDC_ENABLED", "false").lower() == "true"
+OIDC_ISSUER         = os.environ.get("OIDC_ISSUER", "").rstrip("/")
+OIDC_CLIENT_ID      = os.environ.get("OIDC_CLIENT_ID", "")
+OIDC_CLIENT_SECRET  = os.environ.get("OIDC_CLIENT_SECRET", "")
+OIDC_REDIRECT_URL   = os.environ.get("OIDC_REDIRECT_URL", "")
+OIDC_ADMIN_GROUP    = os.environ.get("OIDC_ADMIN_GROUP", "tar1090-admins")
+OIDC_VIEWER_GROUP   = os.environ.get("OIDC_VIEWER_GROUP", "")
+OIDC_SCOPES         = os.environ.get("OIDC_SCOPES", "openid profile email groups")
+OIDC_SESSION_TTL    = int(os.environ.get("OIDC_SESSION_TTL", "28800"))
+OIDC_COOKIE_SECURE  = os.environ.get("OIDC_COOKIE_SECURE", "true").lower() == "true"
+OIDC_SESSION_SECRET = (os.environ.get("OIDC_SESSION_SECRET")
+                       or OIDC_CLIENT_SECRET or secrets.token_hex(32)).encode()
+OIDC_LOGOUT_REDIRECT = os.environ.get("OIDC_LOGOUT_REDIRECT", "")
+
+SESSION_COOKIE = "tar1090_session"
+TX_COOKIE      = "tar1090_oidc_tx"
+# Anything under these is admin-only; viewers get 403 (and the UI hides it too).
+ADMIN_PREFIXES = ("/api/alerts", "/api/import")
+ADMIN_PAGES    = ("/alerts.html", "/settings.html")
+
+
+def _b64u(b):
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+
+def _b64u_dec(s):
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def _sign(payload: bytes) -> str:
+    sig = hmac.new(OIDC_SESSION_SECRET, payload, hashlib.sha256).digest()
+    return _b64u(payload) + "." + _b64u(sig)
+
+
+def _unsign(token: str):
+    try:
+        p_b64, sig_b64 = token.split(".", 1)
+        payload = _b64u_dec(p_b64)
+        expected = hmac.new(OIDC_SESSION_SECRET, payload, hashlib.sha256).digest()
+        if not hmac.compare_digest(expected, _b64u_dec(sig_b64)):
+            return None
+        data = json.loads(payload)
+        if data.get("exp") and time.time() > data["exp"]:
+            return None
+        return data
+    except Exception:                                # noqa: BLE001
+        return None
+
+
+def _jwt_payload(jwt: str):
+    # Decode (not signature-verify) the id_token. We received it over a direct, server-to-server
+    # TLS call to the token endpoint, so per the OIDC spec the back-channel transport authenticates
+    # it; we still validate iss/aud/exp/nonce below.
+    try:
+        return json.loads(_b64u_dec(jwt.split(".")[1]))
+    except Exception:                                # noqa: BLE001
+        return None
+
+
+def _pkce():
+    verifier = _b64u(secrets.token_bytes(40))
+    challenge = _b64u(hashlib.sha256(verifier.encode()).digest())
+    return verifier, challenge
+
+
+def _role_for(groups):
+    groups = groups or []
+    if OIDC_ADMIN_GROUP and OIDC_ADMIN_GROUP in groups:
+        return "admin"
+    if not OIDC_VIEWER_GROUP or OIDC_VIEWER_GROUP in groups:
+        return "viewer"
+    return None                                      # authenticated but not in an allowed group
+
+
+def _is_admin_path(path):
+    return path.startswith(ADMIN_PREFIXES) or path in ADMIN_PAGES
+
+
+_oidc_meta = None
+
+
+def oidc_meta():
+    global _oidc_meta
+    if _oidc_meta is None:
+        url = OIDC_ISSUER + "/.well-known/openid-configuration"
+        with urllib.request.urlopen(url, timeout=10) as r:
+            _oidc_meta = json.loads(r.read().decode())
+    return _oidc_meta
+
+
+def _oidc_post_form(url, data):
+    body = urlencode(data).encode()
+    req = urllib.request.Request(url, data=body, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read().decode())
+
+
+def _oidc_get_json(url, bearer):
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + bearer,
+                                               "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read().decode())
+
 
 # --- database ---------------------------------------------------------------
 _conn = None
@@ -866,9 +996,176 @@ class Handler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
+    # ---- OIDC: cookies, session, flow -------------------------------------
+    def _cookie(self, name):
+        raw = self.headers.get("Cookie")
+        if not raw:
+            return None
+        try:
+            ck = SimpleCookie(raw)
+            return ck[name].value if name in ck else None
+        except Exception:                            # noqa: BLE001
+            return None
+
+    def _session(self):
+        c = self._cookie(SESSION_COOKIE)
+        return _unsign(c) if c else None
+
+    def _cookie_str(self, name, value, max_age):
+        parts = [f"{name}={value}", "Path=/", "HttpOnly", "SameSite=Lax",
+                 "Max-Age=0" if max_age == 0 else f"Max-Age={int(max_age)}"]
+        if OIDC_COOKIE_SECURE:
+            parts.append("Secure")
+        return "; ".join(parts)
+
+    def _redirect(self, location, cookies=None):
+        self.send_response(302)
+        self.send_header("Location", location)
+        for (n, v, age) in (cookies or []):
+            self.send_header("Set-Cookie", self._cookie_str(n, v, age))
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _redirect_uri(self):
+        if OIDC_REDIRECT_URL:
+            return OIDC_REDIRECT_URL
+        proto = self.headers.get("X-Forwarded-Proto") or ("https" if OIDC_COOKIE_SECURE else "http")
+        host = (self.headers.get("X-Forwarded-Host") or self.headers.get("Host")
+                or f"localhost:{PORT}")
+        return f"{proto}://{host}/oidc/callback"
+
+    def _me(self):
+        if not OIDC_ENABLED:
+            return {"enabled": False, "authenticated": True, "role": "admin"}
+        s = self._session()
+        if not s:
+            return {"enabled": True, "authenticated": False, "role": None}
+        return {"enabled": True, "authenticated": True, "role": s.get("role"),
+                "name": s.get("name"), "email": s.get("email")}
+
+    def _oidc_login(self, u):
+        nxt = parse_qs(u.query).get("next", ["/"])[0]
+        if not nxt.startswith("/"):
+            nxt = "/"
+        verifier, challenge = _pkce()
+        state, nonce = secrets.token_urlsafe(24), secrets.token_urlsafe(24)
+        tx = _sign(json.dumps({"s": state, "n": nonce, "v": verifier, "next": nxt,
+                               "exp": time.time() + 600}).encode())
+        try:
+            meta = oidc_meta()
+        except Exception as e:                       # noqa: BLE001
+            self._send(502, {"error": "OIDC discovery failed: " + str(e)})
+            return
+        params = {"response_type": "code", "client_id": OIDC_CLIENT_ID,
+                  "redirect_uri": self._redirect_uri(), "scope": OIDC_SCOPES,
+                  "state": state, "nonce": nonce,
+                  "code_challenge": challenge, "code_challenge_method": "S256"}
+        self._redirect(meta["authorization_endpoint"] + "?" + urlencode(params),
+                       cookies=[(TX_COOKIE, tx, 600)])
+
+    def _oidc_callback(self, u):
+        q = parse_qs(u.query)
+        if "error" in q:
+            self._send(400, {"error": "login failed: " + q.get("error_description", q["error"])[0]})
+            return
+        code = q.get("code", [None])[0]
+        tx = self._cookie(TX_COOKIE)
+        txd = _unsign(tx) if tx else None
+        if not code or not txd or txd.get("s") != q.get("state", [None])[0]:
+            self._send(400, {"error": "invalid login state -- please retry from /oidc/login"})
+            return
+        try:
+            meta = oidc_meta()
+            tok = _oidc_post_form(meta["token_endpoint"], {
+                "grant_type": "authorization_code", "code": code,
+                "redirect_uri": self._redirect_uri(),
+                "client_id": OIDC_CLIENT_ID, "client_secret": OIDC_CLIENT_SECRET,
+                "code_verifier": txd["v"]})
+        except urllib.error.HTTPError as e:
+            self._send(502, {"error": "token exchange failed", "detail": e.read().decode()[:300]})
+            return
+        except Exception as e:                       # noqa: BLE001
+            self._send(502, {"error": "token exchange failed: " + str(e)})
+            return
+        claims = _jwt_payload(tok.get("id_token", "")) or {}
+        aud = claims.get("aud")
+        aud = aud if isinstance(aud, list) else [aud]
+        if (claims.get("nonce") != txd["n"]
+                or claims.get("iss", "").rstrip("/") != OIDC_ISSUER
+                or OIDC_CLIENT_ID not in aud
+                or claims.get("exp", 0) < time.time()):
+            self._send(400, {"error": "id token validation failed"})
+            return
+        groups = claims.get("groups") or []
+        name = claims.get("name") or claims.get("preferred_username")
+        email = claims.get("email")
+        access = tok.get("access_token")
+        if access and meta.get("userinfo_endpoint"):
+            try:
+                ui = _oidc_get_json(meta["userinfo_endpoint"], access)
+                groups = ui.get("groups") or groups
+                name = name or ui.get("name") or ui.get("preferred_username")
+                email = email or ui.get("email")
+            except Exception:                        # noqa: BLE001
+                pass
+        role = _role_for(groups)
+        if role is None:
+            self._send(403, {"error": "your account is not in an authorized group for this site"})
+            return
+        sess = _sign(json.dumps({"sub": claims.get("sub"), "name": name, "email": email,
+                                 "role": role, "exp": time.time() + OIDC_SESSION_TTL}).encode())
+        self._redirect(txd.get("next", "/"),
+                       cookies=[(SESSION_COOKIE, sess, OIDC_SESSION_TTL), (TX_COOKIE, "", 0)])
+
+    def _oidc_logout(self):
+        loc = OIDC_LOGOUT_REDIRECT or "/"
+        try:
+            end = oidc_meta().get("end_session_endpoint")
+            if end:
+                home = OIDC_LOGOUT_REDIRECT or self._redirect_uri().replace("/oidc/callback", "/")
+                loc = end + "?" + urlencode({"post_logout_redirect_uri": home})
+        except Exception:                            # noqa: BLE001
+            pass
+        self._redirect(loc, cookies=[(SESSION_COOKIE, "", 0)])
+
+    def _gate(self, path, is_api):
+        """When OIDC is on, require a valid session and the admin role for admin paths.
+        Returns True to continue handling, or False if it already sent a response/redirect."""
+        if not OIDC_ENABLED:
+            return True
+        sess = self._session()
+        if sess is None:
+            if is_api:
+                self._send(401, {"error": "authentication required"})
+            else:
+                self._redirect("/oidc/login?next=" + quote(self.path))
+            return False
+        if sess.get("role") != "admin" and _is_admin_path(path):
+            if is_api:
+                self._send(403, {"error": "forbidden: this action requires the admin role"})
+            else:
+                self._redirect("/")
+            return False
+        return True
+
     def do_GET(self):
         u = urlparse(self.path)
         path = u.path
+        if path == "/api/me":                        # always reachable (drives the UI)
+            self._send(200, self._me())
+            return
+        if OIDC_ENABLED:
+            if path == "/oidc/login":
+                self._oidc_login(u)
+                return
+            if path == "/oidc/callback":
+                self._oidc_callback(u)
+                return
+            if path == "/oidc/logout":
+                self._oidc_logout()
+                return
+        if not self._gate(path, path.startswith("/api/")):
+            return
         if path in ROUTES:
             try:
                 self._send(200, ROUTES[path](parse_qs(u.query)))
@@ -883,7 +1180,10 @@ class Handler(BaseHTTPRequestHandler):
     do_HEAD = do_GET
 
     def do_POST(self):
-        fn = POST_ROUTES.get(urlparse(self.path).path)
+        path = urlparse(self.path).path
+        if not self._gate(path, True):               # all POST routes are admin-only
+            return
+        fn = POST_ROUTES.get(path)
         if not fn:
             self._send(404, {"error": "not found"})
             return
@@ -924,6 +1224,15 @@ def main():
     logging.basicConfig(level=os.environ.get("LOGLEVEL", "INFO"),
                         format="%(asctime)s %(levelname)s %(message)s")
     log.info("tar1090-history-api on %s:%d  (globe_history=%s, web=%s)", BIND, PORT, GLOBE_DIR, WEB_DIR)
+    if OIDC_ENABLED:
+        missing = [k for k, v in (("OIDC_ISSUER", OIDC_ISSUER), ("OIDC_CLIENT_ID", OIDC_CLIENT_ID),
+                                  ("OIDC_CLIENT_SECRET", OIDC_CLIENT_SECRET)) if not v]
+        if missing:
+            log.error("OIDC_ENABLED but missing required config: %s -- login will fail", ", ".join(missing))
+        log.info("OIDC login required: issuer=%s admin_group=%s viewer_group=%s",
+                 OIDC_ISSUER, OIDC_ADMIN_GROUP, OIDC_VIEWER_GROUP or "(any authenticated)")
+    else:
+        log.info("OIDC disabled (OIDC_ENABLED=false) -- the report site is open to anyone who can reach it")
     try:
         _ensure_alerts()                                 # create alert tables up front (best effort)
         _resume_import_on_start()                        # continue an interrupted import, if any

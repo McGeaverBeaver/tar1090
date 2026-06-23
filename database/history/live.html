@@ -128,7 +128,7 @@
 <body>
 <header>
   <h1><span class="dot"></span>tar1090 — live <span>· every aircraft readsb is tracking right now</span></h1>
-  <nav id="tabs"><a href="index.html">History</a><a href="live.html" class="active">Live</a><a href="alerts.html">Alerts</a><a href="settings.html">Settings</a></nav>
+  <nav id="tabs"><a href="live.html" class="active">Live</a><a href="index.html">History</a><a href="alerts.html" class="admin-only">Alerts</a><a href="settings.html" class="admin-only">Settings</a></nav>
 </header>
 <div id="bar">
   <input id="find" type="text" placeholder="Find callsign / hex / reg…" autocomplete="off">
@@ -559,5 +559,6 @@ poll();
 setInterval(poll, 1000);
 document.addEventListener('visibilitychange', ()=> { if (!document.hidden) poll(); });
 </script>
+<script src="auth.js"></script>
 </body>
 </html>

@@ -107,7 +107,7 @@
 <body>
 <header>
   <h1>tar1090 — history search &amp; replay <span>· search the flight index, replay trails from globe_history</span></h1>
-  <nav id="tabs"><a href="index.html" class="active">History</a><a href="live.html">Live</a><a href="alerts.html">Alerts</a><a href="settings.html">Settings</a></nav>
+  <nav id="tabs"><a href="live.html">Live</a><a href="index.html" class="active">History</a><a href="alerts.html" class="admin-only">Alerts</a><a href="settings.html" class="admin-only">Settings</a></nav>
 </header>
 
 <div id="controls">
@@ -126,7 +126,7 @@
   <button id="go">Search</button>
   <button id="clear" class="ghost">Clear</button>
   <button id="multi" class="toggle ghost" title="Mobile-friendly multi-select: when on, each tap adds/removes a flight">Multi</button>
-  <button id="bell" class="ghost" title="Select one or more flights, then create alert rules">🔔 Alert</button>
+  <button id="bell" class="ghost admin-only" title="Select one or more flights, then create alert rules">🔔 Alert</button>
 </div>
 
 <div id="pager">
@@ -661,5 +661,6 @@ initSplit();
 })();
 doSearch();
 </script>
+<script src="auth.js"></script>
 </body>
 </html>

@@ -39,7 +39,7 @@
 <body>
 <header>
   <h1>tar1090 — alerts</h1>
-  <nav id="tabs"><a href="index.html">History</a><a href="live.html">Live</a><a href="alerts.html">Alerts</a><a href="settings.html" class="active">Settings</a></nav>
+  <nav id="tabs"><a href="live.html">Live</a><a href="index.html">History</a><a href="alerts.html" class="admin-only">Alerts</a><a href="settings.html" class="active admin-only">Settings</a></nav>
 </header>
 <main>
   <fieldset>
@@ -179,5 +179,6 @@ $('imp_stop').onclick = async () => { await post('api/import/stop', {}); setTime
 loadImport();
 setInterval(loadImport, 3000);
 </script>
+<script src="auth.js"></script>
 </body>
 </html>

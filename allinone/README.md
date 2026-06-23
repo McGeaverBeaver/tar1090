@@ -172,3 +172,50 @@ All logger knobs are environment variables (defaults baked into the image; see
 
 If `TAR1090_DB_DSN` is unset the logger simply idles and logs a hint — the tar1090 web
 GUI still runs normally.
+
+## Sign-in (Authentik OIDC) — optional
+
+The **report site** (History / Live / Alerts / Settings, served by the history API) can require
+login via [Authentik](https://goauthentik.io/) OpenID Connect, with two roles mapped from
+Authentik **groups**:
+
+- **admin** — full access.
+- **viewer** — read-only: sees only **Live** and **History**. Alerts and Settings (and the
+  History page's *Alert* button) are hidden *and* blocked server-side.
+
+It's off by default; the main tar1090 map on `:80` is never affected — this only guards the
+report site.
+
+### Authentik setup (once)
+
+1. **Providers → Create → OAuth2/OpenID Provider**
+   - Authorization flow: *explicit/implicit consent* (your choice).
+   - Client type: **Confidential**. Note the **Client ID** and **Client Secret**.
+   - Redirect URI: `https://reports.example.com/oidc/callback` (your report-site URL).
+   - Scopes: include `openid`, `profile`, `email`, and **`groups`** (the groups scope is what
+     carries role membership).
+2. **Applications → Create** an application bound to that provider. Its *issuer* is shown on the
+   provider page as `https://authentik.example.com/application/o/<app-slug>/`.
+3. **Directory → Groups**: create e.g. `tar1090-admins` (and optionally `tar1090-viewers`) and
+   add users. Admins go in the admin group; everyone else is a viewer.
+
+### Enable it (env vars)
+
+| Var | Default | Purpose |
+|-----|---------|---------|
+| `OIDC_ENABLED` | `false` | `true` to require login on the report site |
+| `OIDC_ISSUER` | — | `https://authentik.example.com/application/o/<app-slug>/` |
+| `OIDC_CLIENT_ID` | — | provider client id |
+| `OIDC_CLIENT_SECRET` | — | provider client secret |
+| `OIDC_REDIRECT_URL` | *(derived from request)* | e.g. `https://reports.example.com/oidc/callback` — set it explicitly if behind a proxy |
+| `OIDC_ADMIN_GROUP` | `tar1090-admins` | Authentik group → **admin** role |
+| `OIDC_VIEWER_GROUP` | *(empty)* | Authentik group → **viewer**; empty means *any* logged-in user is a viewer |
+| `OIDC_SCOPES` | `openid profile email groups` | must include `groups` |
+| `OIDC_SESSION_TTL` | `28800` | session length, seconds (8h) |
+| `OIDC_SESSION_SECRET` | *(client secret)* | HMAC key for the session cookie; set a random value to keep sessions across restarts |
+| `OIDC_COOKIE_SECURE` | `true` | keep `true` when served over HTTPS (recommended) |
+
+Flow: standard **Authorization Code + PKCE** with a confidential client; the session is a
+short-lived, HMAC-signed, `HttpOnly` cookie (no extra store). Login is at `/oidc/login`,
+logout at `/oidc/logout`. Serve the report site over HTTPS (terminate TLS at your reverse
+proxy) so the cookie's `Secure` flag and the OAuth redirect work correctly.
