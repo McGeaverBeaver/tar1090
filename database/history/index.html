@@ -174,8 +174,10 @@ const _ALT_L = [ {h:0,val:53},{h:20,val:50},{h:32,val:54},{h:40,val:52},{h:46,va
 function altColor(altitude){
   if (altitude == null) return 'hsl(0,0%,75%)';                 // unknown
   if (altitude === 'ground' || altitude <= 0) return 'hsl(220,0%,35%)';  // on the ground
-  const altRound = altitude < 8000 ? 50 : 500;                  // limit number of colours
-  const alt = altRound * Math.round(altitude / altRound);
+  // Band altitude exactly like the main UI's calcAltitudeRounded (125 ft below 8000 ft,
+  // 500 ft at/above) so the trail draws in clean altitude bands and only changes colour
+  // when the band changes -- without this it recolours at almost every point and looks noisy.
+  const alt = altitude >= 8000 ? Math.round(altitude / 500) * 500 : Math.round(altitude / 125) * 125;
   let h = _ALT_H[0].val;
   for (let i = _ALT_H.length-1; i>=0; --i){
     if (alt > _ALT_H[i].alt){
