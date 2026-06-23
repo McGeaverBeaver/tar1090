@@ -40,7 +40,11 @@
   #main { flex: 1; min-height: 0; display: flex; }
   #left { width: 46%; min-width: 320px; overflow: auto; border-right: 1px solid #2c313a; }
   #right { flex: 1; position: relative; }
-  #map { position: absolute; inset: 0; }
+  #map { position: absolute; inset: 0; background: #0b0d10; }
+  /* Slight dark tint on the basemap only (mirrors the dimmed main tar1090 map) so the
+     altitude-coloured trails stand out. Trails/markers live in the SVG overlay pane above
+     the tiles, so only the basemap is dimmed -- the trails stay fully vivid. */
+  .leaflet-tile-pane { filter: brightness(0.6) contrast(1.05) saturate(0.9); }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid #23262d; white-space: nowrap; }
   th { position: sticky; top: 0; background: #1d2026; cursor: pointer; font-size: 11px; color: #9aa3b2; }
@@ -157,7 +161,40 @@ let sortKey = 'start', sortDir = -1, searchMsg = '';
 let pageOffset = 0, pageSize = 500, total = 0;
 const MAX_DRAW = 300;   // mirrors the API's HISTORY_MAX_TRAILS
 
-const altColor = a => a==null?'#888': a<2000?'#d33':a<10000?'#e80':a<20000?'#dd0':a<30000?'#3c3':'#3af';
+// Altitude -> colour, ported from the main tar1090 UI (ColorByAlt in defaults.js) so a
+// single flight's trail gets the same smooth altitude gradient (orange low -> yellow ->
+// green -> blue -> magenta high) instead of a few coarse steps. Returns an 'hsl()' string.
+const _ALT_H = [ {alt:0,val:20},{alt:2000,val:32.5},{alt:4000,val:43},{alt:6000,val:54},
+  {alt:8000,val:72},{alt:9000,val:85},{alt:11000,val:140},{alt:40000,val:300},{alt:51000,val:360} ];
+const _ALT_L = [ {h:0,val:53},{h:20,val:50},{h:32,val:54},{h:40,val:52},{h:46,val:51},{h:50,val:46},
+  {h:60,val:43},{h:80,val:41},{h:100,val:41},{h:120,val:41},{h:140,val:41},{h:160,val:40},
+  {h:180,val:40},{h:190,val:44},{h:198,val:50},{h:200,val:58},{h:220,val:58},{h:240,val:58},
+  {h:255,val:55},{h:266,val:55},{h:270,val:58},{h:280,val:58},{h:290,val:47},{h:300,val:43},
+  {h:310,val:48},{h:320,val:48},{h:340,val:52},{h:360,val:53} ];
+function altColor(altitude){
+  if (altitude == null) return 'hsl(0,0%,75%)';                 // unknown
+  if (altitude === 'ground' || altitude <= 0) return 'hsl(220,0%,35%)';  // on the ground
+  const altRound = altitude < 8000 ? 50 : 500;                  // limit number of colours
+  const alt = altRound * Math.round(altitude / altRound);
+  let h = _ALT_H[0].val;
+  for (let i = _ALT_H.length-1; i>=0; --i){
+    if (alt > _ALT_H[i].alt){
+      h = (i === _ALT_H.length-1) ? _ALT_H[i].val
+        : _ALT_H[i].val + (_ALT_H[i+1].val - _ALT_H[i].val) * (alt - _ALT_H[i].alt)/(_ALT_H[i+1].alt - _ALT_H[i].alt);
+      break;
+    }
+  }
+  let l = _ALT_L[0].val;
+  for (let i = _ALT_L.length-1; i>=0; --i){
+    if (h > _ALT_L[i].h){
+      l = (i === _ALT_L.length-1) ? _ALT_L[i].val
+        : _ALT_L[i].val + (_ALT_L[i+1].val - _ALT_L[i].val) * (h - _ALT_L[i].h)/(_ALT_L[i+1].h - _ALT_L[i].h);
+      break;
+    }
+  }
+  h = ((h % 360) + 360) % 360;
+  return `hsl(${h.toFixed(0)},88%,${l.toFixed(0)}%)`;
+}
 function hue(s){ let h=0; for (let i=0;i<s.length;i++) h=(h*31 + s.charCodeAt(i))>>>0; return 'hsl('+(h%360)+',70%,60%)'; }
 function setStatus(extra){ $('status').textContent = searchMsg + (extra ? ' — ' + extra : ''); }
 
