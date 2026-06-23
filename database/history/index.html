@@ -47,6 +47,7 @@
      altitude-coloured trails stand out. Trails/markers live in the SVG overlay pane above
      the tiles, so only the basemap is dimmed -- the trails stay fully vivid. */
   .leaflet-tile-pane { filter: brightness(0.6) contrast(1.05) saturate(0.9); }
+  .planeicon { background: transparent; border: 0; }
   table { width: auto; min-width: 100%; border-collapse: collapse; table-layout: fixed; }
   th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid #23262d; white-space: nowrap; }
   td { overflow: hidden; text-overflow: ellipsis; }
@@ -169,7 +170,7 @@ const map = L.map('map', { worldCopyJump:true }).setView([40, -74], 4);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
   { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(map);
 let trailLayer = L.layerGroup().addTo(map);
-let marker = null, pts = [], anim = null;
+let marker = null, pts = [], anim = null, markerCat = 'jet';
 
 let flights = [], byId = new Map(), selected = new Set(), multiMode = false;
 let sortKey = 'start', sortDir = -1, searchMsg = '';
@@ -433,6 +434,60 @@ function onRow(f, ev){
 }
 function toggleId(id){ selected.has(id) ? selected.delete(id) : selected.add(id); markRows(); renderMap(); }
 
+// ---- directional aircraft icons (type-shaped, pointed along travel) --------
+// Top-down silhouettes in a 0..64 viewBox, nose at the top (north); we rotate by the
+// trail's travel bearing. Shape is picked from the ICAO type so a tanker, a C-130 and a
+// fighter look different. The trace has no heading field, so direction comes from the
+// movement between consecutive points.
+const PLANE_PATHS = {
+  jet:    'M32 4 L34 14 L34 26 L60 40 L60 43 L36 38 L35 50 L43 58 L43 60 L32 57 L21 60 L21 58 L29 50 L28 38 L4 43 L4 40 L30 26 L30 14 Z',
+  heavy:  'M32 3 L35 13 L35 24 L62 38 L62 42 L37 36 L36 51 L46 59 L46 61 L32 58 L18 61 L18 59 L28 51 L27 36 L2 42 L2 38 L29 24 L29 13 Z',
+  prop:   'M32 5 L34 15 L34 23 L58 28 L58 32 L34 33 L34 50 L42 57 L42 59 L32 56 L22 59 L22 57 L30 50 L30 33 L6 32 L6 28 L30 23 L30 15 Z',
+  fighter:'M32 3 L34 30 L52 47 L52 51 L35 43 L36 55 L41 61 L32 57 L23 61 L28 55 L29 43 L12 51 L12 47 L30 30 Z',
+};
+const _HELI    = /^(EC[0-9]|AS[0-9]|A109|A119|A139|A169|A189|B06|B47[0-9]|B407|B412|B429|R22|R44|R66|S76|S92|S61|S64|S70|EH10|H60|H64|H47|UH[0-9]|CH[0-9]|AH[0-9]|MI[0-9]|H500|EXPL|GAZL)/;
+const _FIGHTER = /^(F1[0-9]|F2[0-9]|F35|F22|F15|F16|F18|F5|F4|EUFI|TOR|MIG|SU[0-9]|A10|AV8B|GR4|RFAL|JAS|J10|J20|HAWK|T38)/;
+const _HEAVY   = /^(A38|A34|A33|A35|A30|A31|B74|B76|B77|B78|C5|C17|A124|A225|B52|IL76|IL96|AN12|AN22|AN24|AN26|E3|E6|K35|R135|B703|MD11|DC10|VC10)/;
+const _PROP    = /^(C30|C13|P3|B35|BE[0-9]|DH8|DHC|AT4|AT5|AT7|AT8|SF3|SW4|E110|E120|C208|PC12|PC6|D28|D328|TBM|PA[0-9]|C1[0-9][0-9]|C2[0-9][0-9]|M20|SR2|DA4|L410|F406|SB20|SH36|AN2)/;
+function classifyType(f){
+  const t = ((f && f.icao_type) || '').toUpperCase().trim();
+  if (!t) return 'jet';
+  if (_HELI.test(t))    return 'heli';
+  if (_FIGHTER.test(t)) return 'fighter';
+  if (_HEAVY.test(t))   return 'heavy';
+  if (_PROP.test(t))    return 'prop';
+  return 'jet';
+}
+function planeShape(cat, color){
+  if (cat === 'heli') return (
+    `<g stroke="#0b0d10" stroke-width="2.2" stroke-linejoin="round" fill="${color}">`
+    + `<rect x="26" y="22" width="12" height="24" rx="6"/><rect x="30.5" y="44" width="3" height="15"/>`
+    + `<rect x="25" y="55" width="14" height="3" rx="1.5"/></g>`
+    + `<g stroke="${color}" stroke-width="2.4" stroke-linecap="round" opacity="0.92">`
+    + `<line x1="9" y1="28" x2="55" y2="36"/><line x1="9" y1="36" x2="55" y2="28"/></g>`
+  );
+  return `<path d="${PLANE_PATHS[cat] || PLANE_PATHS.jet}" fill="${color}" stroke="#0b0d10" stroke-width="2.4" stroke-linejoin="round"/>`;
+}
+function makePlaneIcon(cat, color, deg, size){
+  size = size || 30;
+  const svg = `<svg viewBox="0 0 64 64" width="${size}" height="${size}" `
+    + `style="transform:rotate(${(deg||0).toFixed(0)}deg);display:block;filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.7))">`
+    + `${planeShape(cat, color)}</svg>`;
+  return L.divIcon({ className:'planeicon', html: svg, iconSize:[size,size], iconAnchor:[size/2, size/2] });
+}
+function bearingDeg(a, b){ // a,b = [lat,lon]
+  const r = Math.PI/180, dLon = (b[1]-a[1])*r, la1 = a[0]*r, la2 = b[0]*r;
+  const y = Math.sin(dLon)*Math.cos(la2);
+  const x = Math.cos(la1)*Math.sin(la2) - Math.sin(la1)*Math.cos(la2)*Math.cos(dLon);
+  return (Math.atan2(y, x)*180/Math.PI + 360) % 360;
+}
+function headingAt(i){
+  if (pts.length < 2) return 0;
+  const p0 = (i <= 0) ? pts[0] : pts[i-1];
+  const p1 = (i <= 0) ? pts[1] : pts[i];
+  return bearingDeg([p0[1], p0[2]], [p1[1], p1[2]]);
+}
+
 async function renderMap(){
   updateBell();
   stopAnim(); trailLayer.clearLayers(); $('replay').classList.remove('on'); hidePhoto();
@@ -458,7 +513,9 @@ async function drawSingle(f){
     seg.on('click', ()=> toggleId(f.id));
     seg.addTo(trailLayer);
   }
-  marker = L.circleMarker([pts[0][1],pts[0][2]], { radius:6, color:'#fff', weight:2, fillColor:'#2d6cdf', fillOpacity:1 }).addTo(trailLayer);
+  markerCat = classifyType(f);
+  marker = L.marker([pts[0][1],pts[0][2]], { icon: makePlaneIcon(markerCat, altColor(pts[0][3]), headingAt(0)),
+    interactive:false, zIndexOffset:1000, keyboard:false }).addTo(trailLayer);
   map.fitBounds(L.latLngBounds(pts.map(p=>[p[1],p[2]])).pad(0.1));
   const s=$('slider'); s.max=pts.length-1; s.value=0; showPoint(0);
   $('replay').classList.add('on');
@@ -483,6 +540,10 @@ async function drawMany(ids, isAll){
     const line = L.polyline(tp.map(p=>[p[1],p[2]]), { color: col, weight: (f && f.military)?3:2, opacity: .72 });
     line.on('click', ()=> { selected.clear(); selected.add(id); markRows(); renderMap(); });
     line.addTo(trailLayer);
+    // a small directional plane icon at the latest position of each trail
+    const last = tp[tp.length-1], prev = tp[tp.length-2] || last;
+    L.marker([last[1], last[2]], { icon: makePlaneIcon(classifyType(f), col,
+      bearingDeg([prev[1],prev[2]],[last[1],last[2]]), 20), interactive:false, keyboard:false }).addTo(trailLayer);
     for (const p of tp) bounds.push([p[1],p[2]]);
     count++;
   }
@@ -501,6 +562,7 @@ async function drawMany(ids, isAll){
 function showPoint(i){
   const p = pts[i]; if(!p || !marker) return;
   marker.setLatLng([p[1],p[2]]);
+  marker.setIcon(makePlaneIcon(markerCat, altColor(p[3]), headingAt(i)));
   $('ptlabel').textContent = `${fmtUTC(p[0])} · ${p[3]!=null?p[3]+' ft':'—'} · ${i+1}/${pts.length}`;
 }
 $('slider').oninput = e => showPoint(+e.target.value);
