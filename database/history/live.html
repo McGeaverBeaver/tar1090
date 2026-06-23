@@ -122,7 +122,26 @@
   #legend .lg-bar { width: 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,.12); }
   #legend .lg-ticks { display: flex; flex-direction: column; justify-content: space-between; font-size: 10px;
                       color: #cdd5e0; font-variant-numeric: tabular-nums; }
-  @media (max-width: 760px) { #card { width: 200px; } #bar input { width: 130px; } #legend, #list { display: none; } #status { left: 10px; } }
+  @media (max-width: 760px) {
+    #legend, #list { display: none; }
+    header h1 span:not(.dot) { display: none; }               /* drop the long subtitle (keep the dot) */
+    #bar { flex-wrap: wrap; gap: 8px; padding: 8px 10px; }
+    #bar input { width: 100%; order: 1; padding: 9px 10px; }
+    .toggles { order: 2; width: 100%; flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch;
+               scrollbar-width: none; padding-bottom: 1px; }
+    .toggles::-webkit-scrollbar { display: none; }
+    .tgl { flex: 0 0 auto; padding: 8px 14px; }
+    #count { order: 3; }
+    #updated { order: 4; margin-left: auto; }
+    #status { left: 8px; right: 8px; bottom: 8px; max-width: none; }
+    /* selected-aircraft card becomes a bottom sheet */
+    #card { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; }
+    #card.on { display: flex; gap: 8px; align-items: stretch; }
+    #photo { flex: 0 0 42%; margin: 0; }
+    #photo.on { display: block; }
+    #photo img { max-height: 100%; height: 100%; }
+    #info { margin-top: 0; flex: 1 1 0; max-height: 44vh; overflow: auto; }
+  }
 </style>
 </head>
 <body>

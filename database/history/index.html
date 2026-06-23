@@ -93,14 +93,28 @@
   #legend .lg-bar { width: 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,.12); }
   #legend .lg-ticks { display: flex; flex-direction: column; justify-content: space-between; font-size: 10px;
                       color: #cdd5e0; font-variant-numeric: tabular-nums; }
+  /* mobile List/Map switcher (hidden on desktop) */
+  #mview { display: none; }
   @media (max-width: 760px) {
-    #main { flex-direction: column; }
-    #left { width: 100% !important; flex-basis: auto !important; min-width: 0; max-height: 40vh; border-bottom: 1px solid #2c313a; }
-    #dragbar { display: none; }
-    #right { min-height: 50vh; }
+    header h1 span { display: none; }
     #controls button, #presets button { padding: 9px 12px; }
+    #pager { flex-wrap: wrap; row-gap: 6px; }
+    #viewbtn { margin-left: 0; }
+    #colmenu-wrap { margin-left: auto; }
     #ptlabel { min-width: 0; }
     #legend { display: none; }
+    #mview { display: flex; gap: 6px; padding: 6px 10px; background: #1a1d23; border-bottom: 1px solid #2c313a; }
+    #mview button { flex: 1; background: #21252c; color: #cdd5e0; border: 1px solid #2c313a; border-radius: 9px;
+                    padding: 10px; font-size: 13px; font-weight: 600; cursor: pointer; }
+    #mview button.on { background: #2d6cdf; color: #fff; border-color: #3b78e8; }
+    /* one pane at a time, full height — no nested scroll fighting the page */
+    #main { flex-direction: column; }
+    #dragbar { display: none; }
+    #left { width: 100% !important; flex-basis: auto !important; min-width: 0; }
+    #main.m-list #right { display: none; }
+    #main.m-list #left { flex: 1; max-height: none; overflow: auto; -webkit-overflow-scrolling: touch; }
+    #main.m-map  #left { display: none; }
+    #main.m-map  #right { flex: 1; min-height: 0; }
   }
 </style>
 </head>
@@ -146,6 +160,11 @@
     <button id="colbtn" title="Show / hide columns">Columns ▾</button>
     <div id="colmenu"></div>
   </div>
+</div>
+
+<div id="mview">
+  <button id="mv-list" class="on">☰ List</button>
+  <button id="mv-map">🗺 Map</button>
 </div>
 
 <div id="main">
@@ -453,6 +472,7 @@ function onRow(f, ev){
     selected.clear(); selected.add(f.id);
   }
   markRows(); renderMap();
+  if (!additive && selected.size === 1 && mq.matches) setMView('map');   // mobile: jump to the map
 }
 function toggleId(id){ selected.has(id) ? selected.delete(id) : selected.add(id); markRows(); renderMap(); }
 
@@ -667,6 +687,22 @@ initSplit();
 })();
 // Clicking empty map (not a trail/marker) deselects, returning to the overview.
 map.on('click', ()=>{ if (selected.size){ selected.clear(); markRows(); renderMap(); } });
+
+// mobile: show the list or the map full-screen (one at a time) instead of a cramped split
+const mq = window.matchMedia('(max-width: 760px)');
+function setMView(v){
+  const m = $('main');
+  m.classList.toggle('m-list', v === 'list');
+  m.classList.toggle('m-map', v === 'map');
+  $('mv-list').classList.toggle('on', v === 'list');
+  $('mv-map').classList.toggle('on', v === 'map');
+  if (v === 'map') setTimeout(()=> map.invalidateSize(), 60);
+}
+$('mv-list').onclick = ()=> setMView('list');
+$('mv-map').onclick  = ()=> setMView('map');
+if (mq.matches) setMView('list');
+mq.addEventListener('change', e => { if (e.matches && !$('main').classList.contains('m-map')) setMView('list'); });
+
 doSearch();
 </script>
 <script src="auth.js"></script>

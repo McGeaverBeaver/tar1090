@@ -992,7 +992,9 @@ POST_ROUTES = {"/api/alerts/rules": alerts_rule_save, "/api/alerts/rules/delete"
                "/api/alerts/config": alerts_config_save, "/api/alerts/test": alerts_test,
                "/api/import/start": import_start, "/api/import/stop": import_stop}
 CONTENT = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
-           ".css": "text/css", ".json": "application/json", ".ico": "image/x-icon"}
+           ".css": "text/css", ".json": "application/json", ".ico": "image/x-icon",
+           ".svg": "image/svg+xml", ".webmanifest": "application/manifest+json",
+           ".png": "image/png"}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1185,6 +1187,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path in ("/denied", "/denied.html"):    # friendly access-denied page (public)
                 self._serve_static("/denied.html")
+                return
+            if path in ("/manifest.webmanifest", "/sw.js", "/icon.svg", "/icon-maskable.svg"):
+                self._serve_static(path)               # PWA shell assets (public, non-sensitive)
                 return
         if OIDC_ENABLED and self.command == "GET":    # flow is GET-only (a HEAD must not redeem the code)
             if path == "/oidc/login":

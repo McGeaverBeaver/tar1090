@@ -1,0 +1,15 @@
+{
+  "name": "tar1090 Flight Reports",
+  "short_name": "Flights",
+  "description": "Live aircraft map, history search and trail replay.",
+  "start_url": "/live.html",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b0d10",
+  "theme_color": "#0e1016",
+  "orientation": "any",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

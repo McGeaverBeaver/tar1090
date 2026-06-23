@@ -4,6 +4,26 @@
 //    the alert button, ...). This is cosmetic only -- the server independently blocks
 //    viewers from the admin APIs and pages.
 (function () {
+  // ---- PWA wiring (manifest + theme + service worker), shared across all pages ----
+  function meta(name, content) {
+    if (document.querySelector('meta[name="' + name + '"]')) return;
+    var m = document.createElement('meta'); m.name = name; m.content = content; document.head.appendChild(m);
+  }
+  function linkTag(rel, href, extra) {
+    var l = document.createElement('link'); l.rel = rel; l.href = href;
+    if (extra) Object.keys(extra).forEach(function (k) { l.setAttribute(k, extra[k]); });
+    document.head.appendChild(l);
+  }
+  if (!document.querySelector('link[rel="manifest"]')) linkTag('manifest', 'manifest.webmanifest');
+  linkTag('apple-touch-icon', 'icon.svg');
+  meta('theme-color', '#0e1016');
+  meta('apple-mobile-web-app-capable', 'yes');
+  meta('apple-mobile-web-app-status-bar-style', 'black-translucent');
+  meta('apple-mobile-web-app-title', 'Flights');
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
+  }
+
   function applyViewer() {
     document.body.classList.add('role-viewer');
     // Hide via CSS (don't remove) so the page's own code can still reference these elements.
