@@ -353,7 +353,8 @@ function render(j){
 
 // ---- live aircraft list (tar1090-style, modern glass, sortable + minimizable) -------------
 function renderList(acs){
-  let rows = acs.filter(a => a.lat!=null && (showGround || a.alt!=='ground'));
+  const b = map.getBounds();   // only list aircraft currently visible on the map
+  let rows = acs.filter(a => a.lat!=null && (showGround || a.alt!=='ground') && b.contains([a.lat, a.lon]));
   if (filter) rows = rows.filter(a => `${a.flight||''} ${a.hex} ${a.r||''} ${a.t||''}`.toLowerCase().includes(filter));
   const k = listSort.key, dir = listSort.dir;
   const val = a => k==='alt'    ? (a.alt==='ground' ? -1 : (a.alt ?? -2))
@@ -567,6 +568,8 @@ $('list-hd').onclick = () => {
 };
 
 map.on('click', deselect);
+// keep the list in sync with what's visible as the user pans/zooms
+map.on('moveend', () => { if (lastData.size) renderList([...lastData.values()]); });
 poll();
 setInterval(poll, 1000);
 document.addEventListener('visibilitychange', ()=> { if (!document.hidden) poll(); });
