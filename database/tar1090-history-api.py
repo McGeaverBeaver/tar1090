@@ -473,6 +473,32 @@ def traces(q):
 
 
 # --- live ('Live' tab) ------------------------------------------------------
+_SITE = "unset"
+def _site_location():
+    """Receiver location for the live distance column. Prefer explicit SITE_LAT/SITE_LON,
+    fall back to the LAT/LONG env the ADS-B images already take, then readsb's
+    receiver.json if it exposes a position. Cached -- it never changes at runtime."""
+    global _SITE
+    if _SITE != "unset":
+        return _SITE
+    for la, lo in (("SITE_LAT", "SITE_LON"), ("LAT", "LONG"), ("LAT", "LON")):
+        try:
+            _SITE = {"lat": float(os.environ[la]), "lon": float(os.environ[lo])}
+            return _SITE
+        except (KeyError, ValueError):
+            continue
+    try:
+        rj = _read_json_maybe_gzip(os.path.join(RUN_DIR, "receiver.json"))
+        if rj.get("lat") is not None and rj.get("lon") is not None:
+            _SITE = {"lat": float(rj["lat"]), "lon": float(rj["lon"])}
+            return _SITE
+    except (FileNotFoundError, ValueError, KeyError, TypeError):
+        pass
+    _SITE = None
+    return _SITE
+
+
+
 # readsb continuously rewrites aircraft.json in its run dir with every aircraft it
 # currently sees. We pass a slimmed snapshot (positioned aircraft only) to the Live
 # map, which polls this once a second.
@@ -517,7 +543,7 @@ def live(q):
                 a["military"] = bool(m["military"])
         except Exception:                                # noqa: BLE001 -- DB down: still serve live
             log.warning("live: aircraft-index enrichment skipped (db unavailable)")
-    return {"now": doc.get("now"), "messages": doc.get("messages"),
+    return {"now": doc.get("now"), "messages": doc.get("messages"), "site": _site_location(),
             "count_total": len(acs), "count_pos": len(out), "aircraft": out}
 
 

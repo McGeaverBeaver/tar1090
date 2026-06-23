@@ -65,7 +65,7 @@
             border-radius: 8px; padding: 6px 11px; color: #cdd5e0; font-size: 12px; max-width: 50%; }
 
   /* live aircraft list — transparent glass panel, docked left, minimizable */
-  #list { position: absolute; left: 10px; top: 78px; bottom: 10px; width: 284px; z-index: 610;
+  #list { position: absolute; left: 10px; top: 78px; bottom: 10px; width: 322px; z-index: 610;
           background: rgba(18,21,26,.62); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
           border: 1px solid #313845; border-radius: 14px; box-shadow: 0 12px 34px rgba(0,0,0,.55);
           display: flex; flex-direction: column; overflow: hidden; }
@@ -81,13 +81,14 @@
   #list.min #list-body { display: none; }
   #list-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
   #list-tbl thead th { position: sticky; top: 0; background: rgba(20,23,28,.94); color: #8a93a2; font-size: 10px;
-                       text-transform: uppercase; letter-spacing: .4px; text-align: left; padding: 6px 10px; cursor: pointer; white-space: nowrap; }
+                       text-transform: uppercase; letter-spacing: .3px; text-align: left; padding: 6px 8px; cursor: pointer; white-space: nowrap; }
   #list-tbl thead th.n { text-align: right; }
   #list-tbl thead th:hover { color: #fff; }
   #list-tbl thead th .ar { color: #4d9bff; font-size: 9px; }
-  #list-tbl td { padding: 5px 10px; border-bottom: 1px solid rgba(255,255,255,.05); white-space: nowrap; }
+  #list-tbl td { padding: 5px 8px; border-bottom: 1px solid rgba(255,255,255,.05); white-space: nowrap; }
   #list-tbl td.n { text-align: right; font-variant-numeric: tabular-nums; color: #cdd5e0; }
-  #list-tbl td.cs { font-weight: 600; }
+  #list-tbl td.cs { font-weight: 600; max-width: 78px; overflow: hidden; text-overflow: ellipsis; }
+  #list-tbl:not(.has-dist) .dist { display: none; }   /* hide Distance until a site location is known */
   #list-tbl tr.lr { cursor: pointer; }
   #list-tbl tr.lr:hover { background: rgba(255,255,255,.06); }
   #list-tbl tr.lr.sel { background: rgba(45,108,223,.32); }
@@ -133,6 +134,7 @@
         <thead><tr>
           <th data-k="flight">Flight</th><th data-k="t">Type</th>
           <th data-k="alt" class="n">Alt</th><th data-k="gs" class="n">Spd</th>
+          <th data-k="squawk" class="n">Sqk</th><th data-k="dist" class="n dist">Dist</th>
         </tr></thead>
         <tbody id="list-rows"></tbody>
       </table>
@@ -239,6 +241,13 @@ let selTrailReq = 0;
 let selectedHex = null, lastData = new Map(), fitted = false, filter = '';
 let showLabels = false, showTrails = false, showGround = true;
 let listSort = { key: 'alt', dir: -1 };   // live-list sort (default: highest altitude first)
+let siteLoc = null, pendingScroll = false;
+function distNm(a){   // great-circle nm from the receiver to an aircraft (null if no site)
+  if (!siteLoc || a.lat==null || a.lon==null) return null;
+  const r=Math.PI/180, dLat=(a.lat-siteLoc.lat)*r, dLon=(a.lon-siteLoc.lon)*r;
+  const s=Math.sin(dLat/2)**2 + Math.cos(siteLoc.lat*r)*Math.cos(a.lat*r)*Math.sin(dLon/2)**2;
+  return 3440.065 * 2*Math.atan2(Math.sqrt(s), Math.sqrt(1-s));   // earth radius in nm
+}
 
 function planeColor(a){ return (a.military || isMil(a.squawk)) ? '#ff4d4d' : altColor(a.alt); }
 function tipOpts(){ return { permanent: showLabels, direction: showLabels ? 'right' : 'top',
@@ -259,6 +268,7 @@ async function poll(){
 
 function render(j){
   const acs = j.aircraft || [];
+  if (j.site && !siteLoc){ siteLoc = j.site; $('list-tbl').classList.add('has-dist'); }
   const seen = new Set();
   lastData = new Map();
   const pts = [];
@@ -319,18 +329,27 @@ function renderList(acs){
   let rows = acs.filter(a => a.lat!=null && (showGround || a.alt!=='ground'));
   if (filter) rows = rows.filter(a => `${a.flight||''} ${a.hex} ${a.r||''} ${a.t||''}`.toLowerCase().includes(filter));
   const k = listSort.key, dir = listSort.dir;
-  const val = a => k==='alt' ? (a.alt==='ground' ? -1 : (a.alt ?? -2))
-                 : k==='gs'  ? (a.gs ?? -1)
+  const val = a => k==='alt'    ? (a.alt==='ground' ? -1 : (a.alt ?? -2))
+                 : k==='gs'     ? (a.gs ?? -1)
+                 : k==='dist'   ? (distNm(a) ?? 1e9)
+                 : k==='squawk' ? (a.squawk ?? '')
                  : (a[k] || '').toString().toLowerCase();
   rows.sort((x,y)=>{ const vx=val(x), vy=val(y); return vx<vy ? -dir : vx>vy ? dir : 0; });
   const body = $('list-body'), keep = body.scrollTop;
   $('list-rows').innerHTML = rows.map(a => {
     const alt = a.alt==='ground' ? 'grnd' : (a.alt!=null ? a.alt.toLocaleString() : '—');
+    const d = distNm(a);
     return `<tr class="lr${a.hex===selectedHex?' sel':''}${a.military?' mil':''}" data-hex="${a.hex}">`
       + `<td class="cs">${a.flight || a.r || a.hex}</td><td>${a.t || ''}</td>`
-      + `<td class="n">${alt}</td><td class="n">${a.gs!=null ? Math.round(a.gs) : '—'}</td></tr>`;
+      + `<td class="n">${alt}</td><td class="n">${a.gs!=null ? Math.round(a.gs) : '—'}</td>`
+      + `<td class="n">${a.squawk || '—'}</td>`
+      + `<td class="n dist">${d!=null ? (d<10 ? d.toFixed(1) : Math.round(d)) : '—'}</td></tr>`;
   }).join('');
   body.scrollTop = keep;
+  if (pendingScroll && selectedHex){                 // bring a map-picked aircraft into view
+    const r = $('list-rows').querySelector(`tr[data-hex="${selectedHex}"]`);
+    if (r){ r.scrollIntoView({ block: 'nearest' }); pendingScroll = false; }
+  }
   $('list-count').textContent = `· ${rows.length}`;
   // reflect the active sort column in the header
   document.querySelectorAll('#list-tbl thead th').forEach(th => {
@@ -348,6 +367,7 @@ function select(hex){
   }
   renderInfo(a); showPhoto(a); loadSelTrail(hex);
   $('card').classList.add('on');
+  pendingScroll = true; renderList([...lastData.values()]);   // highlight + scroll the list row now
 }
 function deselect(){ selectedHex = null; $('card').classList.remove('on'); selTrailReq++; selLayer.clearLayers();
   for (const e of markers.values()) e.key=''; }
