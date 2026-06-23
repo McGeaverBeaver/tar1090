@@ -99,25 +99,40 @@ docker run -d --name tar1090 --restart unless-stopped \
   -e LAT=XX.XXX -e LONG=-YY.YYY \
   -e TZ=America/New_York \
   -e TAR1090_DB_DSN="host=DB_IP port=5432 dbname=tar1090 user=tar1090 password=changeme" \
+  -v /mnt/cache/appdata/tar1090/globe_history:/var/globe_history \
   -p 80:80 \
   ghcr.io/mcgeaverbeaver/tar1090-allinone:latest
 ```
 
-Replace `DB_IP` with your database's address. That's the only new thing versus a plain
-tar1090 container. Keep your usual volumes (e.g. globe_history) if you use them.
+Replace `DB_IP` with your database's address (and pick any host path you like for the
+volume).
+
+> **Important — persist the trails, or you'll get "no trail on disk".**
+> There are two separate stores. The flight **index** (callsign, duration, max alt — the
+> table rows) is written to your **database** and always survives. The actual **trail**
+> lives in readsb's `globe_history` **inside the container** at `/var/globe_history`.
+> If you don't mount that on a real volume (the `-v` line above), **every container
+> recreate — including pulling a new image — wipes all collected trails**, while the
+> index in your database stays. You then see flights listed with a duration but no
+> trail. Mount the volume once and trails persist across updates. (Trails only exist from
+> when collection started with the volume mounted — older flights won't backfill.)
 
 ### Unraid
 
 Edit your existing tar1090 template: set **Repository** to
-`ghcr.io/mcgeaverbeaver/tar1090-allinone:latest`, then add one **Variable**:
+`ghcr.io/mcgeaverbeaver/tar1090-allinone:latest`, then add one **Variable** and one
+**Path**:
 
-| Key | Value |
-|-----|-------|
-| `TAR1090_DB_DSN` | `host=192.168.10.245 port=5432 dbname=tar1090 user=tar1090 password=changeme` |
+| Type | Key / Container path | Value / Host path |
+|------|----------------------|-------------------|
+| Variable | `TAR1090_DB_DSN` | `host=192.168.10.245 port=5432 dbname=tar1090 user=tar1090 password=changeme` |
+| Path | `/var/globe_history` | `/mnt/cache/appdata/tar1090/globe_history` |
 
-Leave all your existing `BEASTHOST` / `LAT` / `LONG` / etc. variables as they are. You
-do **not** need the `pgdata` volume or the separate `host`/`user`/`password` variables
-from earlier attempts — remove those.
+The **Path** is what keeps your trails: without it, every template update / container
+recreate wipes the collected `globe_history` (see the warning above) and flights show
+with no trail. Leave all your existing `BEASTHOST` / `LAT` / `LONG` / etc. variables as
+they are. You do **not** need the `pgdata` volume or the separate `host`/`user`/`password`
+variables from earlier attempts — remove those.
 
 ## Verify
 
