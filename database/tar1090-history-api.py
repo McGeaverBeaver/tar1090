@@ -472,6 +472,35 @@ def traces(q):
     return {"flights": out, "chunks": len(bases), "truncated": False}
 
 
+# --- live ('Live' tab) ------------------------------------------------------
+# readsb continuously rewrites aircraft.json in its run dir with every aircraft it
+# currently sees. We pass a slimmed snapshot (positioned aircraft only) to the Live
+# map, which polls this once a second.
+def live(q):
+    path = os.path.join(RUN_DIR, "aircraft.json")
+    try:
+        doc = _read_json_maybe_gzip(path)
+    except FileNotFoundError:
+        return {"now": None, "aircraft": [], "count_total": 0, "count_pos": 0,
+                "error": f"live feed not found ({path}) — is readsb running in this container?"}
+    acs = doc.get("aircraft") or []
+    out = []
+    for a in acs:
+        if a.get("lat") is None or a.get("lon") is None:
+            continue
+        out.append({
+            "hex": a.get("hex"), "flight": (a.get("flight") or "").strip(),
+            "r": a.get("r"), "t": a.get("t"), "desc": a.get("desc"),
+            "lat": a.get("lat"), "lon": a.get("lon"),
+            "alt": a.get("alt_baro"), "alt_geom": a.get("alt_geom"),
+            "gs": a.get("gs"), "track": a.get("track"), "baro_rate": a.get("baro_rate"),
+            "squawk": a.get("squawk"), "category": a.get("category"),
+            "seen": a.get("seen"), "seen_pos": a.get("seen_pos"), "rssi": a.get("rssi"),
+        })
+    return {"now": doc.get("now"), "messages": doc.get("messages"),
+            "count_total": len(acs), "count_pos": len(out), "aircraft": out}
+
+
 # --- alerts -----------------------------------------------------------------
 ALERT_DDL = """
 CREATE TABLE IF NOT EXISTS alert_config (
@@ -760,7 +789,7 @@ def _resume_import_on_start():
 
 # --- HTTP -------------------------------------------------------------------
 ROUTES = {"/api/search": search, "/api/options": options,
-          "/api/trace": trace, "/api/traces": traces,
+          "/api/trace": trace, "/api/traces": traces, "/api/live": live,
           "/api/alerts/rules": alerts_rules_get, "/api/alerts/config": alerts_config_get,
           "/api/alerts/log": alerts_log_get, "/api/import/status": import_status}
 POST_ROUTES = {"/api/alerts/rules": alerts_rule_save, "/api/alerts/rules/delete": alerts_rule_delete,
