@@ -492,11 +492,21 @@ function bearingDeg(a, b){ // a,b = [lat,lon]
   const x = Math.cos(la1)*Math.sin(la2) - Math.sin(la1)*Math.cos(la2)*Math.cos(dLon);
   return (Math.atan2(y, x)*180/Math.PI + 360) % 360;
 }
+// Bearing of travel arriving at point j of arr ([t,lat,lon,...]). Walks back to the most recent
+// point that's a meaningful distance away (~>100 m) so coincident/jittery end-points don't make
+// the plane snap to north.
+function segBearing(arr, j){
+  let k = Math.max(0, j-1);
+  for (let m = j-1; m >= 0; m--){
+    k = m;
+    const dy = arr[j][1]-arr[m][1], dx = arr[j][2]-arr[m][2];
+    if (dy*dy + dx*dx > 1e-6) break;
+  }
+  return bearingDeg([arr[k][1], arr[k][2]], [arr[j][1], arr[j][2]]);
+}
 function headingAt(i){
   if (pts.length < 2) return 0;
-  const p0 = (i <= 0) ? pts[0] : pts[i-1];
-  const p1 = (i <= 0) ? pts[1] : pts[i];
-  return bearingDeg([p0[1], p0[2]], [p1[1], p1[2]]);
+  return segBearing(pts, Math.min(Math.max(i, 1), pts.length - 1));
 }
 
 async function renderMap(){
@@ -557,9 +567,9 @@ async function drawMany(ids, isAll){
     if (iconMode){
       // directional aircraft icon at the END of the trail (latest position), pointed along
       // travel -- matching the Live map (plane leads, trail behind); no line in this mode.
-      const n = tp.length, a = tp[n-1], b = tp[n-2] || a;
+      const n = tp.length, a = tp[n-1];
       const m = L.marker([a[1], a[2]], { icon: makePlaneIcon(f.icao_type, col,
-        bearingDeg([b[1],b[2]],[a[1],a[2]]), 22), interactive:true, keyboard:false });
+        segBearing(tp, n-1), 22), interactive:true, keyboard:false });
       m.on('click', focus);
       m.addTo(trailLayer);
     } else {
