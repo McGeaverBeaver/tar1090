@@ -26,6 +26,15 @@
   #controls button.ghost { background: #2a2f38; }
   #controls button.ghost:hover { background: #353c47; }
   #controls button.toggle.on { background: #2e9e6b; }
+  #searchbox { display: flex; align-items: center; background: #0f1115; border: 1px solid #333; border-radius: 6px; }
+  #searchbox button { background: transparent; border: 0; color: #8a93a2; font-size: 14px; padding: 6px 2px 6px 8px; cursor: pointer; }
+  #searchbox button:hover { background: transparent; color: #e6e6e6; }
+  #controls #q { width: 150px; background: transparent; border: 0; padding: 7px 9px 7px 4px; }
+  #advtoggle .caret { display: inline-block; transition: transform .15s; }
+  #advtoggle.on .caret { transform: rotate(180deg); }
+  #adv { display: none; flex-basis: 100%; width: 100%; flex-wrap: wrap; gap: 6px; align-items: end;
+         margin-top: 4px; padding-top: 8px; border-top: 1px solid #2c313a; }
+  #adv.on { display: flex; }
   #bell.armed { background: #caa23a; color: #1a1d23; font-weight: 600; }
   #presets { display: flex; gap: 4px; }
   #presets button { background: #21252c; color: #cdd5e0; padding: 6px 9px; font-size: 12px; }
@@ -96,7 +105,6 @@
   /* mobile List/Map switcher (hidden on desktop) */
   #mview { display: none; }
   @media (max-width: 760px) {
-    header h1 span { display: none; }
     #controls button, #presets button { padding: 9px 12px; }
     #pager { flex-wrap: wrap; row-gap: 6px; }
     #viewbtn { margin-left: 0; }
@@ -115,12 +123,13 @@
     #main.m-list #left { flex: 1; max-height: none; overflow: auto; -webkit-overflow-scrolling: touch; }
     #main.m-map  #left { display: none; }
     #main.m-map  #right { flex: 1; min-height: 0; }
+    /* map view = clean map: hide the filter/pager toolbars (they belong to the list) */
+    body.mv-map #controls, body.mv-map #pager { display: none; }
   }
 </style>
 </head>
 <body>
 <header>
-  <h1>tar1090 — history search &amp; replay <span>· search the flight index, replay trails from globe_history</span></h1>
   <nav id="tabs"><a href="live.html">Live</a><a href="index.html" class="active">History</a><a href="alerts.html" class="admin-only">Alerts</a><a href="settings.html" class="admin-only">Settings</a></nav>
 </header>
 
@@ -129,18 +138,23 @@
     <button data-h="4">4h</button><button data-h="8">8h</button><button data-h="24">24h</button>
     <button data-h="168">7d</button><button data-h="720">30d</button><button data-h="8760">1y</button>
   </div>
-  <label>Search<input id="q" type="text" placeholder="callsign / reg / type"></label>
-  <label>Callsign<input id="callsign" type="text"></label>
-  <label>Registration<input id="registration" type="text"></label>
-  <label>Type<input id="type" type="text"></label>
-  <label>Operator<input id="operator" type="text"></label>
-  <label>Military<select id="mil"><option value="any">Any</option><option value="mil">Military</option><option value="civ">Civil</option></select></label>
-  <label>From<input id="from" type="datetime-local"></label>
-  <label>To<input id="to" type="datetime-local"></label>
-  <button id="go">Search</button>
-  <button id="clear" class="ghost">Clear</button>
-  <button id="multi" class="toggle ghost" title="Mobile-friendly multi-select: when on, each tap adds/removes a flight">Multi</button>
+  <div id="searchbox">
+    <button id="searchgo" title="Search">🔍</button>
+    <input id="q" type="text" placeholder="callsign / reg / type">
+  </div>
+  <button id="advtoggle" class="ghost" title="More filters">Filters <span class="caret">▾</span></button>
   <button id="bell" class="ghost admin-only" title="Select one or more flights, then create alert rules">🔔 Alert</button>
+  <div id="adv">
+    <label>Callsign<input id="callsign" type="text"></label>
+    <label>Registration<input id="registration" type="text"></label>
+    <label>Type<input id="type" type="text"></label>
+    <label>Operator<input id="operator" type="text"></label>
+    <label>Military<select id="mil"><option value="any">Any</option><option value="mil">Military</option><option value="civ">Civil</option></select></label>
+    <label>From<input id="from" type="datetime-local"></label>
+    <label>To<input id="to" type="datetime-local"></label>
+    <button id="go">Search</button>
+    <button id="clear" class="ghost">Clear</button>
+  </div>
 </div>
 
 <div id="pager">
@@ -156,6 +170,7 @@
   <span id="pageinfo"></span>
   <button id="next" disabled>Next ›</button>
   <button id="viewbtn" title="Switch the map between altitude-coloured trails and directional aircraft icons">〰 Altitude trails</button>
+  <button id="multi" class="toggle ghost" title="Multi-select: when on, each tap adds/removes a flight">Multi</button>
   <div id="colmenu-wrap">
     <button id="colbtn" title="Show / hide columns">Columns ▾</button>
     <div id="colmenu"></div>
@@ -336,7 +351,7 @@ function endSplit(){
   split = null;
 }
 let pageOffset = 0, pageSize = 500, total = 0;
-const MAX_DRAW = 300;   // mirrors the API's HISTORY_MAX_TRAILS
+const MAX_DRAW = 2000;  // draw as many trails as the page holds (mirrors the API's HISTORY_MAX_TRAILS)
 
 // Altitude -> colour, ported from the main tar1090 UI (ColorByAlt in defaults.js) so a
 // single flight's trail gets the same smooth altitude gradient (orange low -> yellow ->
@@ -704,10 +719,15 @@ function setMView(v){
   const m = $('main');
   m.classList.toggle('m-list', v === 'list');
   m.classList.toggle('m-map', v === 'map');
+  document.body.classList.toggle('mv-list', v === 'list');
+  document.body.classList.toggle('mv-map', v === 'map');
   $('mv-list').classList.toggle('on', v === 'list');
   $('mv-map').classList.toggle('on', v === 'map');
   if (v === 'map') setTimeout(()=> map.invalidateSize(), 60);
 }
+// collapsible advanced filters + the search-icon button
+$('advtoggle').onclick = ()=>{ $('adv').classList.toggle('on'); $('advtoggle').classList.toggle('on'); };
+$('searchgo').onclick = ()=> doSearch(false);
 $('mv-list').onclick = ()=> setMView('list');
 $('mv-map').onclick  = ()=> setMView('map');
 if (mq.matches) setMView('list');

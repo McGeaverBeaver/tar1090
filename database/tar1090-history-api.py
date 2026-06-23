@@ -58,7 +58,7 @@ WEB_DIR     = os.environ.get("HISTORY_WEB_DIR",
 MAX_RESULTS = int(os.environ.get("HISTORY_MAX_RESULTS", "2000"))
 # "Show all trails" caps: how many flights to draw at once, and how many distinct 30-min
 # heatmap chunks we'll read for one overview request (bounds work for wide time ranges).
-MAX_TRAILS       = int(os.environ.get("HISTORY_MAX_TRAILS", "300"))
+MAX_TRAILS       = int(os.environ.get("HISTORY_MAX_TRAILS", "2000"))
 MAX_TRACE_CHUNKS = int(os.environ.get("HISTORY_MAX_TRACE_CHUNKS", "400"))
 # A flight is "active" (still in the air / being tracked) if the logger has refreshed its
 # end_time within this many seconds -- its trail is still being recorded, so it may be

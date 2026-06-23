@@ -55,7 +55,7 @@
   document.getElementById('go').href = target;
   if (q.has('loggedout')) {
     document.getElementById('h').textContent = "You’re signed out";
-    document.getElementById('p').textContent = "Safe landing. Ready whenever you want back in.";
+    document.getElementById('p').textContent = "Safe flight. Cleared for takeoff whenever you want back in.";
     document.getElementById('sp').style.display = 'none';
   } else {
     setTimeout(function () { location.href = target; }, 1000);   // auto sign-in
