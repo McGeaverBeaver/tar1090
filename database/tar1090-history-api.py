@@ -968,7 +968,7 @@ def _archive_and_idle(status, message=None):
             (status, message))
     execute("UPDATE import_state SET status='idle', chunks_total=0, chunks_done=0, "
             "flights_added=0, fixes_seen=0, message=NULL, started_at=NULL, updated_at=now() "
-            "WHERE id=1")
+            "WHERE id=1", ())
 
 
 def _default_csv():

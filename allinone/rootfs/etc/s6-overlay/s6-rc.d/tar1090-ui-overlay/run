@@ -12,7 +12,9 @@ set -u
 
 overlay_src=/usr/local/share/tar1090-uioverlay
 
-if [[ "${ENABLE_UI_OVERLAY,,}" == "false" ]]; then
+# Default to enabled; tolerate the var being unset under `set -u`.
+ui_overlay="${ENABLE_UI_OVERLAY:-true}"
+if [[ "${ui_overlay,,}" == "false" ]]; then
   echo "[ui-overlay] disabled (ENABLE_UI_OVERLAY=false)"
   exec sleep infinity
 fi
