@@ -285,6 +285,30 @@ try { hiddenCols = new Set(JSON.parse(localStorage.getItem('histHiddenCols') || 
 const saveColW   = ()=>{ try{ localStorage.setItem('histColW', JSON.stringify(colW)); }catch(e){} };
 const saveHidden = ()=>{ try{ localStorage.setItem('histHiddenCols', JSON.stringify([...hiddenCols])); }catch(e){} };
 
+// Column visibility is also part of the DB-backed settings (admin "Display defaults" + each
+// viewer's "My preferences"), the same way the Live table is. localStorage is just a fast cache.
+const HIST_COLKEYS = ['active','callsign','registration','icao_type','military','start','duration_s','max_alt','operator'];
+let histPrefs = {}, histAllowPrefs = true, histPrefsLoaded = false;
+function saveHistColPrefs(){                     // persist the user's column choice to their prefs
+  if (!histAllowPrefs || !histPrefsLoaded) return;
+  const hc = {}; HIST_COLKEYS.forEach(k => hc[k] = !hiddenCols.has(k));
+  histPrefs.hist_cols = hc;
+  fetch('api/settings/prefs', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ prefs: histPrefs }) }).catch(()=>{});
+}
+async function loadHistColSettings(){            // effective columns: built-in <- admin global <- prefs
+  let cfg = null;
+  try { cfg = await (await fetch('api/settings')).json(); } catch(e){ return; }
+  const B = (cfg && cfg.builtin) || {}, G = (cfg && cfg.global) || {};
+  histAllowPrefs = (B.allow_user_prefs !== false) && (G.allow_user_prefs !== false);
+  histPrefs = (cfg && cfg.prefs) || {};
+  histPrefsLoaded = true;
+  const P = histAllowPrefs ? histPrefs : {};
+  const hc = Object.assign({}, B.hist_cols, G.hist_cols, P.hist_cols);
+  hiddenCols = new Set(HIST_COLKEYS.filter(k => hc[k] === false));
+  saveHidden(); applyColVis();
+}
+
 function applyColVis(){
   let el = document.getElementById('colhide');
   if (!el){ el = document.createElement('style'); el.id = 'colhide'; document.head.appendChild(el); }
@@ -340,7 +364,7 @@ function buildColMenu(){
   for (const c of COLUMNS){
     const lab = document.createElement('label');
     const cb = document.createElement('input'); cb.type = 'checkbox'; cb.dataset.key = c.key; cb.checked = !hiddenCols.has(c.key);
-    cb.onchange = ()=>{ cb.checked ? hiddenCols.delete(c.key) : hiddenCols.add(c.key); saveHidden(); applyColVis(); };
+    cb.onchange = ()=>{ cb.checked ? hiddenCols.delete(c.key) : hiddenCols.add(c.key); saveHidden(); saveHistColPrefs(); applyColVis(); };
     lab.appendChild(cb); lab.appendChild(document.createTextNode(' ' + c.label));
     m.appendChild(lab);
   }
@@ -747,6 +771,7 @@ $('viewbtn').onclick = () => {
 buildHead();
 buildColMenu();
 applyColVis();
+loadHistColSettings();   // pull column prefs from the DB (applyColVis re-syncs the menu checkboxes)
 initList();
 // altitude legend bar, built straight from altColor() so it always matches the trails
 (function buildLegend(){

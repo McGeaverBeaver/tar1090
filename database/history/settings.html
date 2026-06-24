@@ -92,12 +92,24 @@
       <div class="row"><label>Distance</label><select id="g_u_dist"><option value="nm">nm</option><option value="km">km</option><option value="mi">mi</option></select></div>
     </fieldset>
     <fieldset>
-      <legend>Default table columns</legend>
+      <legend>Default Live table columns</legend>
       <div class="row"><label>Type</label><input type="checkbox" id="g_col_t"></div>
       <div class="row"><label>Altitude</label><input type="checkbox" id="g_col_alt"></div>
       <div class="row"><label>Speed</label><input type="checkbox" id="g_col_gs"></div>
       <div class="row"><label>Squawk</label><input type="checkbox" id="g_col_squawk"></div>
       <div class="row"><label>Distance</label><input type="checkbox" id="g_col_dist"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Default History table columns</legend>
+      <div class="row"><label>Live flag</label><input type="checkbox" id="g_hc_active"></div>
+      <div class="row"><label>Callsign</label><input type="checkbox" id="g_hc_callsign"></div>
+      <div class="row"><label>Registration</label><input type="checkbox" id="g_hc_registration"></div>
+      <div class="row"><label>Type</label><input type="checkbox" id="g_hc_icao_type"></div>
+      <div class="row"><label>Military</label><input type="checkbox" id="g_hc_military"></div>
+      <div class="row"><label>Start time</label><input type="checkbox" id="g_hc_start"></div>
+      <div class="row"><label>Duration</label><input type="checkbox" id="g_hc_duration_s"></div>
+      <div class="row"><label>Max altitude</label><input type="checkbox" id="g_hc_max_alt"></div>
+      <div class="row"><label>Operator</label><input type="checkbox" id="g_hc_operator"></div>
     </fieldset>
     <fieldset>
       <legend>Viewer overrides</legend>
@@ -125,12 +137,24 @@
       <div class="row"><label>Distance</label><select id="u_u_dist"><option value="nm">nm</option><option value="km">km</option><option value="mi">mi</option></select></div>
     </fieldset>
     <fieldset>
-      <legend>Table columns</legend>
+      <legend>Live table columns</legend>
       <div class="row"><label>Type</label><input type="checkbox" id="u_col_t"></div>
       <div class="row"><label>Altitude</label><input type="checkbox" id="u_col_alt"></div>
       <div class="row"><label>Speed</label><input type="checkbox" id="u_col_gs"></div>
       <div class="row"><label>Squawk</label><input type="checkbox" id="u_col_squawk"></div>
       <div class="row"><label>Distance</label><input type="checkbox" id="u_col_dist"></div>
+    </fieldset>
+    <fieldset>
+      <legend>History table columns</legend>
+      <div class="row"><label>Live flag</label><input type="checkbox" id="u_hc_active"></div>
+      <div class="row"><label>Callsign</label><input type="checkbox" id="u_hc_callsign"></div>
+      <div class="row"><label>Registration</label><input type="checkbox" id="u_hc_registration"></div>
+      <div class="row"><label>Type</label><input type="checkbox" id="u_hc_icao_type"></div>
+      <div class="row"><label>Military</label><input type="checkbox" id="u_hc_military"></div>
+      <div class="row"><label>Start time</label><input type="checkbox" id="u_hc_start"></div>
+      <div class="row"><label>Duration</label><input type="checkbox" id="u_hc_duration_s"></div>
+      <div class="row"><label>Max altitude</label><input type="checkbox" id="u_hc_max_alt"></div>
+      <div class="row"><label>Operator</label><input type="checkbox" id="u_hc_operator"></div>
     </fieldset>
     <div class="actions"><button id="u_save">Save preferences</button><button id="u_reset" class="ghost">Reset to site defaults</button></div>
     <div id="u_status" class="help wide"></div>
@@ -421,6 +445,8 @@ $('users_refresh').onclick = loadUsers;
 
 // ---- display defaults (admin global) + my preferences (per-user) ----
 let CFG = { builtin:{}, global:{}, prefs:{}, role:'admin' };
+const HC_DEFAULT = { active:true, callsign:true, registration:true, icao_type:true, military:true,
+                     start:true, duration_s:true, max_alt:true, operator:true };
 function merged(){                                    // built-in <- admin global  (for the Display tab)
   const B = CFG.builtin || {}, G = CFG.global || {};
   return {
@@ -428,6 +454,7 @@ function merged(){                                    // built-in <- admin globa
     defaults: Object.assign({ labels:false, trails:false, ground:true }, B.defaults, G.defaults),
     units:    Object.assign({ speed:'kt', alt:'ft', dist:'nm' }, B.units, G.units),
     cols:     Object.assign({ t:true, alt:true, gs:true, squawk:true, dist:true }, B.cols, G.cols),
+    hist_cols: Object.assign({}, HC_DEFAULT, B.hist_cols, G.hist_cols),
     allow:    (G.allow_user_prefs !== undefined) ? G.allow_user_prefs !== false : (B.allow_user_prefs !== false),
   };
 }
@@ -437,28 +464,32 @@ function effUser(){                                   // ...<- this user's prefs
     defaults: Object.assign({}, m.defaults, P.defaults),
     units:    Object.assign({}, m.units, P.units),
     cols:     Object.assign({}, m.cols, P.cols),
+    hist_cols: Object.assign({}, m.hist_cols, P.hist_cols),
     allow:    m.allow,
   };
 }
 const COLKEYS = ['t','alt','gs','squawk','dist'];
+const HCKEYS = ['active','callsign','registration','icao_type','military','start','duration_s','max_alt','operator'];
 function populateDisplay(){
   const m = merged();
   ['labels','trails','ground','fit'].forEach(k => $('g_btn_'+k).checked = m.buttons[k] !== false);
   ['labels','trails','ground'].forEach(k => $('g_def_'+k).checked = !!m.defaults[k]);
   $('g_u_speed').value = m.units.speed; $('g_u_alt').value = m.units.alt; $('g_u_dist').value = m.units.dist;
   COLKEYS.forEach(k => $('g_col_'+k).checked = m.cols[k] !== false);
+  HCKEYS.forEach(k => $('g_hc_'+k).checked = m.hist_cols[k] !== false);
   $('g_allow').checked = m.allow;
   $('g_status').textContent = '';
 }
 async function saveDisplay(){
   const s = {
-    buttons:  {}, defaults: {}, units: {}, cols: {},
+    buttons:  {}, defaults: {}, units: {}, cols: {}, hist_cols: {},
     allow_user_prefs: $('g_allow').checked,
   };
   ['labels','trails','ground','fit'].forEach(k => s.buttons[k] = $('g_btn_'+k).checked);
   ['labels','trails','ground'].forEach(k => s.defaults[k] = $('g_def_'+k).checked);
   s.units = { speed:$('g_u_speed').value, alt:$('g_u_alt').value, dist:$('g_u_dist').value };
   COLKEYS.forEach(k => s.cols[k] = $('g_col_'+k).checked);
+  HCKEYS.forEach(k => s.hist_cols[k] = $('g_hc_'+k).checked);
   $('g_status').textContent = 'Saving…';
   const r = await post('api/settings/global', { settings: s });
   if (r.ok){ CFG.global = s; $('g_status').textContent = 'Saved. Reload the Live map to see the changes.'; }
@@ -469,16 +500,18 @@ function populatePrefs(){
   ['labels','trails','ground'].forEach(k => $('u_def_'+k).checked = !!e.defaults[k]);
   $('u_u_speed').value = e.units.speed; $('u_u_alt').value = e.units.alt; $('u_u_dist').value = e.units.dist;
   COLKEYS.forEach(k => $('u_col_'+k).checked = e.cols[k] !== false);
+  HCKEYS.forEach(k => $('u_hc_'+k).checked = e.hist_cols[k] !== false);
   const locked = !e.allow;
   $('prefs_locked').style.display = locked ? '' : 'none';
   $('p_prefs').querySelectorAll('input,select,#u_save').forEach(el => { if (el.id !== 'u_reset') el.disabled = locked; });
   $('u_status').textContent = '';
 }
 async function savePrefs(){
-  const p = { defaults: {}, units: {}, cols: {} };
+  const p = { defaults: {}, units: {}, cols: {}, hist_cols: {} };
   ['labels','trails','ground'].forEach(k => p.defaults[k] = $('u_def_'+k).checked);
   p.units = { speed:$('u_u_speed').value, alt:$('u_u_alt').value, dist:$('u_u_dist').value };
   COLKEYS.forEach(k => p.cols[k] = $('u_col_'+k).checked);
+  HCKEYS.forEach(k => p.hist_cols[k] = $('u_hc_'+k).checked);
   $('u_status').textContent = 'Saving…';
   const r = await post('api/settings/prefs', { prefs: p });
   if (r.ok){ CFG.prefs = p; $('u_status').textContent = 'Saved. Reload the Live map to see the changes.'; }

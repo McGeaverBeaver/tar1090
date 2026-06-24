@@ -933,6 +933,8 @@ DEFAULT_SETTINGS = {
     "defaults": {"labels": False, "trails": False, "ground": True},             # their initial on/off state
     "units":    {"speed": "kt", "alt": "ft", "dist": "nm"},
     "cols":     {"t": True, "alt": True, "gs": True, "squawk": True, "dist": True},
+    "hist_cols": {"active": True, "callsign": True, "registration": True, "icao_type": True,
+                  "military": True, "start": True, "duration_s": True, "max_alt": True, "operator": True},
     "allow_user_prefs": True,                                                   # let viewers override the above
 }
 SETTINGS_DDL = """
