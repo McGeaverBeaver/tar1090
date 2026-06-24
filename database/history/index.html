@@ -64,11 +64,10 @@
   #list-hd .m:hover { background: #2a2f38; color: #fff; }
   #list.min { height: auto !important; max-height: none; }
   #list.min .m { transform: rotate(-90deg); }
-  #list.min #list-body, #list.min #list-foot, #list.min #list-resize { display: none; }
+  #list.min #list-body, #list.min #list-resize { display: none; }
   #list.resized { max-height: none; }
   #list.resized #list-body { flex: 1 1 auto; }
   #list-body { flex: 0 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
-  #list-foot { flex: 0 0 auto; padding: 8px 14px; border-top: 1px solid #2a313c; background: rgba(20,23,28,.5); }
   /* drag-to-resize grip, bottom-right corner */
   #list-resize { position: absolute; right: 0; bottom: 0; width: 20px; height: 20px; cursor: nwse-resize; z-index: 3;
                  background: linear-gradient(135deg, transparent 0 45%, rgba(255,255,255,.28) 45% 55%, transparent 55% 66%,
@@ -105,7 +104,6 @@
   #colmenu label:hover { background: #262b33; }
   .mil { color: #ff6b6b; font-weight: 600; }
   .live { color: #2ec86b; font-weight: 600; font-size: 11px; white-space: nowrap; }
-  #status { color: #9aa3b2; font-size: 11.5px; }
   #replay { position: absolute; left: 408px; right: 116px; bottom: 12px; z-index: 500;
             background: rgba(20,22,26,.92); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
             border: 1px solid #313845; border-radius: 12px; padding: 7px 12px; display: none; align-items: center; gap: 8px;
@@ -220,7 +218,6 @@
     <div id="list-body">
       <table><thead><tr id="headrow"></tr></thead><tbody id="rows"></tbody></table>
     </div>
-    <div id="list-foot"><span id="status">Pick a time range (or a preset) and search.</span></div>
     <div id="list-resize" title="Drag to resize"></div>
   </div>
 
@@ -427,7 +424,7 @@ function altColor(altitude){
   return `hsl(${h.toFixed(0)},88%,${l.toFixed(0)}%)`;
 }
 function hue(s){ let h=0; for (let i=0;i<s.length;i++) h=(h*31 + s.charCodeAt(i))>>>0; return 'hsl('+(h%360)+',70%,60%)'; }
-function setStatus(extra){ $('status').textContent = searchMsg + (extra ? ' — ' + extra : ''); }
+function setStatus(extra){ const el = $('status'); if (el) el.textContent = searchMsg + (extra ? ' — ' + extra : ''); }
 
 // Aircraft photo overlay (planespotters.net — same source as the main tar1090 UI).
 const PS_API = 'https://api.planespotters.net/pub/photos/hex/';
