@@ -30,14 +30,24 @@
   .tgl:hover { background: #353c47; color: #fff; }
   .tgl.on { background: #2d6cdf; border-color: #3b78e8; color: #fff; box-shadow: 0 0 0 1px rgba(61,120,232,.4); }
   .tgl:active { transform: translateY(1px); }
+  #filterbar { display: none; align-items: center; gap: 8px; padding: 6px 12px; background: #16191e; border-bottom: 1px solid #2c313a; flex-wrap: wrap; }
+  #filterbar.on { display: flex; }
+  #filterbar .fl { color: #8a93a2; font-size: 12px; }
+  #filterbar input[type=number] { width: 78px; }
+  #filterbar input[type=text] { width: 120px; }
+  #filterbar input { background: #0f1115; color: #e6e6e6; border: 1px solid #333; border-radius: 6px; padding: 5px 8px; font-size: 13px; }
+  #filterbar label { display: inline-flex; align-items: center; gap: 5px; color: #cdd5e0; font-size: 12px; }
   #main { flex: 1; min-height: 0; position: relative; }
   #map { position: absolute; inset: 0; background: #0b0d10; }
-  .leaflet-tile-pane { filter: brightness(0.6) contrast(1.05) saturate(0.9); }
+  #map.dimbase .leaflet-tile-pane { filter: brightness(0.6) contrast(1.05) saturate(0.9); }
   .planeicon { background: transparent; border: 0; transition: filter .15s; }
   .planeicon.sel { filter: drop-shadow(0 0 5px #4d9bff) drop-shadow(0 0 2px #fff); }
   .leaflet-tooltip.actip { background: rgba(20,23,28,.92); color: #e6e6e6; border: 1px solid #313845; border-radius: 6px;
-                           font-size: 11px; font-weight: 600; box-shadow: 0 4px 12px rgba(0,0,0,.5); }
+                           font-size: calc(11px * var(--label-scale, 1)); font-weight: 600; box-shadow: 0 4px 12px rgba(0,0,0,.5); }
   .leaflet-tooltip.actip::before { display: none; }
+  .ringlbl { background: none; border: 0; color: #9ec3ff; font-size: 10px; font-weight: 600; text-align: center; text-shadow: 0 0 3px #000, 0 0 3px #000; }
+  #list-tbl tr.lr.emerg td.cs { color: #ff4d4d; font-weight: 700; }
+  .emerg-banner { background: #ff4d4d; color: #1a1d23; font-weight: 800; font-size: 11.5px; text-align: center; padding: 5px 8px; letter-spacing: .3px; }
 
   /* modern selected-aircraft card: photo on top, flight-data bubble under it */
   #card { position: absolute; top: 10px; right: 10px; z-index: 650; width: 252px; display: none; }
@@ -153,10 +163,19 @@
     <button class="tgl" id="t-labels" title="Show a callsign label on every aircraft">🏷 Labels</button>
     <button class="tgl" id="t-trails" title="Show the selected aircraft's trail">〰 Trails</button>
     <button class="tgl on" id="t-ground" title="Show aircraft on the ground">⏚ Ground</button>
+    <button class="tgl" id="t-rings" title="Show your receiver location + range rings">◎ Rings</button>
     <button class="tgl" id="t-recenter" title="Zoom to fit every aircraft">⤢ Fit</button>
+    <button class="tgl" id="t-filter" title="Filter by altitude / military / type">⏷ Filter</button>
   </div>
   <span id="count">—</span>
   <span id="updated"></span>
+</div>
+<div id="filterbar">
+  <span class="fl">Altitude (ft)</span>
+  <input id="f-altmin" type="number" placeholder="min"><span class="fl">–</span><input id="f-altmax" type="number" placeholder="max">
+  <label class="fl"><input id="f-mil" type="checkbox"> Military only</label>
+  <span class="fl">Type</span><input id="f-type" type="text" placeholder="A32*, B738…">
+  <button id="f-clear" class="tgl">Clear filters</button>
 </div>
 <div id="main">
   <div id="map"></div>
@@ -197,8 +216,24 @@
 <script>
 const $ = id => document.getElementById(id);
 const map = L.map('map', { worldCopyJump:true, zoomControl:false }).setView([40, -74], 7);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-  { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(map);
+// selectable base layers (admin default + user pref). Only plain OSM is dimmed so the
+// altitude-coloured icons pop; the styled dark/light/satellite layers are shown as-is.
+const BASES = {
+  osm:   { url:'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', attr:'© OpenStreetMap', sub:'abc', dim:true },
+  dark:  { url:'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', attr:'© OpenStreetMap, © CARTO', sub:'abcd', dim:false },
+  light: { url:'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', attr:'© OpenStreetMap, © CARTO', sub:'abcd', dim:false },
+  sat:   { url:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr:'© Esri', sub:'', dim:false },
+};
+let baseLayer = null;
+function setBaseLayer(name){
+  const b = BASES[name] || BASES.osm;
+  if (baseLayer) map.removeLayer(baseLayer);
+  const opts = { maxZoom: 19, attribution: b.attr, zIndex: 0 };
+  if (b.sub) opts.subdomains = b.sub;
+  baseLayer = L.tileLayer(b.url, opts).addTo(map);
+  $('map').classList.toggle('dimbase', !!b.dim);
+}
+setBaseLayer('osm');
 
 // ---- altitude -> colour (ported from the main tar1090 UI, same as the History map) -------
 const _ALT_H = [ {alt:0,val:20},{alt:2000,val:32.5},{alt:4000,val:43},{alt:6000,val:54},
@@ -273,13 +308,43 @@ function fmtRate(r){ if (r==null) return '—'; if (r===0) return 'level';
   return `<span class="${r>0?'up':'dn'}">${r>0?'▲':'▼'} ${txt} <small>${unit}</small></span>`; }
 function fmtSeen(s){ if (s==null) return '—'; if (s<1) return 'now'; return Math.round(s)+'s ago'; }
 function isMil(sq){ return sq && /^(7[5-7])/.test(sq); } // emergency/special squawks (highlight)
+function emerg(sq){ return sq==='7500' ? 'HIJACK · 7500' : sq==='7600' ? 'RADIO FAIL · 7600'
+  : sq==='7700' ? 'EMERGENCY · 7700' : ''; }
 
 // ---- live polling + marker management ------------------------------------------------------
 const markers = new Map();   // hex -> { marker, key }  (key = rounded track|altband for cheap diffing)
 const selLayer = L.layerGroup().addTo(map);   // selected aircraft's trail (only when Trails is on)
+const ringsLayer = L.layerGroup().addTo(map); // receiver marker + range rings
+function drawRings(){
+  ringsLayer.clearLayers();
+  if (!showRings || !siteLoc) return;
+  L.circleMarker([siteLoc.lat, siteLoc.lon], { radius:4, weight:2, color:'#4d9bff', fillColor:'#4d9bff', fillOpacity:.9 }).addTo(ringsLayer);
+  const f = (UNITS.dist[settings.dist] || UNITS.dist.nm).f;     // value(unit) = nm * f  ->  metres = value/f*1852
+  for (const d of ringDist){
+    if (!(d > 0)) continue;
+    const m = d / f * 1852;
+    L.circle([siteLoc.lat, siteLoc.lon], { radius:m, color:'#4d9bff', weight:1, opacity:.45, fill:false, dashArray:'4 6' }).addTo(ringsLayer);
+    L.marker([siteLoc.lat + m/111320, siteLoc.lon], { interactive:false,
+      icon: L.divIcon({ className:'ringlbl', html:`${d} ${uDist()}`, iconSize:[50,14], iconAnchor:[25,7] }) }).addTo(ringsLayer);
+  }
+}
 let selTrailReq = 0;
 let selectedHex = null, lastData = new Map(), fitted = false, filter = '';
-let showLabels = false, showTrails = false, showGround = true;
+let showLabels = false, showTrails = false, showGround = true, showRings = false;
+let iconScale = 1, labelScale = 1, ringDist = [100, 150, 200];
+let fAltMin = null, fAltMax = null, fMil = false, fType = '';   // gear/bar filters (session)
+function passFilters(a){
+  if (fMil && !a.military) return false;
+  if (fType){ const t = (a.t || '').toUpperCase();
+    if (!fType.some(tok => t.startsWith(tok) || t.includes(tok))) return false; }
+  if (fAltMin != null || fAltMax != null){
+    const alt = a.alt === 'ground' ? 0 : a.alt;
+    if (alt == null) return false;
+    if (fAltMin != null && alt < fAltMin) return false;
+    if (fAltMax != null && alt > fAltMax) return false;
+  }
+  return true;
+}
 
 // Deep link: ?icao=<hex> / ?reg=<registration> / ?callsign=<cs>. Select that aircraft once the
 // live feed loads; if it isn't currently flying, fall back to its History (trail replay).
@@ -337,17 +402,18 @@ async function poll(){
 
 function render(j){
   const acs = j.aircraft || [];
-  if (j.site && !siteLoc){ siteLoc = j.site; $('list-tbl').classList.add('has-dist'); }
+  if (j.site && !siteLoc){ siteLoc = j.site; $('list-tbl').classList.add('has-dist'); drawRings(); }
   const seen = new Set();
   lastData = new Map();
   const pts = [];
   for (const a of acs){
     if (a.lat==null || a.lon==null) continue;
     if (!showGround && a.alt === 'ground') continue;
+    if (!passFilters(a)) continue;
     lastData.set(a.hex, a);
     seen.add(a.hex);
     const sel = a.hex === selectedHex;
-    const size = sel ? 32 : 22;
+    const size = Math.round((sel ? 32 : 22) * iconScale);
     const col  = planeColor(a);
     const trk  = a.track || 0;
     const key  = `${Math.round(trk/3)}|${col}|${size}`;
@@ -388,7 +454,7 @@ function render(j){
 // ---- live aircraft list (tar1090-style, modern glass, sortable + minimizable) -------------
 function renderList(acs){
   const b = map.getBounds();   // only list aircraft currently visible on the map
-  let rows = acs.filter(a => a.lat!=null && (showGround || a.alt!=='ground') && b.contains([a.lat, a.lon]));
+  let rows = acs.filter(a => a.lat!=null && (showGround || a.alt!=='ground') && passFilters(a) && b.contains([a.lat, a.lon]));
   if (filter) rows = rows.filter(a => `${a.flight||''} ${a.hex} ${a.r||''} ${a.t||''}`.toLowerCase().includes(filter));
   const k = listSort.key, dir = listSort.dir;
   const val = a => k==='alt'    ? (a.alt==='ground' ? -1 : (a.alt ?? -2))
@@ -401,7 +467,7 @@ function renderList(acs){
   $('list-rows').innerHTML = rows.map(a => {
     const alt = a.alt==='ground' ? 'grnd' : (a.alt!=null ? Math.round(cvAlt(a.alt)).toLocaleString() : '—');
     const d = cvDist(distNm(a));
-    return `<tr class="lr${a.hex===selectedHex?' sel':''}${a.military?' mil':''}" data-hex="${a.hex}">`
+    return `<tr class="lr${a.hex===selectedHex?' sel':''}${a.military?' mil':''}${emerg(a.squawk)?' emerg':''}" data-hex="${a.hex}">`
       + `<td class="cs c-flight">${a.flight || a.r || a.hex}</td><td class="c-t">${a.t || ''}</td>`
       + `<td class="n c-alt">${alt}</td><td class="n c-gs">${a.gs!=null ? Math.round(cvSpeed(a.gs)) : '—'}</td>`
       + `<td class="n c-squawk">${a.squawk || '—'}</td>`
@@ -427,7 +493,7 @@ function select(hex){
   for (const e of markers.values()) e.key = '';     // force halo/size refresh on next render
   const a = lastData.get(hex), e = markers.get(hex);
   if (a && e){                                       // highlight the picked aircraft immediately
-    e.marker.setIcon(makePlaneIcon(a.t, planeColor(a), a.track||0, 32, true, a.category));
+    e.marker.setIcon(makePlaneIcon(a.t, planeColor(a), a.track||0, Math.round(32*iconScale), true, a.category));
   }
   renderInfo(a); showPhoto(a);
   if (showTrails) loadSelTrail(hex); else { selTrailReq++; selLayer.clearLayers(); }
@@ -467,9 +533,11 @@ function renderInfo(a){
   const sub = [a.r, a.t, a.desc].filter(Boolean).join(' · ') || 'unknown aircraft';
   const tag = a.military ? ' <span class="mil">MIL</span>'
             : isMil(a.squawk) ? ' <span class="mil">⚠</span>' : '';
+  const em = emerg(a.squawk);
   $('info').innerHTML =
     `<div class="hd"><div><div class="cs">${a.flight || a.r || a.hex}${tag}</div><div class="sub">${sub}</div></div>`
     + `<div class="x" title="Deselect">✕</div></div>`
+    + (em ? `<div class="emerg-banner">⚠ ${em}</div>` : '')
     + `<div class="grid">`
     + cell('Altitude', fmtAlt(a.alt)) + cell('Ground speed', fmtSpd(a.gs))
     + cell('Track', fmtTrk(a.track)) + cell('Vertical rate', fmtRate(a.baro_rate))
@@ -541,7 +609,22 @@ $('t-trails').onclick    = e => { showTrails = !showTrails; e.currentTarget.clas
   if (showTrails && selectedHex) loadSelTrail(selectedHex);
   else { selTrailReq++; selLayer.clearLayers(); } };
 $('t-ground').onclick    = e => { showGround = !showGround; e.currentTarget.classList.toggle('on', showGround); poll(); };
+$('t-rings').onclick      = e => { showRings = !showRings; e.currentTarget.classList.toggle('on', showRings); drawRings();
+  if (showRings && siteLoc) map.setView([siteLoc.lat, siteLoc.lon], map.getZoom()); };
 $('t-recenter').onclick  = () => fitAll();
+$('t-filter').onclick     = e => { const on = $('filterbar').classList.toggle('on'); e.currentTarget.classList.toggle('on', on); };
+function readFilters(){
+  fAltMin = $('f-altmin').value !== '' ? +$('f-altmin').value : null;
+  fAltMax = $('f-altmax').value !== '' ? +$('f-altmax').value : null;
+  fMil = $('f-mil').checked;
+  const arr = ($('f-type').value || '').toUpperCase().split(',').map(s => s.trim().replace(/\*/g,'')).filter(Boolean);
+  fType = arr.length ? arr : '';
+  $('t-filter').classList.toggle('on', $('filterbar').classList.contains('on') || fAltMin!=null || fAltMax!=null || fMil || !!fType);
+  poll();
+}
+['f-altmin','f-altmax','f-type'].forEach(id => $(id).addEventListener('input', readFilters));
+$('f-mil').addEventListener('change', readFilters);
+$('f-clear').onclick = () => { $('f-altmin').value = $('f-altmax').value = $('f-type').value = ''; $('f-mil').checked = false; readFilters(); };
 
 // altitude legend bar, built straight from altColor() so it always matches the icons/trails;
 // tick labels follow the chosen altitude unit
@@ -580,6 +663,7 @@ function applyUnits(){
   if (lastData.size) renderList([...lastData.values()]);
   if (selectedHex) renderInfo(lastData.get(selectedHex));
   applyLabels();
+  drawRings();                 // ring distance labels follow the distance unit
 }
 
 // Merge built-in defaults <- admin global defaults <- this viewer's prefs (if allowed) and apply
@@ -589,19 +673,28 @@ function applyEffective(cfg){
   allowPrefs = (B.allow_user_prefs !== false) && (G.allow_user_prefs !== false);
   userPrefs  = (cfg && cfg.prefs) || {};
   const P = allowPrefs ? userPrefs : {};
-  const buttons  = Object.assign({ labels:true, trails:true, ground:true, fit:true }, B.buttons, G.buttons);
-  const defaults = Object.assign({ labels:false, trails:false, ground:true }, B.defaults, G.defaults, P.defaults);
+  const buttons  = Object.assign({ labels:true, trails:true, ground:true, fit:true, rings:true }, B.buttons, G.buttons);
+  const defaults = Object.assign({ labels:false, trails:false, ground:true, rings:false }, B.defaults, G.defaults, P.defaults);
   const units    = Object.assign({ speed:'kt', alt:'ft', dist:'nm' }, B.units, G.units, P.units);
   const cols     = Object.assign({ t:true, alt:true, gs:true, squawk:true, dist:true }, B.cols, G.cols, P.cols);
+  const mapcfg   = Object.assign({ base:'osm' }, B.map, G.map, P.map);
+  const rings    = Object.assign({ distances:[100,150,200] }, B.rings, G.rings);     // distances are admin-set
+  const sizes    = Object.assign({ icon:1, label:1 }, B.sizes, G.sizes, P.sizes);
   settings.speed = units.speed; settings.alt = units.alt; settings.dist = units.dist; settings.cols = cols;
+  iconScale = +sizes.icon || 1; labelScale = +sizes.label || 1;
+  document.documentElement.style.setProperty('--label-scale', labelScale);
+  ringDist = Array.isArray(rings.distances) ? rings.distances : [100,150,200];
   saveSettingsLocal(); buildSettings(); applyCols(); buildLegend();
+  setBaseLayer(mapcfg.base);
   // toggle-button visibility (admin-controlled)
-  const map = { labels:'t-labels', trails:'t-trails', ground:'t-ground', fit:'t-recenter' };
-  for (const k in map){ const b = $(map[k]); if (b) b.style.display = buttons[k] === false ? 'none' : ''; }
+  const btnIds = { labels:'t-labels', trails:'t-trails', ground:'t-ground', fit:'t-recenter', rings:'t-rings' };
+  for (const k in btnIds){ const b = $(btnIds[k]); if (b) b.style.display = buttons[k] === false ? 'none' : ''; }
   // initial toggle state
   showLabels = !!defaults.labels; $('t-labels').classList.toggle('on', showLabels);
   showTrails = !!defaults.trails; $('t-trails').classList.toggle('on', showTrails);
   showGround = defaults.ground !== false; $('t-ground').classList.toggle('on', showGround);
+  showRings  = !!defaults.rings;  $('t-rings').classList.toggle('on', showRings);
+  drawRings();
 }
 async function loadEffective(){
   let cfg = null;

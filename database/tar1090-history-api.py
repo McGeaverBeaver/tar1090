@@ -929,13 +929,16 @@ def users_block(body):
 # global defaults with the user's prefs to decide which toggle buttons show, their initial state,
 # units, and visible columns.
 DEFAULT_SETTINGS = {
-    "buttons":  {"labels": True, "trails": True, "ground": True, "fit": True},  # which toggle buttons show
-    "defaults": {"labels": False, "trails": False, "ground": True},             # their initial on/off state
+    "buttons":  {"labels": True, "trails": True, "ground": True, "fit": True, "rings": True},  # which toggle buttons show
+    "defaults": {"labels": False, "trails": False, "ground": True, "rings": False},             # their initial on/off state
     "units":    {"speed": "kt", "alt": "ft", "dist": "nm"},
     "cols":     {"t": True, "alt": True, "gs": True, "squawk": True, "dist": True},
     "hist_cols": {"active": True, "callsign": True, "registration": True, "icao_type": True,
                   "military": True, "start": True, "duration_s": True, "max_alt": True, "operator": True},
-    "allow_user_prefs": True,                                                   # let viewers override the above
+    "map":      {"base": "osm"},                        # base layer: osm | dark | light | sat
+    "rings":    {"distances": [100, 150, 200]},         # site range rings, in the chosen distance unit
+    "sizes":    {"icon": 1.0, "label": 1.0},            # aircraft icon / label scale
+    "allow_user_prefs": True,                           # let viewers override the above
 }
 SETTINGS_DDL = """
 CREATE TABLE IF NOT EXISTS app_settings (

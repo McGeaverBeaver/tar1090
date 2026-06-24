@@ -77,6 +77,7 @@
       <div class="row"><label>Labels</label><input type="checkbox" id="g_btn_labels"></div>
       <div class="row"><label>Trails</label><input type="checkbox" id="g_btn_trails"></div>
       <div class="row"><label>Ground</label><input type="checkbox" id="g_btn_ground"></div>
+      <div class="row"><label>Rings</label><input type="checkbox" id="g_btn_rings"></div>
       <div class="row"><label>Fit</label><input type="checkbox" id="g_btn_fit"></div>
     </fieldset>
     <fieldset>
@@ -84,6 +85,14 @@
       <div class="row"><label>Labels on</label><input type="checkbox" id="g_def_labels"></div>
       <div class="row"><label>Trails on</label><input type="checkbox" id="g_def_trails"></div>
       <div class="row"><label>Ground on</label><input type="checkbox" id="g_def_ground"></div>
+      <div class="row"><label>Range rings on</label><input type="checkbox" id="g_def_rings"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Map &amp; sizes</legend>
+      <div class="row"><label>Base map</label><select id="g_map_base"><option value="osm">OSM (dimmed)</option><option value="dark">Dark</option><option value="light">Light</option><option value="sat">Satellite</option></select></div>
+      <div class="row"><label>Range rings</label><input type="text" id="g_rings_dist" placeholder="100, 150, 200" style="max-width:160px"> <span class="help" style="margin:0">in the distance unit</span></div>
+      <div class="row"><label>Aircraft icon size</label><input type="number" id="g_sz_icon" min="0.5" max="3" step="0.1" style="max-width:90px"></div>
+      <div class="row"><label>Label size</label><input type="number" id="g_sz_label" min="0.5" max="3" step="0.1" style="max-width:90px"></div>
     </fieldset>
     <fieldset>
       <legend>Default units</legend>
@@ -129,6 +138,13 @@
       <div class="row"><label>Labels on</label><input type="checkbox" id="u_def_labels"></div>
       <div class="row"><label>Trails on</label><input type="checkbox" id="u_def_trails"></div>
       <div class="row"><label>Ground on</label><input type="checkbox" id="u_def_ground"></div>
+      <div class="row"><label>Range rings on</label><input type="checkbox" id="u_def_rings"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Map &amp; sizes</legend>
+      <div class="row"><label>Base map</label><select id="u_map_base"><option value="osm">OSM (dimmed)</option><option value="dark">Dark</option><option value="light">Light</option><option value="sat">Satellite</option></select></div>
+      <div class="row"><label>Aircraft icon size</label><input type="number" id="u_sz_icon" min="0.5" max="3" step="0.1" style="max-width:90px"></div>
+      <div class="row"><label>Label size</label><input type="number" id="u_sz_label" min="0.5" max="3" step="0.1" style="max-width:90px"></div>
     </fieldset>
     <fieldset>
       <legend>Units</legend>
@@ -450,11 +466,14 @@ const HC_DEFAULT = { active:true, callsign:true, registration:true, icao_type:tr
 function merged(){                                    // built-in <- admin global  (for the Display tab)
   const B = CFG.builtin || {}, G = CFG.global || {};
   return {
-    buttons:  Object.assign({ labels:true, trails:true, ground:true, fit:true }, B.buttons, G.buttons),
-    defaults: Object.assign({ labels:false, trails:false, ground:true }, B.defaults, G.defaults),
+    buttons:  Object.assign({ labels:true, trails:true, ground:true, fit:true, rings:true }, B.buttons, G.buttons),
+    defaults: Object.assign({ labels:false, trails:false, ground:true, rings:false }, B.defaults, G.defaults),
     units:    Object.assign({ speed:'kt', alt:'ft', dist:'nm' }, B.units, G.units),
     cols:     Object.assign({ t:true, alt:true, gs:true, squawk:true, dist:true }, B.cols, G.cols),
     hist_cols: Object.assign({}, HC_DEFAULT, B.hist_cols, G.hist_cols),
+    map:      Object.assign({ base:'osm' }, B.map, G.map),
+    rings:    Object.assign({ distances:[100,150,200] }, B.rings, G.rings),
+    sizes:    Object.assign({ icon:1, label:1 }, B.sizes, G.sizes),
     allow:    (G.allow_user_prefs !== undefined) ? G.allow_user_prefs !== false : (B.allow_user_prefs !== false),
   };
 }
@@ -465,6 +484,8 @@ function effUser(){                                   // ...<- this user's prefs
     units:    Object.assign({}, m.units, P.units),
     cols:     Object.assign({}, m.cols, P.cols),
     hist_cols: Object.assign({}, m.hist_cols, P.hist_cols),
+    map:      Object.assign({}, m.map, P.map),
+    sizes:    Object.assign({}, m.sizes, P.sizes),
     allow:    m.allow,
   };
 }
@@ -472,22 +493,28 @@ const COLKEYS = ['t','alt','gs','squawk','dist'];
 const HCKEYS = ['active','callsign','registration','icao_type','military','start','duration_s','max_alt','operator'];
 function populateDisplay(){
   const m = merged();
-  ['labels','trails','ground','fit'].forEach(k => $('g_btn_'+k).checked = m.buttons[k] !== false);
-  ['labels','trails','ground'].forEach(k => $('g_def_'+k).checked = !!m.defaults[k]);
+  ['labels','trails','ground','rings','fit'].forEach(k => $('g_btn_'+k).checked = m.buttons[k] !== false);
+  ['labels','trails','ground','rings'].forEach(k => $('g_def_'+k).checked = !!m.defaults[k]);
   $('g_u_speed').value = m.units.speed; $('g_u_alt').value = m.units.alt; $('g_u_dist').value = m.units.dist;
   COLKEYS.forEach(k => $('g_col_'+k).checked = m.cols[k] !== false);
   HCKEYS.forEach(k => $('g_hc_'+k).checked = m.hist_cols[k] !== false);
+  $('g_map_base').value = m.map.base || 'osm';
+  $('g_rings_dist').value = (m.rings.distances || []).join(', ');
+  $('g_sz_icon').value = m.sizes.icon || 1; $('g_sz_label').value = m.sizes.label || 1;
   $('g_allow').checked = m.allow;
   $('g_status').textContent = '';
 }
 async function saveDisplay(){
   const s = {
-    buttons:  {}, defaults: {}, units: {}, cols: {}, hist_cols: {},
+    buttons:  {}, defaults: {}, units: {}, cols: {}, hist_cols: {}, map: {}, rings: {}, sizes: {},
     allow_user_prefs: $('g_allow').checked,
   };
-  ['labels','trails','ground','fit'].forEach(k => s.buttons[k] = $('g_btn_'+k).checked);
-  ['labels','trails','ground'].forEach(k => s.defaults[k] = $('g_def_'+k).checked);
+  ['labels','trails','ground','rings','fit'].forEach(k => s.buttons[k] = $('g_btn_'+k).checked);
+  ['labels','trails','ground','rings'].forEach(k => s.defaults[k] = $('g_def_'+k).checked);
   s.units = { speed:$('g_u_speed').value, alt:$('g_u_alt').value, dist:$('g_u_dist').value };
+  s.map = { base: $('g_map_base').value };
+  s.rings = { distances: ($('g_rings_dist').value || '').split(',').map(x => +x.trim()).filter(x => x > 0) };
+  s.sizes = { icon: +$('g_sz_icon').value || 1, label: +$('g_sz_label').value || 1 };
   COLKEYS.forEach(k => s.cols[k] = $('g_col_'+k).checked);
   HCKEYS.forEach(k => s.hist_cols[k] = $('g_hc_'+k).checked);
   $('g_status').textContent = 'Saving…';
@@ -497,21 +524,25 @@ async function saveDisplay(){
 }
 function populatePrefs(){
   const e = effUser();
-  ['labels','trails','ground'].forEach(k => $('u_def_'+k).checked = !!e.defaults[k]);
+  ['labels','trails','ground','rings'].forEach(k => $('u_def_'+k).checked = !!e.defaults[k]);
   $('u_u_speed').value = e.units.speed; $('u_u_alt').value = e.units.alt; $('u_u_dist').value = e.units.dist;
   COLKEYS.forEach(k => $('u_col_'+k).checked = e.cols[k] !== false);
   HCKEYS.forEach(k => $('u_hc_'+k).checked = e.hist_cols[k] !== false);
+  $('u_map_base').value = e.map.base || 'osm';
+  $('u_sz_icon').value = e.sizes.icon || 1; $('u_sz_label').value = e.sizes.label || 1;
   const locked = !e.allow;
   $('prefs_locked').style.display = locked ? '' : 'none';
   $('p_prefs').querySelectorAll('input,select,#u_save').forEach(el => { if (el.id !== 'u_reset') el.disabled = locked; });
   $('u_status').textContent = '';
 }
 async function savePrefs(){
-  const p = { defaults: {}, units: {}, cols: {}, hist_cols: {} };
-  ['labels','trails','ground'].forEach(k => p.defaults[k] = $('u_def_'+k).checked);
+  const p = { defaults: {}, units: {}, cols: {}, hist_cols: {}, map: {}, sizes: {} };
+  ['labels','trails','ground','rings'].forEach(k => p.defaults[k] = $('u_def_'+k).checked);
   p.units = { speed:$('u_u_speed').value, alt:$('u_u_alt').value, dist:$('u_u_dist').value };
   COLKEYS.forEach(k => p.cols[k] = $('u_col_'+k).checked);
   HCKEYS.forEach(k => p.hist_cols[k] = $('u_hc_'+k).checked);
+  p.map = { base: $('u_map_base').value };
+  p.sizes = { icon: +$('u_sz_icon').value || 1, label: +$('u_sz_label').value || 1 };
   $('u_status').textContent = 'Saving…';
   const r = await post('api/settings/prefs', { prefs: p });
   if (r.ok){ CFG.prefs = p; $('u_status').textContent = 'Saved. Reload the Live map to see the changes.'; }
