@@ -47,12 +47,26 @@
   #pager button:disabled { opacity: .45; cursor: default; }
   #pager button.toggle.on, #multi.on { background: #2d6cdf; border-color: #3b78e8; color: #fff; box-shadow: 0 0 0 1px rgba(61,120,232,.4); }
   #pageinfo { color: #cdd5e0; font-size: 12px; font-variant-numeric: tabular-nums; }
-  #main { flex: 1; min-height: 0; display: flex; }
-  #left { flex: 0 0 46%; width: 46%; min-width: 260px; overflow: auto; }
-  #dragbar { flex: 0 0 6px; background: #2c313a; cursor: col-resize; }
-  #dragbar:hover, #dragbar.drag { background: #3b78e8; }
-  #right { flex: 1 1 0; min-width: 200px; position: relative; }
+  #main { flex: 1; min-height: 0; position: relative; }
   #map { position: absolute; inset: 0; background: #0b0d10; }
+  /* floating glass results panel, docked top-left over the map (matches the Live page) */
+  #list { position: absolute; left: 12px; top: 12px; max-height: calc(100% - 24px); width: 384px; max-width: calc(100% - 24px); z-index: 610;
+          background: rgba(18,21,26,.66); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+          border: 1px solid #313845; border-radius: 16px; box-shadow: 0 18px 48px rgba(0,0,0,.6);
+          display: flex; flex-direction: column; overflow: hidden; }
+  #list-hd { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 11px 14px; user-select: none;
+             background: linear-gradient(135deg, rgba(45,108,223,.26), rgba(45,108,223,0)); border-bottom: 1px solid rgba(255,255,255,.05); }
+  #list-hd .t { font-weight: 700; font-size: 13px; letter-spacing: .3px; }
+  #list-hd .c { color: #9aa3b2; font-size: 11px; font-variant-numeric: tabular-nums; }
+  #list-hd .sp { flex: 1; }
+  #list-hd .m { cursor: pointer; color: #9aa3b2; font-size: 16px; width: 24px; height: 24px; display: flex;
+                align-items: center; justify-content: center; border-radius: 7px; transition: transform .15s, background .12s; }
+  #list-hd .m:hover { background: #2a2f38; color: #fff; }
+  #list.min { bottom: auto; }
+  #list.min .m { transform: rotate(-90deg); }
+  #list.min #list-body, #list.min #list-foot { display: none; }
+  #list-body { flex: 0 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+  #list-foot { flex: 0 0 auto; padding: 8px 14px; border-top: 1px solid #2a313c; background: rgba(20,23,28,.5); }
   /* Slight dark tint on the basemap only (mirrors the dimmed main tar1090 map) so the
      altitude-coloured trails stand out. Trails/markers live in the SVG overlay pane above
      the tiles, so only the basemap is dimmed -- the trails stay fully vivid. */
@@ -83,8 +97,8 @@
   #colmenu label:hover { background: #262b33; }
   .mil { color: #ff6b6b; font-weight: 600; }
   .live { color: #2ec86b; font-weight: 600; font-size: 11px; white-space: nowrap; }
-  #status { padding: 6px 12px; color: #9aa3b2; }
-  #replay { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 500;
+  #status { color: #9aa3b2; font-size: 11.5px; }
+  #replay { position: absolute; left: 408px; right: 116px; bottom: 12px; z-index: 500;
             background: rgba(20,22,26,.92); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
             border: 1px solid #313845; border-radius: 12px; padding: 7px 12px; display: none; align-items: center; gap: 8px;
             box-shadow: 0 10px 30px rgba(0,0,0,.5); }
@@ -99,7 +113,7 @@
   #acphoto img { display: block; max-width: 240px; max-height: 158px; border-radius: 11px; }
   #acphoto .cr { font-size: 10px; color: #8a93a2; padding: 2px 6px 0; text-align: right; }
   /* modern altitude colour legend (matches the Live map) */
-  #legend { position: absolute; top: 78px; left: 10px; z-index: 600; background: rgba(20,23,28,.78);
+  #legend { position: absolute; right: 12px; bottom: 12px; z-index: 600; background: rgba(20,23,28,.78);
             -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border: 1px solid #313845;
             border-radius: 12px; padding: 9px 11px; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
   #legend .lg-title { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: #8a93a2; margin-bottom: 6px; text-align: center; }
@@ -115,19 +129,17 @@
     #viewbtn { margin-left: 0; }
     #colmenu-wrap { margin-left: auto; }
     #ptlabel { min-width: 0; }
-    #legend { display: none; }
     #mview { display: flex; gap: 6px; padding: 6px 10px; background: #1a1d23; border-bottom: 1px solid #2c313a; }
     #mview button { flex: 1; background: #21252c; color: #cdd5e0; border: 1px solid #2c313a; border-radius: 9px;
                     padding: 10px; font-size: 13px; font-weight: 600; cursor: pointer; }
     #mview button.on { background: #2d6cdf; color: #fff; border-color: #3b78e8; }
-    /* one pane at a time, full height — no nested scroll fighting the page */
-    #main { flex-direction: column; }
-    #dragbar { display: none; }
-    #left { width: 100% !important; flex-basis: auto !important; min-width: 0; }
-    #main.m-list #right { display: none; }
-    #main.m-list #left { flex: 1; max-height: none; overflow: auto; -webkit-overflow-scrolling: touch; }
-    #main.m-map  #left { display: none; }
-    #main.m-map  #right { flex: 1; min-height: 0; }
+    /* one pane at a time: the glass panel goes full-screen for List, the map for Map */
+    #list { left: 0; top: 0; right: 0; bottom: 0; width: auto; max-width: none; max-height: none; border: 0; border-radius: 0; }
+    #list-body { flex: 1 1 auto; }
+    #list-hd .m { display: none; }
+    #replay { left: 8px; right: 8px; }
+    body.mv-map #list { display: none; }
+    body.mv-list #legend, body.mv-list #acphoto, body.mv-list #replay { display: none; }
     /* map view = clean map: hide the filter/pager toolbars (they belong to the list) */
     body.mv-map #controls, body.mv-map #pager { display: none; }
   }
@@ -188,26 +200,32 @@
 </div>
 
 <div id="main">
-  <div id="left">
-    <div id="status">Pick a time range (or a preset) and search.</div>
-    <table><thead><tr id="headrow"></tr></thead><tbody id="rows"></tbody></table>
+  <div id="map"></div>
+
+  <div id="list">
+    <div id="list-hd">
+      <span class="t">Results</span><span class="c" id="rescount"></span>
+      <span class="sp"></span>
+      <span class="m" id="list-min" title="Minimize / expand">▾</span>
+    </div>
+    <div id="list-body">
+      <table><thead><tr id="headrow"></tr></thead><tbody id="rows"></tbody></table>
+    </div>
+    <div id="list-foot"><span id="status">Pick a time range (or a preset) and search.</span></div>
   </div>
-  <div id="dragbar" title="Drag to resize the list / map"></div>
-  <div id="right">
-    <div id="map"></div>
-    <div id="legend">
-      <div class="lg-title">Altitude</div>
-      <div class="lg-body">
-        <div class="lg-bar" id="lgbar"></div>
-        <div class="lg-ticks"><span>40k+</span><span>30k</span><span>20k</span><span>10k</span><span>0 ft</span></div>
-      </div>
+
+  <div id="legend">
+    <div class="lg-title">Altitude</div>
+    <div class="lg-body">
+      <div class="lg-bar" id="lgbar"></div>
+      <div class="lg-ticks"><span>40k+</span><span>30k</span><span>20k</span><span>10k</span><span>0 ft</span></div>
     </div>
-    <div id="acphoto"></div>
-    <div id="replay">
-      <button id="play">▶</button>
-      <input id="slider" type="range" min="0" max="0" value="0">
-      <span id="ptlabel"></span>
-    </div>
+  </div>
+  <div id="acphoto"></div>
+  <div id="replay">
+    <button id="play">▶</button>
+    <input id="slider" type="range" min="0" max="0" value="0">
+    <span id="ptlabel"></span>
   </div>
 </div>
 
@@ -322,39 +340,14 @@ function buildColMenu(){
   document.addEventListener('click', (e)=>{ if (!m.contains(e.target) && e.target !== btn) m.classList.remove('on'); });
 }
 
-// ---- splitter: drag to resize the list vs. the map -------------------------
-let split = null;
-function initSplit(){
-  const L = document.getElementById('left');
-  const saved = localStorage.getItem('histLeftW');
-  if (saved){ L.style.flex = '0 0 ' + saved; L.style.width = saved; }
-  document.getElementById('dragbar').addEventListener('mousedown', (e)=>{
-    e.preventDefault();
-    split = { x: e.clientX, w: L.getBoundingClientRect().width };
-    document.getElementById('dragbar').classList.add('drag');
-    document.body.style.cursor = 'col-resize';
-    window.addEventListener('mousemove', onSplit);
-    window.addEventListener('mouseup', endSplit);
+// ---- floating results panel: minimize / expand -----------------------------
+function initList(){
+  if (localStorage.getItem('histListMin') === '1') $('list').classList.add('min');
+  $('list-min').addEventListener('click', ()=>{
+    const min = $('list').classList.toggle('min');
+    localStorage.setItem('histListMin', min ? '1' : '0');
+    map.invalidateSize();
   });
-}
-function onSplit(e){
-  if (!split) return;
-  const main = document.getElementById('main').getBoundingClientRect();
-  const w = Math.min(main.width - 210, Math.max(240, split.w + (e.clientX - split.x)));
-  const L = document.getElementById('left');
-  L.style.flex = '0 0 ' + w + 'px'; L.style.width = w + 'px';
-  map.invalidateSize();
-}
-function endSplit(){
-  if (!split) return;
-  window.removeEventListener('mousemove', onSplit);
-  window.removeEventListener('mouseup', endSplit);
-  document.getElementById('dragbar').classList.remove('drag');
-  document.body.style.cursor = '';
-  const L = document.getElementById('left');
-  localStorage.setItem('histLeftW', L.style.width || (L.getBoundingClientRect().width + 'px'));
-  map.invalidateSize();
-  split = null;
 }
 let pageOffset = 0, pageSize = 500, total = 0;
 const MAX_DRAW = 2000;  // draw as many trails as the page holds (mirrors the API's HISTORY_MAX_TRAILS)
@@ -459,6 +452,7 @@ function renderPager(){
   const pages = Math.max(1, Math.ceil(total / pageSize));
   const cur = Math.floor(pageOffset / pageSize) + 1;
   $('pageinfo').textContent = total ? `Page ${cur} / ${pages}` : '';
+  $('rescount').textContent = total ? '· ' + total.toLocaleString() : '';
   $('prev').disabled = pageOffset <= 0;
   $('next').disabled = pageOffset + pageSize >= total;
 }
@@ -710,7 +704,7 @@ $('viewbtn').onclick = () => {
 buildHead();
 buildColMenu();
 applyColVis();
-initSplit();
+initList();
 // altitude legend bar, built straight from altColor() so it always matches the trails
 (function buildLegend(){
   const max = 45000, steps = 30, stops = [];
