@@ -271,6 +271,34 @@ const selLayer = L.layerGroup().addTo(map);   // selected aircraft's trail (only
 let selTrailReq = 0;
 let selectedHex = null, lastData = new Map(), fitted = false, filter = '';
 let showLabels = false, showTrails = false, showGround = true;
+
+// Deep link: ?icao=<hex> / ?reg=<registration> / ?callsign=<cs>. Select that aircraft once the
+// live feed loads; if it isn't currently flying, fall back to its History (trail replay).
+let deepLink = null, dlTries = 0;
+(function(){
+  const u = new URLSearchParams(location.search);
+  const hex = (u.get('icao') || u.get('hex') || '').trim().toLowerCase().replace(/^~/, '');
+  const reg = (u.get('reg') || u.get('registration') || '').trim().toLowerCase();
+  const cs  = (u.get('callsign') || u.get('flight') || '').trim().toLowerCase();
+  if (hex || reg || cs) deepLink = { hex, reg, cs };
+})();
+function setUrlHex(hex){ history.replaceState(null, '', hex ? '?icao=' + encodeURIComponent(hex) : location.pathname); }
+function resolveDeepLink(){
+  const w = deepLink, list = [...lastData.values()];
+  let a = null;
+  if (w.hex) a = list.find(x => (x.hex||'').toLowerCase().replace(/^~/,'') === w.hex);
+  if (!a && w.reg) a = list.find(x => (x.r||'').toLowerCase() === w.reg);
+  if (!a && w.cs)  a = list.find(x => (x.flight||'').trim().toLowerCase() === w.cs);
+  deepLink = null;                                   // resolve only once
+  if (a){
+    select(a.hex);
+    if (a.lat!=null && a.lon!=null){ fitted = true; map.setView([a.lat, a.lon], Math.max(map.getZoom(), 9)); }
+  } else {
+    const q = new URLSearchParams();                 // not live -> show its history
+    if (w.hex) q.set('icao', w.hex); else if (w.reg) q.set('reg', w.reg); else if (w.cs) q.set('callsign', w.cs);
+    location.replace('index.html?' + q.toString());
+  }
+}
 let listSort = { key: 'alt', dir: -1 };   // live-list sort (default: highest altitude first)
 let siteLoc = null, pendingScroll = false;
 function distNm(a){   // great-circle nm from the receiver to an aircraft (null if no site)
@@ -334,6 +362,8 @@ function render(j){
 
   if (!fitted && pts.length){ map.fitBounds(L.latLngBounds(pts).pad(0.15)); fitted = true; }
   applyFilter();
+  // resolve a ?icao/?reg deep link once the feed has loaded (give an empty feed a few tries)
+  if (deepLink && (acs.length || ++dlTries >= 3)) resolveDeepLink();
 
   $('count').innerHTML = `<b>${lastData.size}</b> shown` +
     (j.count_pos!=null ? ` · ${j.count_pos} with position` : '') +
@@ -393,10 +423,11 @@ function select(hex){
   renderInfo(a); showPhoto(a);
   if (showTrails) loadSelTrail(hex); else { selTrailReq++; selLayer.clearLayers(); }
   $('card').classList.add('on');
+  setUrlHex(hex);                                    // shareable / bookmarkable URL
   pendingScroll = true; renderList([...lastData.values()]);   // highlight + scroll the list row now
 }
 function deselect(){ selectedHex = null; $('card').classList.remove('on'); selTrailReq++; selLayer.clearLayers();
-  for (const e of markers.values()) e.key=''; }
+  setUrlHex(null); for (const e of markers.values()) e.key=''; }
 
 // Pull the selected aircraft's actual trail (readsb's live run-dir trace) and draw it
 // altitude-coloured, the same way the History map draws a single flight.

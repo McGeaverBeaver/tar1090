@@ -263,6 +263,7 @@ let marker = null, pts = [], anim = null, markerCat = 'jet';
 let iconMode = false;   // false = altitude trails, true = directional aircraft icons (no trails)
 
 let flights = [], byId = new Map(), selected = new Set(), multiMode = false;
+let deepLinkSelect = false;   // after a ?icao/?reg deep-link search, auto-focus the newest match
 let sortKey = 'start', sortDir = -1, searchMsg = '';
 
 // ---- columns: order, resize, show/hide (all persisted to localStorage) ------
@@ -480,7 +481,12 @@ async function doSearch(keepPage){
     const lo = total ? pageOffset + 1 : 0, hi = pageOffset + flights.length;
     searchMsg = `${lo}–${hi} of ${total} flight(s) · ${fmtUTC(j.from)} → ${fmtUTC(j.to)}`;
     render();
-    renderMap();                       // nothing selected -> show this page's trails
+    if (deepLinkSelect && flights.length){          // deep link -> focus the most recent match
+      deepLinkSelect = false;
+      selected.clear(); selected.add(flights[0].id); markRows();
+      if (mq.matches) setMView('map');
+    }
+    renderMap();                       // selection (deep link) or this page's trails
     renderPager();
   } catch(e){ searchMsg = 'Request failed: ' + e; setStatus(); renderPager(); }
 }
@@ -563,6 +569,9 @@ function headingAt(i){
 
 async function renderMap(){
   updateBell();
+  // keep the URL in sync so a single focused flight is shareable (?icao=<hex>)
+  const one = selected.size === 1 ? byId.get([...selected][0]) : null;
+  history.replaceState(null, '', one && one.icao_hex ? '?icao=' + encodeURIComponent(one.icao_hex) : location.pathname);
   stopAnim(); trailLayer.clearLayers(); $('replay').classList.remove('on'); hidePhoto();
   const ids = selected.size ? [...selected] : flights.map(f=>f.id);
   if (!ids.length){ setStatus('no flights'); return; }
@@ -773,7 +782,24 @@ $('mv-map').onclick  = ()=> setMView('map');
 if (mq.matches) setMView('list');
 mq.addEventListener('change', e => { if (e.matches && !$('main').classList.contains('m-map')) setMView('list'); });
 
-doSearch();
+// Deep link: ?icao=<hex> / ?reg=<registration> / ?callsign=<cs> -> find that aircraft's history
+// (widen the window so an old flight still turns up) and auto-focus its most recent flight.
+(function(){
+  const u = new URLSearchParams(location.search);
+  const icao = (u.get('icao') || u.get('hex') || '').trim();
+  const reg  = (u.get('reg') || u.get('registration') || '').trim();
+  const cs   = (u.get('callsign') || u.get('flight') || '').trim();
+  if (icao || reg || cs){
+    const now = new Date();
+    $('from').value = localInput(new Date(now - 365*864e5));   // search the last year
+    $('to').value = localInput(now);
+    if (icao) $('q').value = icao;                              // q also matches icao_hex
+    else if (reg){ $('registration').value = reg; $('adv').classList.add('on'); $('advtoggle').classList.add('on'); }
+    else if (cs){ $('callsign').value = cs; $('adv').classList.add('on'); $('advtoggle').classList.add('on'); }
+    deepLinkSelect = true;
+  }
+  doSearch();
+})();
 </script>
 <script src="auth.js"></script>
 </body>
