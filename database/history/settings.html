@@ -167,13 +167,23 @@
   <!-- Historical import -->
   <section class="panel" id="p_import">
     <fieldset>
-      <legend>Historical import — globe_history heatmap → searchable index</legend>
+      <legend>Live ingestion (normal operation)</legend>
+      <div class="help wide">The bundled logger writes flights to the database in real time from the
+        live feed — no import needed. This is the normal mode; the historical import below is only an
+        optional one-time backfill.</div>
+      <div id="ingest_status" class="help wide">checking…</div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Historical import — optional, one-time backfill for a new setup</legend>
+      <div class="help wide">Only needed if you have an existing <code>globe_history</code> folder and want
+        traffic from <b>before</b> logging began (or recorded with traces off) to become searchable. Day-to-day
+        operation does not use this — live ingestion above keeps History up to date on its own.</div>
       <div class="row"><label>globe_history path</label><input type="text" id="globe_dir" placeholder="/var/globe_history"></div>
       <div class="help">Scans readsb's heatmap <code>.ttf</code> chunks under this path and fills the flight
-        index, so traffic from before logging began (or with traces off) becomes searchable. Runs in the
-        background and <b>resumes automatically</b> if it crashes or the container restarts. Imported flights
-        have <b>no callsign</b> (the heatmap doesn't store it) — search them by registration / type / operator
-        / military / time.</div>
+        index. Runs in the background and <b>resumes automatically</b> if it crashes or the container restarts.
+        Imported flights have <b>no callsign</b> (the heatmap doesn't store it) — search them by registration /
+        type / operator / military / time.</div>
       <div class="actions">
         <button id="imp_start">Start / resume import</button>
         <button id="imp_restart" class="ghost">Restart from scratch</button>
@@ -192,6 +202,7 @@
           <tbody id="imp_runs_rows"></tbody>
         </table>
       </div>
+      <div class="actions" style="margin-top:10px"><button id="imp_clear" class="ghost mini">Clear history</button></div>
     </fieldset>
   </section>
 
@@ -287,7 +298,21 @@ load();
 
 // ---- historical import ----
 const fmtN = n => (n == null ? 0 : n).toLocaleString();
+function renderIngest(r){
+  const last = r.ingest_last_seen, n = r.ingest_last_hour || 0;
+  const ageS = last ? Math.round((Date.now() - last) / 1000) : null;
+  if (ageS != null && ageS < 180){
+    const ago = ageS < 60 ? ageS + 's' : Math.round(ageS/60) + 'm';
+    $('ingest_status').innerHTML = `<b class="imp-done">● active</b> — ${fmtN(n)} flights logged in the last hour · last update ${ago} ago`;
+  } else if (last){
+    const mins = Math.round(ageS/60);
+    $('ingest_status').innerHTML = `<b class="imp-cancel">○ quiet</b> — last flight logged ${mins}m ago (${fmtN(n)} in the last hour). Low traffic, or the logger/DB may be down.`;
+  } else {
+    $('ingest_status').innerHTML = `<b class="imp-err">○ no recent data</b> — is the logger running and <code>TAR1090_DB_DSN</code> set? (Live map still works without it.)`;
+  }
+}
 function renderImport(r){
+  renderIngest(r);
   $('globe_dir').placeholder = r.default_globe_dir || '/var/globe_history';
   if (!$('globe_dir').value && r.globe_dir) $('globe_dir').value = r.globe_dir;
   const running = !!r.running, ok = r.available !== false;
@@ -343,7 +368,11 @@ async function startImport(restart){
 $('imp_start').onclick = () => startImport(false);
 $('imp_restart').onclick = () => startImport(true);
 $('imp_stop').onclick = async () => { await post('api/import/stop', {}); setTimeout(loadImport, 300); };
-// keep the import progress fresh while its panel is open
+$('imp_clear').onclick = async () => {
+  if (!confirm('Clear the import history list? (Does not touch any imported flights.)')) return;
+  await post('api/import/clear-history', {}); loadImport();
+};
+// keep the import progress + live-ingestion status fresh while its panel is open
 setInterval(() => { if ($('p_import').classList.contains('on')) loadImport(); }, 3000);
 
 // ---- users ----

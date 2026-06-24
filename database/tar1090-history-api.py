@@ -1028,11 +1028,16 @@ def _ensure_import():
 # resume import" can still pick up where a stopped/finished run left off; "Restart from scratch"
 # is what zeroes the checkpoint.
 def _archive_and_idle(status, message=None):
+    # Archive the finished run -- but skip an identical run logged in the last 2 minutes, so
+    # repeated restarts or back-to-back "Start/resume" clicks don't spam the history.
     execute("INSERT INTO import_runs (globe_dir, status, chunks_total, chunks_done, "
             "flights_added, fixes_seen, message, started_at) "
-            "SELECT globe_dir, %s, chunks_total, chunks_done, flights_added, fixes_seen, "
-            "COALESCE(%s, message), started_at FROM import_state WHERE id=1",
-            (status, message))
+            "SELECT s.globe_dir, %s, s.chunks_total, s.chunks_done, s.flights_added, s.fixes_seen, "
+            "COALESCE(%s, s.message), s.started_at FROM import_state s WHERE s.id=1 "
+            "AND NOT EXISTS (SELECT 1 FROM import_runs r WHERE r.finished_at > now() - interval '2 minutes' "
+            "  AND r.status = %s AND r.chunks_done = s.chunks_done AND r.flights_added = s.flights_added "
+            "  AND r.fixes_seen = s.fixes_seen)",
+            (status, message, status))
     execute("UPDATE import_state SET status='idle', chunks_total=0, chunks_done=0, "
             "flights_added=0, fixes_seen=0, message=NULL, started_at=NULL, updated_at=now() "
             "WHERE id=1", ())
@@ -1121,7 +1126,23 @@ def import_status(q):
         h["started_at"] = ms(h.get("started_at"))
         h["finished_at"] = ms(h.get("finished_at"))
     r["runs"] = runs
+    # Live ingestion freshness: the bundled tar1090-logger writes flights continuously, so the
+    # most recent end_time tells us real-time logging is alive (no import needed for that).
+    try:
+        ig = query("SELECT max(end_time) AS last, "
+                   "count(*) FILTER (WHERE start_time >= now() - interval '1 hour') AS last_hour "
+                   "FROM flights WHERE start_time >= now() - interval '6 hours'", ())
+        r["ingest_last_seen"] = ms(ig[0]["last"]) if ig else None
+        r["ingest_last_hour"] = (ig[0]["last_hour"] if ig else 0) or 0
+    except psycopg.Error:
+        r["ingest_last_seen"], r["ingest_last_hour"] = None, 0
     return r
+
+
+def import_clear_history(body):
+    _ensure_import()
+    execute("DELETE FROM import_runs", ())
+    return {"ok": True}
 
 
 def import_start(body):
@@ -1182,6 +1203,7 @@ ROUTES = {"/api/search": search, "/api/options": options,
 POST_ROUTES = {"/api/alerts/rules": alerts_rule_save, "/api/alerts/rules/delete": alerts_rule_delete,
                "/api/alerts/config": alerts_config_save, "/api/alerts/test": alerts_test,
                "/api/import/start": import_start, "/api/import/stop": import_stop,
+               "/api/import/clear-history": import_clear_history,
                "/api/users/block": users_block, "/api/settings/global": settings_global_save}
 CONTENT = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
            ".css": "text/css", ".json": "application/json", ".ico": "image/x-icon",
