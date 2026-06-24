@@ -6,11 +6,6 @@ that has been logged, a rules-based **alerting** system, and an admin **settings
 area. It is served same-origin by [`tar1090-history-api.py`](../tar1090-history-api.py)
 (port `8090` by default) and is bundled into the all-in-one image.
 
-> **Add your own screenshot here:** drop a capture of the Live page at
-> `database/history/docs/live.png` and it will render below.
-
-![Live view](docs/live.png)
-
 Everything below is just the front-end. Nothing here changes readsb or the stock
 tar1090 live map — it reads the same data readsb already produces.
 
