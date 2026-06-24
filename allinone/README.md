@@ -14,6 +14,9 @@ image (the successor to the deprecated `mikenye/tar1090`) with the
   and connect your own Grafana to that same database. Nothing to persist in this
   container.
 
+> 📖 **Using the web interface** (Live / History / Alerts / Settings) is documented in
+> the [reports front-end guide](../database/history/README.md).
+
 ```
         ┌─────────────── tar1090-allinone container ───────────────┐
 BEAST ─►│ readsb ─► aircraft.json ─► tar1090 web GUI (:80)          │

@@ -12,6 +12,9 @@ all keep working exactly as before. A small sidecar service
 already produces and writes it to the database. If the logger stops, nothing else is
 affected.
 
+> 📖 Looking for how to **use** the Live / History / Alerts / Settings web pages?
+> See the [reports front-end guide](history/README.md).
+
 ```
 readsb ──> aircraft.json ──> tar1090 frontend   (unchanged: live / replay / heatmap)
    │                    └──> tar1090.sh          (unchanged: pTracks chunks)
