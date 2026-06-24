@@ -62,11 +62,19 @@
   #list-hd .m { cursor: pointer; color: #9aa3b2; font-size: 16px; width: 24px; height: 24px; display: flex;
                 align-items: center; justify-content: center; border-radius: 7px; transition: transform .15s, background .12s; }
   #list-hd .m:hover { background: #2a2f38; color: #fff; }
-  #list.min { bottom: auto; }
+  #list.min { height: auto !important; max-height: none; }
   #list.min .m { transform: rotate(-90deg); }
-  #list.min #list-body, #list.min #list-foot { display: none; }
+  #list.min #list-body, #list.min #list-foot, #list.min #list-resize { display: none; }
+  #list.resized { max-height: none; }
+  #list.resized #list-body { flex: 1 1 auto; }
   #list-body { flex: 0 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
   #list-foot { flex: 0 0 auto; padding: 8px 14px; border-top: 1px solid #2a313c; background: rgba(20,23,28,.5); }
+  /* drag-to-resize grip, bottom-right corner */
+  #list-resize { position: absolute; right: 0; bottom: 0; width: 20px; height: 20px; cursor: nwse-resize; z-index: 3;
+                 background: linear-gradient(135deg, transparent 0 45%, rgba(255,255,255,.28) 45% 55%, transparent 55% 66%,
+                 rgba(255,255,255,.28) 66% 76%, transparent 76%); }
+  #list-resize:hover { background: linear-gradient(135deg, transparent 0 45%, rgba(255,255,255,.5) 45% 55%, transparent 55% 66%,
+                 rgba(255,255,255,.5) 66% 76%, transparent 76%); }
   /* Slight dark tint on the basemap only (mirrors the dimmed main tar1090 map) so the
      altitude-coloured trails stand out. Trails/markers live in the SVG overlay pane above
      the tiles, so only the basemap is dimmed -- the trails stay fully vivid. */
@@ -134,8 +142,9 @@
                     padding: 10px; font-size: 13px; font-weight: 600; cursor: pointer; }
     #mview button.on { background: #2d6cdf; color: #fff; border-color: #3b78e8; }
     /* one pane at a time: the glass panel goes full-screen for List, the map for Map */
-    #list { left: 0; top: 0; right: 0; bottom: 0; width: auto; max-width: none; max-height: none; border: 0; border-radius: 0; }
+    #list { left: 0 !important; top: 0 !important; right: 0; bottom: 0; width: auto !important; height: auto !important; max-width: none; max-height: none; border: 0; border-radius: 0; }
     #list-body { flex: 1 1 auto; }
+    #list-resize, #list-hd .m { display: none; }
     #list-hd .m { display: none; }
     #replay { left: 8px; right: 8px; }
     body.mv-map #list { display: none; }
@@ -212,6 +221,7 @@
       <table><thead><tr id="headrow"></tr></thead><tbody id="rows"></tbody></table>
     </div>
     <div id="list-foot"><span id="status">Pick a time range (or a preset) and search.</span></div>
+    <div id="list-resize" title="Drag to resize"></div>
   </div>
 
   <div id="legend">
@@ -244,7 +254,7 @@ function localInput(d){ return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d
 // default range: last 24h
 (function(){ const now=new Date(); $('to').value=localInput(now); $('from').value=localInput(new Date(now-864e5)); })();
 
-const map = L.map('map', { worldCopyJump:true }).setView([40, -74], 4);
+const map = L.map('map', { worldCopyJump:true, zoomControl:false }).setView([40, -74], 4);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
   { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(map);
 let trailLayer = L.layerGroup().addTo(map);
@@ -340,13 +350,40 @@ function buildColMenu(){
   document.addEventListener('click', (e)=>{ if (!m.contains(e.target) && e.target !== btn) m.classList.remove('on'); });
 }
 
-// ---- floating results panel: minimize / expand -----------------------------
+// ---- floating results panel: minimize / expand + drag-to-resize ------------
 function initList(){
-  if (localStorage.getItem('histListMin') === '1') $('list').classList.add('min');
+  const L = $('list');
+  if (localStorage.getItem('histListMin') === '1') L.classList.add('min');
   $('list-min').addEventListener('click', ()=>{
-    const min = $('list').classList.toggle('min');
+    const min = L.classList.toggle('min');
     localStorage.setItem('histListMin', min ? '1' : '0');
     map.invalidateSize();
+  });
+  // restore a saved size
+  try {
+    const s = JSON.parse(localStorage.getItem('histListSize') || 'null');
+    if (s && s.w && s.h){ L.style.width = s.w + 'px'; L.style.height = s.h + 'px'; L.classList.add('resized'); }
+  } catch(e){}
+  // drag the bottom-right grip to resize
+  let rs = null;
+  const onMove = (e)=>{
+    if (!rs) return;
+    L.style.width  = Math.min(window.innerWidth - 24,  Math.max(260, rs.w + (e.clientX - rs.x))) + 'px';
+    L.style.height = Math.min(window.innerHeight - 90, Math.max(160, rs.h + (e.clientY - rs.y))) + 'px';
+  };
+  const onUp = ()=>{
+    if (!rs) return;
+    rs = null; document.body.style.cursor = '';
+    window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp);
+    localStorage.setItem('histListSize', JSON.stringify({ w: parseInt(L.style.width), h: parseInt(L.style.height) }));
+    map.invalidateSize();
+  };
+  $('list-resize').addEventListener('mousedown', (e)=>{
+    e.preventDefault();
+    const r = L.getBoundingClientRect();
+    rs = { x: e.clientX, y: e.clientY, w: r.width, h: r.height };
+    L.classList.add('resized'); document.body.style.cursor = 'nwse-resize';
+    window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp);
   });
 }
 let pageOffset = 0, pageSize = 500, total = 0;
