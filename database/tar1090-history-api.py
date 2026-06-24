@@ -104,8 +104,10 @@ OIDC_USER_AGENT = os.environ.get("OIDC_USER_AGENT", "Mozilla/5.0 (compatible; ta
 SESSION_COOKIE = "tar1090_session"
 TX_COOKIE      = "tar1090_oidc_tx"
 # Anything under these is admin-only; viewers get 403 (and the UI hides it too).
-ADMIN_PREFIXES = ("/api/alerts", "/api/import", "/api/users")
-ADMIN_PAGES    = ("/alerts.html", "/settings.html")
+ADMIN_PREFIXES = ("/api/alerts", "/api/import", "/api/users", "/api/settings/global")
+# settings.html is reachable by viewers (their Preferences tab); its admin sub-tabs are hidden in
+# the UI and the admin APIs above stay server-gated.
+ADMIN_PAGES    = ("/alerts.html",)
 
 
 def _b64u(b):
@@ -921,6 +923,71 @@ def users_block(body):
     return {"ok": True, "sub": sub, "blocked": blocked}
 
 
+# --- settings (admin global defaults + per-user preferences) -----------------
+# app_settings (id=1) holds the site-wide defaults an admin sets; user_prefs holds each viewer's
+# personal overrides (keyed by OIDC subject, or "local" when login is off). The Live page merges
+# global defaults with the user's prefs to decide which toggle buttons show, their initial state,
+# units, and visible columns.
+DEFAULT_SETTINGS = {
+    "buttons":  {"labels": True, "trails": True, "ground": True, "fit": True},  # which toggle buttons show
+    "defaults": {"labels": False, "trails": False, "ground": True},             # their initial on/off state
+    "units":    {"speed": "kt", "alt": "ft", "dist": "nm"},
+    "cols":     {"t": True, "alt": True, "gs": True, "squawk": True, "dist": True},
+    "allow_user_prefs": True,                                                   # let viewers override the above
+}
+SETTINGS_DDL = """
+CREATE TABLE IF NOT EXISTS app_settings (
+  id int PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  settings jsonb NOT NULL DEFAULT '{}'::jsonb,
+  updated_at timestamptz NOT NULL DEFAULT now());
+INSERT INTO app_settings (id, settings) VALUES (1, '{}'::jsonb) ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS user_prefs (
+  sub text PRIMARY KEY,
+  prefs jsonb NOT NULL DEFAULT '{}'::jsonb,
+  updated_at timestamptz NOT NULL DEFAULT now());
+"""
+_settings_ready = False
+
+
+def _ensure_settings():
+    global _settings_ready
+    if not _settings_ready:
+        execute(SETTINGS_DDL, ())
+        _settings_ready = True
+
+
+def settings_global_get():
+    _ensure_settings()
+    rows = query("SELECT settings FROM app_settings WHERE id=1", ())
+    return (rows[0]["settings"] if rows and rows[0]["settings"] else {})
+
+
+def settings_global_save(body):
+    s = body.get("settings")
+    if not isinstance(s, dict):
+        return {"error": "settings object required"}
+    _ensure_settings()
+    execute("UPDATE app_settings SET settings=%s, updated_at=now() WHERE id=1", [Jsonb(s)])
+    return {"ok": True}
+
+
+def user_prefs_get(sub):
+    _ensure_settings()
+    rows = query("SELECT prefs FROM user_prefs WHERE sub=%s", [sub or "local"])
+    return (rows[0]["prefs"] if rows and rows[0]["prefs"] else {})
+
+
+def user_prefs_save(sub, body):
+    p = body.get("prefs")
+    if not isinstance(p, dict):
+        return {"error": "prefs object required"}
+    _ensure_settings()
+    execute("INSERT INTO user_prefs (sub, prefs, updated_at) VALUES (%s, %s, now()) "
+            "ON CONFLICT (sub) DO UPDATE SET prefs=EXCLUDED.prefs, updated_at=now()",
+            [sub or "local", Jsonb(p)])
+    return {"ok": True}
+
+
 # --- historical import (heatmap .ttf -> searchable index) -------------------
 # A resumable background job: walk globe_history heatmap chunks and fill the aircraft/flights
 # index (see tar1090_heatmap_import). Progress + a checkpoint live in import_state so the
@@ -1115,7 +1182,7 @@ ROUTES = {"/api/search": search, "/api/options": options,
 POST_ROUTES = {"/api/alerts/rules": alerts_rule_save, "/api/alerts/rules/delete": alerts_rule_delete,
                "/api/alerts/config": alerts_config_save, "/api/alerts/test": alerts_test,
                "/api/import/start": import_start, "/api/import/stop": import_stop,
-               "/api/users/block": users_block}
+               "/api/users/block": users_block, "/api/settings/global": settings_global_save}
 CONTENT = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
            ".css": "text/css", ".json": "application/json", ".ico": "image/x-icon",
            ".svg": "image/svg+xml", ".webmanifest": "application/manifest+json",
@@ -1340,6 +1407,15 @@ class Handler(BaseHTTPRequestHandler):
                 return
         if not self._gate(path, path.startswith("/api/")):
             return
+        if path == "/api/settings":                  # site defaults + this user's prefs (any signed-in user)
+            s = self._session() or {}
+            try:
+                self._send(200, {"builtin": DEFAULT_SETTINGS, "global": settings_global_get(),
+                                 "prefs": user_prefs_get(s.get("sub")),
+                                 "role": s.get("role") if OIDC_ENABLED else "admin"})
+            except psycopg.Error as e:
+                self._send(503, {"error": "database unavailable", "detail": str(e)})
+            return
         if path in ROUTES:
             try:
                 self._send(200, ROUTES[path](parse_qs(u.query)))
@@ -1355,11 +1431,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        if not self._gate(path, True):               # all POST routes are admin-only
-            return
-        fn = POST_ROUTES.get(path)
-        if not fn:
-            self._send(404, {"error": "not found"})
+        if not self._gate(path, True):               # admin paths gated; others just need a session
             return
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -1369,6 +1441,13 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("expected a JSON object")
         except (ValueError, TypeError):
             self._send(400, {"error": "invalid JSON body"})
+            return
+        if path == "/api/settings/prefs":            # save the signed-in user's own preferences
+            fn = lambda b: user_prefs_save((self._session() or {}).get("sub"), b)
+        else:
+            fn = POST_ROUTES.get(path)
+        if not fn:
+            self._send(404, {"error": "not found"})
             return
         try:
             self._send(200, fn(body))

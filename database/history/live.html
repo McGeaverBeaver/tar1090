@@ -145,7 +145,7 @@
 </head>
 <body>
 <header>
-  <nav id="tabs"><a href="live.html" class="active">Live</a><a href="index.html">History</a><a href="alerts.html" class="admin-only">Alerts</a><a href="settings.html" class="admin-only">Settings</a></nav>
+  <nav id="tabs"><a href="live.html" class="active">Live</a><a href="index.html">History</a><a href="alerts.html" class="admin-only">Alerts</a><a href="settings.html">Settings</a></nav>
 </header>
 <div id="bar">
   <input id="find" type="text" placeholder="Find callsign / hex / reg…" autocomplete="off">
@@ -246,7 +246,16 @@ function loadSettings(){ const d = { speed:'kt', alt:'ft', dist:'nm',
   try { const s = JSON.parse(localStorage.getItem('liveUnits') || '{}');
     return Object.assign(d, s, { cols: Object.assign(d.cols, s.cols || {}) }); } catch(e){ return d; } }
 let settings = loadSettings();
-function saveSettings(){ try { localStorage.setItem('liveUnits', JSON.stringify(settings)); } catch(e){} }
+// admin global defaults + this viewer's saved preferences (filled in by loadEffective())
+let userPrefs = {}, allowPrefs = true;
+function saveSettingsLocal(){ try { localStorage.setItem('liveUnits', JSON.stringify(settings)); } catch(e){} }
+function saveSettings(){                         // gear changed -> cache locally and persist to the DB
+  saveSettingsLocal();
+  userPrefs.units = { speed: settings.speed, alt: settings.alt, dist: settings.dist };
+  userPrefs.cols  = Object.assign({}, settings.cols);
+  fetch('api/settings/prefs', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ prefs: userPrefs }) }).catch(()=>{});
+}
 const uSpeed = () => UNITS.speed[settings.speed].s, uAlt = () => UNITS.alt[settings.alt].s, uDist = () => UNITS.dist[settings.dist].s;
 const cvSpeed = g => g==null ? null : g*UNITS.speed[settings.speed].f;
 const cvAlt   = a => (a==null || a==='ground') ? null : a*UNITS.alt[settings.alt].f;
@@ -572,6 +581,33 @@ function applyUnits(){
   if (selectedHex) renderInfo(lastData.get(selectedHex));
   applyLabels();
 }
+
+// Merge built-in defaults <- admin global defaults <- this viewer's prefs (if allowed) and apply
+// to units, columns, which toggle buttons show, and their initial on/off state.
+function applyEffective(cfg){
+  const B = (cfg && cfg.builtin) || {}, G = (cfg && cfg.global) || {};
+  allowPrefs = (B.allow_user_prefs !== false) && (G.allow_user_prefs !== false);
+  userPrefs  = (cfg && cfg.prefs) || {};
+  const P = allowPrefs ? userPrefs : {};
+  const buttons  = Object.assign({ labels:true, trails:true, ground:true, fit:true }, B.buttons, G.buttons);
+  const defaults = Object.assign({ labels:false, trails:false, ground:true }, B.defaults, G.defaults, P.defaults);
+  const units    = Object.assign({ speed:'kt', alt:'ft', dist:'nm' }, B.units, G.units, P.units);
+  const cols     = Object.assign({ t:true, alt:true, gs:true, squawk:true, dist:true }, B.cols, G.cols, P.cols);
+  settings.speed = units.speed; settings.alt = units.alt; settings.dist = units.dist; settings.cols = cols;
+  saveSettingsLocal(); buildSettings(); applyCols(); buildLegend();
+  // toggle-button visibility (admin-controlled)
+  const map = { labels:'t-labels', trails:'t-trails', ground:'t-ground', fit:'t-recenter' };
+  for (const k in map){ const b = $(map[k]); if (b) b.style.display = buttons[k] === false ? 'none' : ''; }
+  // initial toggle state
+  showLabels = !!defaults.labels; $('t-labels').classList.toggle('on', showLabels);
+  showTrails = !!defaults.trails; $('t-trails').classList.toggle('on', showTrails);
+  showGround = defaults.ground !== false; $('t-ground').classList.toggle('on', showGround);
+}
+async function loadEffective(){
+  let cfg = null;
+  try { cfg = await (await fetch('api/settings')).json(); } catch(e){}
+  applyEffective(cfg);
+}
 buildSettings();
 applyCols();
 $('list-gear').onclick = e => { e.stopPropagation(); $('list-settings').classList.toggle('on'); };
@@ -603,8 +639,7 @@ $('list-hd').onclick = () => {
 map.on('click', deselect);
 // keep the list in sync with what's visible as the user pans/zooms
 map.on('moveend', () => { if (lastData.size) renderList([...lastData.values()]); });
-poll();
-setInterval(poll, 1000);
+loadEffective().finally(() => { poll(); setInterval(poll, 1000); });
 document.addEventListener('visibilitychange', ()=> { if (!document.hidden) poll(); });
 </script>
 <script src="auth.js"></script>

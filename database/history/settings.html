@@ -57,14 +57,84 @@
 </head>
 <body>
 <header>
-  <nav id="tabs"><a href="live.html">Live</a><a href="index.html">History</a><a href="alerts.html" class="admin-only">Alerts</a><a href="settings.html" class="active admin-only">Settings</a></nav>
+  <nav id="tabs"><a href="live.html">Live</a><a href="index.html">History</a><a href="alerts.html" class="admin-only">Alerts</a><a href="settings.html" class="active">Settings</a></nav>
 </header>
 <main>
   <div class="subtabs">
-    <button class="subtab" data-p="integrations">Integrations</button>
-    <button class="subtab" data-p="import">Historical import</button>
-    <button class="subtab" data-p="users">Users</button>
+    <button class="subtab admin-only" data-p="display">Display defaults</button>
+    <button class="subtab admin-only" data-p="integrations">Integrations</button>
+    <button class="subtab admin-only" data-p="import">Historical import</button>
+    <button class="subtab admin-only" data-p="users">Users</button>
+    <button class="subtab" data-p="prefs">My preferences</button>
   </div>
+
+  <!-- Display defaults (admin, site-wide) -->
+  <section class="panel admin-only" id="p_display">
+    <div class="help wide">Site-wide defaults for the Live map. These apply to everyone; viewers can
+      override the ones you allow under their own “My preferences”.</div>
+    <fieldset>
+      <legend>Toggle buttons shown on the Live map</legend>
+      <div class="row"><label>Labels</label><input type="checkbox" id="g_btn_labels"></div>
+      <div class="row"><label>Trails</label><input type="checkbox" id="g_btn_trails"></div>
+      <div class="row"><label>Ground</label><input type="checkbox" id="g_btn_ground"></div>
+      <div class="row"><label>Fit</label><input type="checkbox" id="g_btn_fit"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Default view — what’s on when the map first loads</legend>
+      <div class="row"><label>Labels on</label><input type="checkbox" id="g_def_labels"></div>
+      <div class="row"><label>Trails on</label><input type="checkbox" id="g_def_trails"></div>
+      <div class="row"><label>Ground on</label><input type="checkbox" id="g_def_ground"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Default units</legend>
+      <div class="row"><label>Speed</label><select id="g_u_speed"><option value="kt">kt</option><option value="kmh">km/h</option><option value="mph">mph</option></select></div>
+      <div class="row"><label>Altitude</label><select id="g_u_alt"><option value="ft">ft</option><option value="m">m</option></select></div>
+      <div class="row"><label>Distance</label><select id="g_u_dist"><option value="nm">nm</option><option value="km">km</option><option value="mi">mi</option></select></div>
+    </fieldset>
+    <fieldset>
+      <legend>Default table columns</legend>
+      <div class="row"><label>Type</label><input type="checkbox" id="g_col_t"></div>
+      <div class="row"><label>Altitude</label><input type="checkbox" id="g_col_alt"></div>
+      <div class="row"><label>Speed</label><input type="checkbox" id="g_col_gs"></div>
+      <div class="row"><label>Squawk</label><input type="checkbox" id="g_col_squawk"></div>
+      <div class="row"><label>Distance</label><input type="checkbox" id="g_col_dist"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Viewer overrides</legend>
+      <div class="row"><label>Let viewers customize</label><input type="checkbox" id="g_allow"></div>
+      <div class="help">When off, everyone sees exactly the defaults above and the “My preferences” tab is read-only.</div>
+    </fieldset>
+    <div class="actions"><button id="g_save">Save defaults</button></div>
+    <div id="g_status" class="help wide"></div>
+  </section>
+
+  <!-- My preferences (per-user) -->
+  <section class="panel" id="p_prefs">
+    <div class="help wide">Customize your own Live view. Saved to your account, so it follows you across devices.</div>
+    <div id="prefs_locked" class="help wide" style="display:none;color:#ffb4a8">The administrator has locked display settings, so these won’t take effect.</div>
+    <fieldset>
+      <legend>Default view</legend>
+      <div class="row"><label>Labels on</label><input type="checkbox" id="u_def_labels"></div>
+      <div class="row"><label>Trails on</label><input type="checkbox" id="u_def_trails"></div>
+      <div class="row"><label>Ground on</label><input type="checkbox" id="u_def_ground"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Units</legend>
+      <div class="row"><label>Speed</label><select id="u_u_speed"><option value="kt">kt</option><option value="kmh">km/h</option><option value="mph">mph</option></select></div>
+      <div class="row"><label>Altitude</label><select id="u_u_alt"><option value="ft">ft</option><option value="m">m</option></select></div>
+      <div class="row"><label>Distance</label><select id="u_u_dist"><option value="nm">nm</option><option value="km">km</option><option value="mi">mi</option></select></div>
+    </fieldset>
+    <fieldset>
+      <legend>Table columns</legend>
+      <div class="row"><label>Type</label><input type="checkbox" id="u_col_t"></div>
+      <div class="row"><label>Altitude</label><input type="checkbox" id="u_col_alt"></div>
+      <div class="row"><label>Speed</label><input type="checkbox" id="u_col_gs"></div>
+      <div class="row"><label>Squawk</label><input type="checkbox" id="u_col_squawk"></div>
+      <div class="row"><label>Distance</label><input type="checkbox" id="u_col_dist"></div>
+    </fieldset>
+    <div class="actions"><button id="u_save">Save preferences</button><button id="u_reset" class="ghost">Reset to site defaults</button></div>
+    <div id="u_status" class="help wide"></div>
+  </section>
 
   <!-- Integrations: MQTT / Home Assistant -->
   <section class="panel" id="p_integrations">
@@ -154,14 +224,18 @@ async function post(path, body){
 }
 
 // ---- sub-tabs ----
-const PANELS = ['integrations', 'import', 'users'];
+const ADMIN_PANELS = ['display', 'integrations', 'import', 'users'];
+const PANELS = ADMIN_PANELS.concat(['prefs']);
+let isAdmin = true;
 function showPanel(name){
-  if (!PANELS.includes(name)) name = 'integrations';
+  if (!PANELS.includes(name) || (!isAdmin && name !== 'prefs')) name = isAdmin ? 'display' : 'prefs';
   document.querySelectorAll('.panel').forEach(p => p.classList.toggle('on', p.id === 'p_' + name));
   document.querySelectorAll('.subtab').forEach(b => b.classList.toggle('on', b.dataset.p === name));
   if (location.hash.slice(1) !== name) history.replaceState(null, '', '#' + name);
   if (name === 'users') loadUsers();
   if (name === 'import') loadImport();
+  if (name === 'display') populateDisplay();
+  if (name === 'prefs') populatePrefs();
 }
 document.querySelectorAll('.subtab').forEach(b => b.onclick = () => showPanel(b.dataset.p));
 
@@ -316,8 +390,88 @@ function renderUsers(list){
 }
 $('users_refresh').onclick = loadUsers;
 
-// open the panel named in the URL hash (e.g. settings.html#users), else Integrations
-showPanel((location.hash || '').slice(1));
+// ---- display defaults (admin global) + my preferences (per-user) ----
+let CFG = { builtin:{}, global:{}, prefs:{}, role:'admin' };
+function merged(){                                    // built-in <- admin global  (for the Display tab)
+  const B = CFG.builtin || {}, G = CFG.global || {};
+  return {
+    buttons:  Object.assign({ labels:true, trails:true, ground:true, fit:true }, B.buttons, G.buttons),
+    defaults: Object.assign({ labels:false, trails:false, ground:true }, B.defaults, G.defaults),
+    units:    Object.assign({ speed:'kt', alt:'ft', dist:'nm' }, B.units, G.units),
+    cols:     Object.assign({ t:true, alt:true, gs:true, squawk:true, dist:true }, B.cols, G.cols),
+    allow:    (G.allow_user_prefs !== undefined) ? G.allow_user_prefs !== false : (B.allow_user_prefs !== false),
+  };
+}
+function effUser(){                                   // ...<- this user's prefs (for the Preferences tab)
+  const m = merged(), P = CFG.prefs || {};
+  return {
+    defaults: Object.assign({}, m.defaults, P.defaults),
+    units:    Object.assign({}, m.units, P.units),
+    cols:     Object.assign({}, m.cols, P.cols),
+    allow:    m.allow,
+  };
+}
+const COLKEYS = ['t','alt','gs','squawk','dist'];
+function populateDisplay(){
+  const m = merged();
+  ['labels','trails','ground','fit'].forEach(k => $('g_btn_'+k).checked = m.buttons[k] !== false);
+  ['labels','trails','ground'].forEach(k => $('g_def_'+k).checked = !!m.defaults[k]);
+  $('g_u_speed').value = m.units.speed; $('g_u_alt').value = m.units.alt; $('g_u_dist').value = m.units.dist;
+  COLKEYS.forEach(k => $('g_col_'+k).checked = m.cols[k] !== false);
+  $('g_allow').checked = m.allow;
+  $('g_status').textContent = '';
+}
+async function saveDisplay(){
+  const s = {
+    buttons:  {}, defaults: {}, units: {}, cols: {},
+    allow_user_prefs: $('g_allow').checked,
+  };
+  ['labels','trails','ground','fit'].forEach(k => s.buttons[k] = $('g_btn_'+k).checked);
+  ['labels','trails','ground'].forEach(k => s.defaults[k] = $('g_def_'+k).checked);
+  s.units = { speed:$('g_u_speed').value, alt:$('g_u_alt').value, dist:$('g_u_dist').value };
+  COLKEYS.forEach(k => s.cols[k] = $('g_col_'+k).checked);
+  $('g_status').textContent = 'Saving…';
+  const r = await post('api/settings/global', { settings: s });
+  if (r.ok){ CFG.global = s; $('g_status').textContent = 'Saved. Reload the Live map to see the changes.'; }
+  else $('g_status').textContent = 'Error: ' + (r.error || 'save failed');
+}
+function populatePrefs(){
+  const e = effUser();
+  ['labels','trails','ground'].forEach(k => $('u_def_'+k).checked = !!e.defaults[k]);
+  $('u_u_speed').value = e.units.speed; $('u_u_alt').value = e.units.alt; $('u_u_dist').value = e.units.dist;
+  COLKEYS.forEach(k => $('u_col_'+k).checked = e.cols[k] !== false);
+  const locked = !e.allow;
+  $('prefs_locked').style.display = locked ? '' : 'none';
+  $('p_prefs').querySelectorAll('input,select,#u_save').forEach(el => { if (el.id !== 'u_reset') el.disabled = locked; });
+  $('u_status').textContent = '';
+}
+async function savePrefs(){
+  const p = { defaults: {}, units: {}, cols: {} };
+  ['labels','trails','ground'].forEach(k => p.defaults[k] = $('u_def_'+k).checked);
+  p.units = { speed:$('u_u_speed').value, alt:$('u_u_alt').value, dist:$('u_u_dist').value };
+  COLKEYS.forEach(k => p.cols[k] = $('u_col_'+k).checked);
+  $('u_status').textContent = 'Saving…';
+  const r = await post('api/settings/prefs', { prefs: p });
+  if (r.ok){ CFG.prefs = p; $('u_status').textContent = 'Saved. Reload the Live map to see the changes.'; }
+  else $('u_status').textContent = 'Error: ' + (r.error || 'save failed');
+}
+$('g_save').onclick = saveDisplay;
+$('u_save').onclick = savePrefs;
+$('u_reset').onclick = async () => {
+  $('u_status').textContent = 'Resetting…';
+  const r = await post('api/settings/prefs', { prefs: {} });
+  if (r.ok){ CFG.prefs = {}; populatePrefs(); $('u_status').textContent = 'Reset to site defaults.'; }
+  else $('u_status').textContent = 'Error: ' + (r.error || 'failed');
+};
+
+// load settings + role, gate the admin tabs, then open the right panel
+(async function(){
+  try { CFG = await (await fetch('api/settings')).json(); } catch(e){}
+  isAdmin = CFG.role === 'admin';
+  if (!isAdmin) document.querySelectorAll('.subtab.admin-only, .panel.admin-only').forEach(el => el.style.display = 'none');
+  const want = (location.hash || '').slice(1);
+  showPanel(want || (isAdmin ? 'display' : 'prefs'));
+})();
 </script>
 <script src="auth.js"></script>
 </body>
