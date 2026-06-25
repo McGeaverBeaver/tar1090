@@ -1057,6 +1057,8 @@ function earlyInitPage() {
         onMobile = true;
     if (usp.has('desktop'))
         onMobile = false;
+    // keep the CSS hook in sync with any mobile/desktop override
+    document.documentElement.classList.toggle('onMobile', !!onMobile);
 
     if (usp.has('hideSidebar'))
         loStore['sidebar_visible'] = "false";
@@ -1123,6 +1125,10 @@ function earlyInitPage() {
         userScale = value;
     } else if (loStore['userScale'] != null) {
         userScale = loStore['userScale'];
+    } else if (onMobile && !usp.has('largeMode')) {
+        // Phones default to a slightly larger UI for readability and touch
+        // targets (unless the user has set their own scale).
+        userScale = 1.3;
     }
 
     const slideBase = 0.6;
@@ -1662,26 +1668,38 @@ jQuery('#selected_altitude_geom1')
                 jQuery("#toggle_sidebar_button").addClass("hide_sidebar");
                 if (!g.sidebar_initiated) {
                     g.sidebar_initiated = true;
-                    // Set up map/sidebar splitter
-                    jQuery("#sidebar_container").resizable({
-                        handles: {
-                            w: '#splitter'
-                        },
-                        minWidth: 150,
-                        maxWidth: (jQuery(window).innerWidth() *0.8),
-                    });
+                    if (!onMobile) {
+                        // Set up map/sidebar splitter (desktop only - on phones the
+                        // list takes the full screen, see below)
+                        jQuery("#sidebar_container").resizable({
+                            handles: {
+                                w: '#splitter'
+                            },
+                            minWidth: 150,
+                            maxWidth: (jQuery(window).innerWidth() *0.8),
+                        });
 
-                    jQuery("#splitter").dblclick(function() {
-                        jQuery('#legend').hide();
-                        jQuery('#sidebar_container').width('auto');
-                        updateMapSize();
-                        loStore['sidebar_width'] = jQuery('#sidebar_container').width();
-                        jQuery('#sidebar_container').width(loStore['sidebar_width']);
-                        jQuery('#legend').show();
-                    });
+                        jQuery("#splitter").dblclick(function() {
+                            jQuery('#legend').hide();
+                            jQuery('#sidebar_container').width('auto');
+                            updateMapSize();
+                            loStore['sidebar_width'] = jQuery('#sidebar_container').width();
+                            jQuery('#sidebar_container').width(loStore['sidebar_width']);
+                            jQuery('#legend').show();
+                        });
+                    }
 
                 }
-                if (!hideButtons) {
+                if (onMobile) {
+                    // Phone: show the list full-screen instead of a narrow,
+                    // unreadable split. The toggle button switches back to the map.
+                    jQuery("#map_container").hide();
+                    mapIsVisible = false;
+                    jQuery("#splitter").hide();
+                    jQuery("#expand_sidebar_button").hide();
+                    jQuery("#shrink_sidebar_button").hide();
+                    jQuery("#sidebar_container").css('width', '100%').css('margin-left', '0');
+                } else if (!hideButtons) {
                     jQuery('#splitter').show();
                 }
             } else {
@@ -1690,10 +1708,18 @@ jQuery('#selected_altitude_geom1')
                     jQuery("#expand_sidebar_button").hide();
                     jQuery("#toggle_sidebar_button").removeClass("hide_sidebar");
                     jQuery("#toggle_sidebar_button").addClass("show_sidebar");
+                    if (onMobile) {
+                        // back to the full-screen map
+                        jQuery("#map_container").show();
+                        mapIsVisible = true;
+                    }
                 }
             }
             if (loadFinished) {
                 updateMapSize();
+                if (onMobile) {
+                    TAR.planeMan.redraw();
+                }
             }
         },
     });

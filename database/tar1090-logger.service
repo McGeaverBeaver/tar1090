@@ -1,0 +1,35 @@
+# tar1090-logger systemd unit file.
+#
+# Logs aircraft metadata + flight trails from readsb's aircraft.json into a
+# TimescaleDB/PostGIS database. This is an independent, optional sidecar: if it
+# stops, readsb and the tar1090 web frontend are completely unaffected.
+#
+# Install:
+#   sudo cp tar1090-logger.default /etc/default/tar1090-logger   # then edit the DSN
+#   sudo cp tar1090-logger.py      /usr/local/share/tar1090/
+#   sudo cp tar1090-logger.service /etc/systemd/system/
+#   # adjust SOURCE_DIR below if readsb's aircraft.json is not in /run/readsb
+#   sudo systemctl daemon-reload && sudo systemctl enable --now tar1090-logger
+
+[Unit]
+Description=tar1090-logger - log aircraft + trails to TimescaleDB
+Wants=network-online.target
+After=network-online.target
+After=readsb.service
+After=dump1090-fa.service
+After=postgresql.service
+
+[Service]
+User=tar1090
+SyslogIdentifier=tar1090-logger
+EnvironmentFile=/etc/default/tar1090-logger
+# Pass the readsb source dir as the argument; the logger also honours $SOURCE_DIR
+# and will auto-detect if neither is given.
+ExecStart=/usr/bin/python3 /usr/local/share/tar1090/tar1090-logger.py /run/readsb
+Type=simple
+Restart=always
+RestartSec=30
+Nice=19
+
+[Install]
+WantedBy=default.target

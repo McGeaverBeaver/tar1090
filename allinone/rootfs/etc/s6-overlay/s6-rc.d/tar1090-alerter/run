@@ -1,0 +1,18 @@
+#!/command/with-contenv bash
+# tar1090 alert engine: watches the live aircraft feed, evaluates the alert rules stored in
+# your database, and publishes matches over MQTT to Home Assistant. Runs independently of
+# the logger, the history API, and the tar1090 web GUI.
+
+if [[ "${ENABLE_ALERTS,,}" == "false" ]]; then
+  echo "[alerter] disabled (ENABLE_ALERTS=false)"
+  exec sleep infinity
+fi
+
+if [[ -z "${TAR1090_DB_DSN:-}" ]]; then
+  echo "[alerter] note: TAR1090_DB_DSN is not set -- alert rules live in the database, so"
+  echo "[alerter]       set it to enable alerting (the rest of the container runs regardless)."
+  exec sleep infinity
+fi
+
+echo "[alerter] starting (interval=${ALERT_INTERVAL:-5}s)"
+exec s6-setuidgid nobody python3 /usr/local/share/tar1090/tar1090-alerter.py

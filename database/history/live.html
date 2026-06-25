@@ -1,0 +1,986 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tar1090 — live</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; display: flex; flex-direction: column; font: 13px/1.4 system-ui, sans-serif; background: #14161a; color: #e6e6e6; }
+  header { padding: 8px 12px 0; background: #1d2026; border-bottom: 1px solid #2c313a; }
+  header h1 { margin: 0; font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  header h1 span { color: #8a93a2; font-weight: 400; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #2ec86b; box-shadow: 0 0 0 0 rgba(46,200,107,.6); animation: pulse 1.8s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(46,200,107,.55); } 70% { box-shadow: 0 0 0 7px rgba(46,200,107,0); } 100% { box-shadow: 0 0 0 0 rgba(46,200,107,0); } }
+  #tabs { display: flex; gap: 2px; margin-top: 6px; }
+  #tabs a { color: #9aa3b2; text-decoration: none; padding: 7px 14px; border-radius: 6px 6px 0 0; font-size: 13px; }
+  #tabs a:hover { background: #23272f; color: #e6e6e6; }
+  #tabs a.active { background: #2d6cdf; color: #fff; }
+  #bar { display: flex; align-items: center; gap: 12px; padding: 6px 12px; background: #1a1d23; border-bottom: 1px solid #2c313a; }
+  #bar input { background: #0f1115; color: #e6e6e6; border: 1px solid #333; border-radius: 4px; padding: 5px 8px; font-size: 13px; width: 200px; }
+  #count { color: #cdd5e0; font-size: 12px; font-variant-numeric: tabular-nums; }
+  #count b { color: #fff; }
+  #updated { color: #8a93a2; font-size: 11px; margin-left: auto; font-variant-numeric: tabular-nums; }
+  .toggles { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tgl { background: rgba(42,47,56,.55); color: #cdd5e0; border: 1px solid #313845; border-radius: 999px;
+         padding: 5px 13px; font-size: 12px; font-weight: 600; cursor: pointer; transition: background .12s, color .12s, border-color .12s; }
+  .tgl:hover { background: #353c47; color: #fff; }
+  .tgl.on { background: #2d6cdf; border-color: #3b78e8; color: #fff; box-shadow: 0 0 0 1px rgba(61,120,232,.4); }
+  .tgl:active { transform: translateY(1px); }
+  #filterbar { display: none; align-items: center; gap: 8px; padding: 6px 12px; background: #16191e; border-bottom: 1px solid #2c313a; flex-wrap: wrap; }
+  #filterbar.on { display: flex; }
+  #filterbar .fl { color: #8a93a2; font-size: 12px; }
+  #filterbar input[type=number] { width: 78px; }
+  #filterbar input[type=text] { width: 120px; }
+  #filterbar input { background: #0f1115; color: #e6e6e6; border: 1px solid #333; border-radius: 6px; padding: 5px 8px; font-size: 13px; }
+  #filterbar label { display: inline-flex; align-items: center; gap: 5px; color: #cdd5e0; font-size: 12px; }
+  #main { flex: 1; min-height: 0; position: relative; }
+  #map { position: absolute; inset: 0; background: #0b0d10; }
+  #map.dimbase .leaflet-tile-pane { filter: brightness(0.6) contrast(1.05) saturate(0.9); }
+  .planeicon { background: transparent; border: 0; transition: filter .15s; }
+  .planeicon.sel { filter: drop-shadow(0 0 5px #4d9bff) drop-shadow(0 0 2px #fff); }
+  .leaflet-tooltip.actip { background: rgba(20,23,28,.92); color: #e6e6e6; border: 1px solid #313845; border-radius: 6px;
+                           font-size: calc(11px * var(--label-scale, 1)); font-weight: 600; box-shadow: 0 4px 12px rgba(0,0,0,.5); }
+  .leaflet-tooltip.actip::before { display: none; }
+  .ringlbl { background: none; border: 0; color: #9ec3ff; font-size: 10px; font-weight: 600; text-align: center; text-shadow: 0 0 3px #000, 0 0 3px #000; }
+  #list-tbl tr.lr.emerg td.cs { color: #ff4d4d; font-weight: 700; }
+  .emerg-banner { background: #ff4d4d; color: #1a1d23; font-weight: 800; font-size: 11.5px; text-align: center; padding: 5px 8px; letter-spacing: .3px; }
+
+  /* modern selected-aircraft card: photo on top, flight-data bubble under it */
+  #card { position: absolute; top: 10px; right: 10px; z-index: 650; width: 252px; display: none; }
+  #card.on { display: block; }
+  #photo { background: rgba(20,23,28,.82); border: 1px solid #313845; border-radius: 14px; padding: 4px; box-shadow: 0 10px 30px rgba(0,0,0,.5); display: none; }
+  #photo.on { display: block; }
+  #photo img { display: block; width: 100%; max-height: 158px; object-fit: cover; border-radius: 11px; }
+  #photo .cr { font-size: 10px; color: #8a93a2; padding: 2px 6px 0; text-align: right; }
+  #info { margin-top: 8px; background: rgba(20,23,28,.78); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+          border: 1px solid #313845; border-radius: 14px; box-shadow: 0 12px 34px rgba(0,0,0,.55); overflow: hidden; }
+  #info .hd { display: flex; align-items: flex-start; gap: 8px; padding: 11px 13px 9px; background: linear-gradient(135deg, rgba(45,108,223,.28), rgba(45,108,223,0)); }
+  #info .cs { font-size: 19px; font-weight: 700; letter-spacing: .4px; line-height: 1.1; }
+  #info .sub { color: #9aa3b2; font-size: 11px; margin-top: 2px; }
+  #info .x { margin-left: auto; cursor: pointer; color: #8a93a2; font-size: 16px; line-height: 1; padding: 2px 4px; border-radius: 6px; }
+  #info .x:hover { background: #2a2f38; color: #fff; }
+  #info .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: #2a313c; }
+  #info .cell { background: #1a1d23; padding: 8px 11px; }
+  #info .cell.wide { grid-column: 1 / -1; }
+  #info .k { color: #8a93a2; font-size: 10px; text-transform: uppercase; letter-spacing: .4px; }
+  #info .v { font-size: 14px; font-variant-numeric: tabular-nums; margin-top: 1px; }
+  #info .v small { color: #8a93a2; font-size: 11px; font-weight: 400; }
+  #info .up { color: #4dd08a; } #info .dn { color: #ff7a7a; }
+  #info .mil { color: #ff6b6b; }
+  #status { position: absolute; left: 304px; bottom: 10px; z-index: 600; background: rgba(20,22,26,.9); border: 1px solid #2c313a;
+            border-radius: 8px; padding: 6px 11px; color: #cdd5e0; font-size: 12px; max-width: 50%; }
+  /* ground view (observer sky) — shared with the History page */
+  #groundview { position: absolute; left: 50%; transform: translateX(-50%); bottom: 56px; z-index: 660;
+                width: min(700px, calc(100% - 24px)); display: none; overflow: hidden;
+                background: rgba(12,15,20,.85); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+                border: 1px solid #313845; border-radius: 14px; box-shadow: 0 18px 48px rgba(0,0,0,.6); }
+  #groundview.on { display: block; }
+  #gv-hd { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12px; color: #cdd5e0; border-bottom: 1px solid rgba(255,255,255,.06); }
+  #gv-hd .sp { flex: 1; } #gv-hd b { color: #6cc1ff; font-weight: 600; }
+  #gv-hd .m { cursor: pointer; color: #9aa3b2; font-size: 16px; padding: 0 4px; } #gv-hd .m:hover { color: #fff; }
+  #gv-hd .m.mode { font-size: 12px; padding: 2px 8px; border: 1px solid #313845; border-radius: 999px; } #gv-hd .m.mode:hover { background: #2a2f38; color: #fff; }
+  #gv-canvas { display: block; width: 100%; height: 300px; background: #0a0e16; }
+  #gv-ctrls { display: flex; align-items: center; gap: 8px; padding: 7px 12px 2px; }
+  #gv-ctrls #gv-play { background: #2d6cdf; color: #fff; border: 0; border-radius: 999px; padding: 4px 12px; cursor: pointer; }
+  #gv-ctrls #gv-scrub { flex: 1; }
+  #gv-readout { font: 11px/1.5 ui-monospace, monospace; color: #cbd3df; padding: 4px 12px; display: flex; gap: 16px; flex-wrap: wrap; }
+  #gv-readout b { color: #fff; font-weight: 600; }
+  #gv-hint { font-size: 10px; color: #6b7480; padding: 0 12px 8px; }
+  .obsdot { width: 16px; height: 16px; border-radius: 50%; background: #2ec86b; border: 2px solid #fff;
+            box-shadow: 0 0 0 4px rgba(46,200,107,.35), 0 1px 4px rgba(0,0,0,.6); cursor: grab; }
+  .gvplane { background: transparent; border: 0; }
+  @media (max-width: 760px){ #groundview { bottom: 8px; } #gv-canvas { height: 200px; } }
+
+  /* live aircraft list — transparent glass panel, docked left, minimizable */
+  #list { position: absolute; left: 10px; top: 10px; max-height: calc(100% - 20px); width: 322px; z-index: 610;
+          background: rgba(18,21,26,.62); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+          border: 1px solid #313845; border-radius: 14px; box-shadow: 0 12px 34px rgba(0,0,0,.55);
+          display: flex; flex-direction: column; overflow: hidden; }
+  #list-hd { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: pointer; user-select: none;
+             background: linear-gradient(135deg, rgba(45,108,223,.22), rgba(45,108,223,0)); }
+  #list-hd .t { font-weight: 700; font-size: 13px; }
+  #list-hd .c { color: #9aa3b2; font-size: 11px; font-variant-numeric: tabular-nums; }
+  #list-hd .m { color: #9aa3b2; font-size: 15px; width: 22px; height: 22px; display: flex;
+                align-items: center; justify-content: center; border-radius: 6px; }
+  #list-hd .m:hover { background: #2a2f38; color: #fff; }
+  #list-gear { margin-left: auto; }
+  #list-body { flex: 0 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; }  /* vertical scroll only */
+  #list.min #list-body, #list.min #list-settings { display: none; }
+  #list-tbl { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12px; }
+  #list-tbl thead th { position: sticky; top: 0; background: rgba(20,23,28,.94); color: #8a93a2; font-size: 10px;
+                       text-transform: uppercase; letter-spacing: .3px; text-align: left; padding: 6px 8px; cursor: pointer; white-space: nowrap; }
+  #list-tbl thead th.n { text-align: right; }
+  #list-tbl thead th:hover { color: #fff; }
+  #list-tbl thead th .ar { color: #4d9bff; font-size: 9px; }
+  #list-tbl td { padding: 5px 8px; border-bottom: 1px solid rgba(255,255,255,.05); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #list-tbl td.n { text-align: right; font-variant-numeric: tabular-nums; color: #cdd5e0; }
+  #list-tbl td.cs { font-weight: 600; }
+  /* fixed column widths so the table always fits the panel (Flight takes the remainder) */
+  #list-tbl .c-t { width: 46px; } #list-tbl .c-alt { width: 54px; } #list-tbl .c-gs { width: 44px; }
+  #list-tbl .c-squawk { width: 48px; } #list-tbl .c-dist { width: 50px; }
+  #list-tbl:not(.has-dist) .dist { display: none; }   /* hide Distance until a site location is known */
+  #list-tbl.hide-t .c-t, #list-tbl.hide-alt .c-alt, #list-tbl.hide-gs .c-gs,
+  #list-tbl.hide-squawk .c-squawk, #list-tbl.hide-dist .c-dist { display: none; }   /* user column toggles */
+  #list-tbl thead th .u { color: #6b7585; font-weight: 400; }
+  #list-hd .m.gear { font-size: 14px; }
+  /* settings popover */
+  #list-settings { flex: 0 0 auto; display: none; padding: 10px 12px; border-bottom: 1px solid #2a313c; background: rgba(20,23,28,.55); }
+  #list-settings.on { display: block; }
+  #list-settings .sg { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  #list-settings .sgk { width: 64px; font-size: 11px; color: #9aa3b2; }
+  #list-settings .sgv { display: flex; gap: 4px; flex: 1; }
+  #list-settings .seg { flex: 1; background: rgba(42,47,56,.6); color: #cdd5e0; border: 1px solid #313845;
+                        border-radius: 7px; padding: 5px 0; font-size: 11px; font-weight: 600; cursor: pointer; }
+  #list-settings .seg:hover { background: #353c47; color: #fff; }
+  #list-settings .seg.on { background: #2d6cdf; border-color: #3b78e8; color: #fff; }
+  #list-settings .sgv.wrap { flex-wrap: wrap; }
+  #list-settings .sgv.wrap .seg { flex: 0 0 auto; padding: 5px 10px; }
+  #list-tbl tr.lr { cursor: pointer; }
+  #list-tbl tr.lr:hover { background: rgba(255,255,255,.06); }
+  #list-tbl tr.lr.sel { background: rgba(45,108,223,.32); }
+  #list-tbl tr.lr.mil td.cs { color: #ff6b6b; }
+
+  /* modern altitude colour legend */
+  #legend { position: absolute; right: 10px; bottom: 26px; z-index: 600; background: rgba(20,23,28,.78);
+            -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border: 1px solid #313845;
+            border-radius: 12px; padding: 9px 11px; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
+  #legend .lg-title { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: #8a93a2; margin-bottom: 6px; text-align: center; }
+  #legend.tuned .lg-title { color: #fff; cursor: pointer; }
+  #legend.flt .lg-title { color: #6cc1ff; }
+  #legend .lg-body { display: flex; gap: 7px; height: 124px; }
+  #legend .lg-bar { position: relative; width: 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,.12);
+                    overflow: hidden; cursor: ns-resize; touch-action: none; }
+  /* tuned-altitude window: the band stays vivid, everything outside it dims */
+  #legend .lg-dim  { position: absolute; left: 0; right: 0; background: rgba(8,10,14,.7); pointer-events: none; display: none; }
+  #legend .lg-band { position: absolute; left: 0; right: 0; border-top: 1.5px solid #fff; border-bottom: 1.5px solid #fff;
+                     box-shadow: 0 0 7px rgba(255,255,255,.45); pointer-events: none; display: none; }
+  #legend.tuned .lg-dim, #legend.tuned .lg-band { display: block; }
+  #legend .lg-ticks { display: flex; flex-direction: column; justify-content: space-between; font-size: 10px;
+                      color: #cdd5e0; font-variant-numeric: tabular-nums; }
+  #legend .lg-hint { font-size: 9px; color: #6b7480; text-align: center; margin-top: 5px; }
+  @media (max-width: 760px) {
+    #legend, #list { display: none; }
+    #bar { flex-wrap: wrap; gap: 8px; padding: 8px 10px; }
+    #bar input { width: 100%; order: 1; padding: 9px 10px; }
+    .toggles { order: 2; width: 100%; flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch;
+               scrollbar-width: none; padding-bottom: 1px; }
+    .toggles::-webkit-scrollbar { display: none; }
+    .tgl { flex: 0 0 auto; padding: 8px 14px; }
+    #count { order: 3; }
+    #updated { order: 4; margin-left: auto; }
+    #status { left: 8px; right: 8px; bottom: 8px; max-width: none; }
+    /* selected-aircraft card: compact, top-right like desktop (not a bottom sheet) */
+    #card { width: 200px; right: 8px; top: 8px; max-height: 82vh; overflow: auto; }
+    #photo img { max-height: 116px; }
+    #info .hd { padding: 9px 11px 7px; }
+    #info .cs { font-size: 17px; }
+    #info .cell { padding: 6px 9px; }
+    #info .v { font-size: 13px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <nav id="tabs"><a href="live.html" class="active">Live</a><a href="index.html">History</a><a href="alerts.html" class="admin-only">Alerts</a><a href="settings.html">Settings</a></nav>
+</header>
+<div id="bar">
+  <input id="find" type="text" placeholder="Find callsign / hex / reg…" autocomplete="off">
+  <div class="toggles">
+    <button class="tgl" id="t-labels" title="Show a callsign label on every aircraft">🏷 Labels</button>
+    <button class="tgl" id="t-trails" title="Show the selected aircraft's trail">〰 Trails</button>
+    <button class="tgl on" id="t-ground" title="Show aircraft on the ground">⏚ Ground</button>
+    <button class="tgl" id="t-rings" title="Show your receiver location + range rings">◎ Rings</button>
+    <button class="tgl" id="t-recenter" title="Zoom to fit every aircraft">⤢ Fit</button>
+    <button class="tgl" id="t-filter" title="Filter by altitude / military / type">⏷ Filter</button>
+    <button class="tgl" id="t-airshow" title="Show only likely air-show aircraft: aerobatic / warbird / jet-demo types, or anything maneuvering with big altitude swings">✈ Air show</button>
+    <button class="tgl" id="t-ground" title="Watch the aircraft now in the list as they'd look from the ground (your receiver site)">👁 Ground</button>
+  </div>
+  <span id="count">—</span>
+  <span id="updated"></span>
+</div>
+<div id="filterbar">
+  <span class="fl">Altitude (ft)</span>
+  <input id="f-altmin" type="number" placeholder="min"><span class="fl">–</span><input id="f-altmax" type="number" placeholder="max">
+  <label class="fl"><input id="f-mil" type="checkbox"> Military only</label>
+  <span class="fl">Type</span><input id="f-type" type="text" placeholder="A32*, B738…">
+  <button id="f-clear" class="tgl">Clear filters</button>
+</div>
+<div id="main">
+  <div id="map"></div>
+  <div id="list" class="open">
+    <div id="list-hd">
+      <span class="t">Live aircraft</span><span class="c" id="list-count">—</span>
+      <span class="m gear" id="list-gear" title="Settings">⚙</span>
+      <span class="m" id="list-min" title="Minimize / expand">─</span>
+    </div>
+    <div id="list-settings"></div>
+    <div id="list-body">
+      <table id="list-tbl">
+        <thead><tr>
+          <th data-k="flight" data-label="Flight" class="c-flight">Flight</th><th data-k="t" data-label="Type" class="c-t">Type</th>
+          <th data-k="alt" data-label="Alt" class="n c-alt">Alt</th><th data-k="gs" data-label="Spd" class="n c-gs">Spd</th>
+          <th data-k="squawk" data-label="Sqk" class="n c-squawk">Sqk</th><th data-k="dist" data-label="Dist" class="n dist c-dist">Dist</th>
+        </tr></thead>
+        <tbody id="list-rows"></tbody>
+      </table>
+    </div>
+  </div>
+  <div id="legend">
+    <div class="lg-title" id="lgtitle">Altitude</div>
+    <div class="lg-body">
+      <div class="lg-bar" id="lgbar">
+        <div class="lg-dim" id="lgdimtop"></div>
+        <div class="lg-band" id="lgband"></div>
+        <div class="lg-dim" id="lgdimbot"></div>
+      </div>
+      <div class="lg-ticks" id="lgticks"></div>
+    </div>
+    <div class="lg-hint" id="lghint">drag to tune · wheel = width</div>
+  </div>
+  <div id="card">
+    <div id="photo"></div>
+    <div id="info"></div>
+  </div>
+  <div id="status">Connecting to the live feed…</div>
+
+  <div id="groundview">
+    <div id="gv-hd"><span>Ground view — looking up from <b id="gv-from">your receiver</b></span>
+      <span class="sp"></span><span class="m mode" id="gv-mode" title="Switch camera — Chase / Cockpit / Wing follow the plane · Stand / Orbit are free">🎥 Chase</span><span class="m" id="gv-close" title="Close">✕</span></div>
+    <canvas id="gv-canvas"></canvas>
+    <div id="gv-ctrls"><button id="gv-play" style="display:none">▶</button><input id="gv-scrub" type="range" min="0" max="0" value="0" style="display:none"></div>
+    <div id="gv-readout"></div>
+    <div id="gv-hint">Live 3D — the aircraft now in the list. Tap 🎥 to switch camera: <b>Chase</b>, <b>Cockpit</b> and <b>Wing</b> follow the plane · <b>Stand</b> looks up from the ground · <b>Orbit</b> is a free fly-around. Drag the green dot to move where you're standing.</div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="acicons.js"></script>
+<script src="https://unpkg.com/three@0.147.0/build/three.min.js"></script>
+<script src="https://unpkg.com/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<script src="groundview.js?v=3d4"></script>
+<script>
+const $ = id => document.getElementById(id);
+const map = L.map('map', { worldCopyJump:true, zoomControl:false }).setView([40, -74], 7);
+// selectable base layers (admin default + user pref). Only plain OSM is dimmed so the
+// altitude-coloured icons pop; the styled dark/light/satellite layers are shown as-is.
+const BASES = {
+  osm:   { url:'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', attr:'© OpenStreetMap', sub:'abc', dim:true },
+  dark:  { url:'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', attr:'© OpenStreetMap, © CARTO', sub:'abcd', dim:false },
+  light: { url:'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', attr:'© OpenStreetMap, © CARTO', sub:'abcd', dim:false },
+  sat:   { url:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr:'© Esri', sub:'', dim:false },
+};
+let baseLayer = null;
+function setBaseLayer(name){
+  const b = BASES[name] || BASES.osm;
+  if (baseLayer) map.removeLayer(baseLayer);
+  const opts = { maxZoom: 19, attribution: b.attr, zIndex: 0 };
+  if (b.sub) opts.subdomains = b.sub;
+  baseLayer = L.tileLayer(b.url, opts).addTo(map);
+  $('map').classList.toggle('dimbase', !!b.dim);
+}
+setBaseLayer('osm');
+
+// ---- altitude -> colour (ported from the main tar1090 UI, same as the History map) -------
+const _ALT_H = [ {alt:0,val:20},{alt:2000,val:32.5},{alt:4000,val:43},{alt:6000,val:54},
+  {alt:8000,val:72},{alt:9000,val:85},{alt:11000,val:140},{alt:40000,val:300},{alt:51000,val:360} ];
+const _ALT_L = [ {h:0,val:53},{h:20,val:50},{h:32,val:54},{h:40,val:52},{h:46,val:51},{h:50,val:46},
+  {h:60,val:43},{h:80,val:41},{h:100,val:41},{h:120,val:41},{h:140,val:41},{h:160,val:40},
+  {h:180,val:40},{h:190,val:44},{h:198,val:50},{h:200,val:58},{h:220,val:58},{h:240,val:58},
+  {h:255,val:55},{h:266,val:55},{h:270,val:58},{h:280,val:58},{h:290,val:47},{h:300,val:43},
+  {h:310,val:48},{h:320,val:48},{h:340,val:52},{h:360,val:53} ];
+function altColor(altitude){
+  if (altitude == null) return 'hsl(0,0%,75%)';
+  if (altitude === 'ground' || altitude <= 0) return 'hsl(220,0%,40%)';
+  const alt = altitude >= 8000 ? Math.round(altitude/500)*500 : Math.round(altitude/125)*125;
+  let h = _ALT_H[0].val;
+  for (let i=_ALT_H.length-1;i>=0;--i){ if (alt > _ALT_H[i].alt){
+    h = (i===_ALT_H.length-1) ? _ALT_H[i].val
+      : _ALT_H[i].val + (_ALT_H[i+1].val-_ALT_H[i].val)*(alt-_ALT_H[i].alt)/(_ALT_H[i+1].alt-_ALT_H[i].alt); break; } }
+  let l = _ALT_L[0].val;
+  for (let i=_ALT_L.length-1;i>=0;--i){ if (h > _ALT_L[i].h){
+    l = (i===_ALT_L.length-1) ? _ALT_L[i].val
+      : _ALT_L[i].val + (_ALT_L[i+1].val-_ALT_L[i].val)*(h-_ALT_L[i].h)/(_ALT_L[i+1].h-_ALT_L[i].h); break; } }
+  h = ((h%360)+360)%360;
+  return `hsl(${h.toFixed(0)},88%,${l.toFixed(0)}%)`;
+}
+
+// When a single flight is selected we colour its trail on an auto-ranged scale: the flight's own
+// min..max altitude is stretched across the full colour spectrum, so 50-500 ft wiggles (loops,
+// circuits, terrain-following) become visible instead of one flat colour. The legend ticks rescale
+// to match. altScale is null at all other times (global, absolute scale).
+let altScale = null;       // { lo, hi } in feet, or null
+const ALT_SPAN_FLOOR = 100;   // smallest range to spread, so level flight isn't pure sensor noise
+function setAltScale(alts){
+  const v = alts.filter(a => a!=null && a!=='ground').map(a => +a);
+  if (v.length < 2){ altScale = null; return; }
+  let lo = Math.min(...v), hi = Math.max(...v);
+  if (hi - lo < ALT_SPAN_FLOOR){ const mid=(lo+hi)/2; lo=mid-ALT_SPAN_FLOOR/2; hi=mid+ALT_SPAN_FLOOR/2; }
+  altScale = { lo, hi };
+}
+function altColorFor(alt){     // per-flight scale if active, else the absolute scale
+  if (altScale && alt!=null && alt!=='ground'){
+    const t = Math.min(1, Math.max(0, (+alt - altScale.lo)/(altScale.hi - altScale.lo)));
+    return altColor(t * 45000);    // map the flight's range onto the full legend gradient
+  }
+  return altColor(alt);
+}
+
+// ---- realistic type-shaped aircraft icons (tar1090's own marker set, via acicons.js) -------
+// The shape is chosen from the ICAO type designator (or the broadcast category), rotated to
+// the aircraft's track, and filled with the altitude colour.
+function makePlaneIcon(type, color, deg, size, sel, category){
+  const r = aircraftShapeSVG(type, category, null, color, '#0b0d10', size);
+  const rot = r.noRotate ? 0 : (deg || 0);
+  const html = `<div style="transform:rotate(${rot.toFixed(0)}deg);width:${r.w.toFixed(1)}px;height:${r.h.toFixed(1)}px;`
+    + `filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.7))">${r.svg}</div>`;
+  return L.divIcon({ className:'planeicon' + (sel?' sel':''), html, iconSize:[r.w, r.h], iconAnchor:[r.w/2, r.h/2] });
+}
+
+// ---- user-selectable units (persisted in the browser) -------------------------------------
+const UNITS = {
+  speed: { kt:{f:1,s:'kt'}, kmh:{f:1.852,s:'km/h'}, mph:{f:1.15078,s:'mph'} },
+  alt:   { ft:{f:1,s:'ft'}, m:{f:0.3048,s:'m'} },
+  dist:  { nm:{f:1,s:'nm'}, km:{f:1.852,s:'km'}, mi:{f:1.15078,s:'mi'} },
+};
+function loadSettings(){ const d = { speed:'kt', alt:'ft', dist:'nm',
+    cols: { t:true, alt:true, gs:true, squawk:true, dist:true } };
+  try { const s = JSON.parse(localStorage.getItem('liveUnits') || '{}');
+    return Object.assign(d, s, { cols: Object.assign(d.cols, s.cols || {}) }); } catch(e){ return d; } }
+let settings = loadSettings();
+// admin global defaults + this viewer's saved preferences (filled in by loadEffective())
+let userPrefs = {}, allowPrefs = true;
+function saveSettingsLocal(){ try { localStorage.setItem('liveUnits', JSON.stringify(settings)); } catch(e){} }
+function saveSettings(){                         // gear changed -> cache locally and persist to the DB
+  saveSettingsLocal();
+  userPrefs.units = { speed: settings.speed, alt: settings.alt, dist: settings.dist };
+  userPrefs.cols  = Object.assign({}, settings.cols);
+  fetch('api/settings/prefs', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ prefs: userPrefs }) }).catch(()=>{});
+}
+const uSpeed = () => UNITS.speed[settings.speed].s, uAlt = () => UNITS.alt[settings.alt].s, uDist = () => UNITS.dist[settings.dist].s;
+const cvSpeed = g => g==null ? null : g*UNITS.speed[settings.speed].f;
+const cvAlt   = a => (a==null || a==='ground') ? null : a*UNITS.alt[settings.alt].f;
+const cvDist  = d => d==null ? null : d*UNITS.dist[settings.dist].f;
+
+// ---- formatting helpers for the flight-data bubble ----------------------------------------
+function cardinal(deg){ const c=['N','NE','E','SE','S','SW','W','NW']; return c[Math.round(deg/45)%8]; }
+function fmtAlt(a){ if (a==null) return '—'; if (a==='ground') return 'on ground';
+  return Math.round(cvAlt(a)).toLocaleString()+' <small>'+uAlt()+'</small>'; }
+function fmtSpd(g){ const v=cvSpeed(g); return v==null ? '—' : Math.round(v)+' <small>'+uSpeed()+'</small>'; }
+function fmtTrk(t){ return t==null ? '—' : Math.round(t)+'° <small>'+cardinal(t)+'</small>'; }
+function fmtRate(r){ if (r==null) return '—'; if (r===0) return 'level';
+  let v=r, unit='fpm'; if (settings.alt==='m'){ v=r*0.00508; unit='m/s'; }
+  const txt = settings.alt==='m' ? Math.abs(v).toFixed(1) : Math.abs(v).toLocaleString();
+  return `<span class="${r>0?'up':'dn'}">${r>0?'▲':'▼'} ${txt} <small>${unit}</small></span>`; }
+function fmtSeen(s){ if (s==null) return '—'; if (s<1) return 'now'; return Math.round(s)+'s ago'; }
+function isMil(sq){ return sq && /^(7[5-7])/.test(sq); } // emergency/special squawks (highlight)
+function emerg(sq){ return sq==='7500' ? 'HIJACK · 7500' : sq==='7600' ? 'RADIO FAIL · 7600'
+  : sq==='7700' ? 'EMERGENCY · 7700' : ''; }
+
+// ---- live polling + marker management ------------------------------------------------------
+const markers = new Map();   // hex -> { marker, key }  (key = rounded track|altband for cheap diffing)
+const selLayer = L.layerGroup().addTo(map);   // selected aircraft's trail (only when Trails is on)
+const ringsLayer = L.layerGroup().addTo(map); // receiver marker + range rings
+function drawRings(){
+  ringsLayer.clearLayers();
+  if (!showRings || !siteLoc) return;
+  L.circleMarker([siteLoc.lat, siteLoc.lon], { radius:4, weight:2, color:'#4d9bff', fillColor:'#4d9bff', fillOpacity:.9 }).addTo(ringsLayer);
+  const f = (UNITS.dist[settings.dist] || UNITS.dist.nm).f;     // value(unit) = nm * f  ->  metres = value/f*1852
+  for (const d of ringDist){
+    if (!(d > 0)) continue;
+    const m = d / f * 1852;
+    L.circle([siteLoc.lat, siteLoc.lon], { radius:m, color:'#4d9bff', weight:1, opacity:.45, fill:false, dashArray:'4 6' }).addTo(ringsLayer);
+    L.marker([siteLoc.lat + m/111320, siteLoc.lon], { interactive:false,
+      icon: L.divIcon({ className:'ringlbl', html:`${d} ${uDist()}`, iconSize:[50,14], iconAnchor:[25,7] }) }).addTo(ringsLayer);
+  }
+}
+let selTrailReq = 0;
+let selectedHex = null, lastData = new Map(), fitted = false, filter = '';
+let showLabels = false, showTrails = false, showGround = true, showRings = false;
+let iconScale = 1, labelScale = 1, ringDist = [100, 150, 200];
+let fAltMin = null, fAltMax = null, fMil = false, fType = '';   // gear/bar filters (session)
+function passFilters(a){
+  if (fMil && !a.military) return false;
+  if (fType){ const t = (a.t || '').toUpperCase();
+    if (!fType.some(tok => t.startsWith(tok) || t.includes(tok))) return false; }
+  if (fAltMin != null || fAltMax != null){
+    const alt = a.alt === 'ground' ? 0 : a.alt;
+    if (alt == null) return false;
+    if (fAltMin != null && alt < fAltMin) return false;
+    if (fAltMax != null && alt > fAltMax) return false;
+  }
+  if (airshowMode && !isAirshowCandidate(a)) return false;
+  return true;
+}
+
+// ---- "Air show" detection (client side) ----------------------------------------------------
+// A candidate is either a known air-show aircraft TYPE (the curated /api/airshow list) or any
+// aircraft currently MANEUVERING -- wide altitude swings with repeated direction reversals
+// (loops / wingovers), tracked from the live feed. Mirrors the alert engine's maneuver detector.
+let airshowMode = false;
+const airshowTypes = new Set();              // ICAO type tokens from /api/airshow
+const nonAerobatic = new Set();              // types that maneuver but aren't air-show (trainers, helis)
+const watchRegs = new Set(), watchHex = new Set();   // admin watchlist: always air-show
+const altHistC = new Map();                  // hex -> [[t_ms, alt_ft, lat, lon], ...]
+// Match the server's maneuver detector: confined box + steep vertical rate + many reversals in a
+// short window -- so flight-school "up and down" (wide area, gentle climbs) does NOT qualify.
+const MAN_WIN_MS = 120000, MAN_KEEP_MS = 240000, MAN_DEAD = 200,
+      MAN_SPAN_FT = 700, MAN_REVERSALS = 3, MAN_PEAK_FPM = 2000, MAN_BOX_KM = 12;
+fetch('api/airshow').then(r=>r.json()).then(j=>{
+  (j.all||[]).forEach(t=> airshowTypes.add(String(t).toUpperCase()));
+  (j.non_aerobatic||[]).forEach(t=> nonAerobatic.add(String(t).toUpperCase()));
+  (j.watch||[]).forEach(w=>{ if (w.reg) watchRegs.add(String(w.reg).toUpperCase()); if (w.hex) watchHex.add(String(w.hex).toLowerCase()); });
+}).catch(()=>{});
+function trackAlt(acs){
+  const now = Date.now();
+  for (const a of acs){
+    const alt = a.alt === 'ground' ? 0 : a.alt;
+    if (alt == null || a.hex == null || a.lat == null) continue;
+    let h = altHistC.get(a.hex); if (!h){ h = []; altHistC.set(a.hex, h); }
+    h.push([now, alt, a.lat, a.lon]);
+    while (h.length && now - h[0][0] > MAN_KEEP_MS) h.shift();
+  }
+  for (const [hex, h] of altHistC){ if (!h.length || now - h[h.length-1][0] > MAN_KEEP_MS) altHistC.delete(hex); }
+}
+function haversineKm(a, b){ const R = 6371, r = Math.PI/180;
+  const dp = (b[0]-a[0])*r, dl = (b[1]-a[1])*r, p1 = a[0]*r, p2 = b[0]*r;
+  const h = Math.sin(dp/2)**2 + Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
+  return 2*R*Math.asin(Math.sqrt(h)); }
+function maneuvering(hex){
+  const h = altHistC.get(hex); if (!h || h.length < 6) return false;
+  const pts = h.slice().sort((x,y)=> x[0]-y[0]);
+  const alts = pts.map(p => p[1]);
+  if (Math.max(...alts) - Math.min(...alts) < MAN_SPAN_FT) return false;
+  let peak = 0;                                            // steepest sustained vertical rate (fpm)
+  for (let i=1;i<pts.length;i++){ const dt = (pts[i][0]-pts[i-1][0])/1000; if (dt<=0 || dt>60) continue;
+    const fpm = Math.abs(pts[i][1]-pts[i-1][1])/(dt/60); if (fpm > peak) peak = fpm; }
+  if (peak < MAN_PEAK_FPM) return false;
+  const rt = []; let dir = 0, ref = alts[0];               // reversal times (deadband)
+  for (let i=1;i<pts.length;i++){ const a = pts[i][1]; let d;
+    if (a-ref > MAN_DEAD) d = 1; else if (ref-a > MAN_DEAD) d = -1; else continue;
+    if (dir && d !== dir) rt.push(pts[i][0]); dir = d; ref = a; }
+  let rev = 0, best = null, j = 0;                         // densest MAN_WIN_MS of reversals
+  for (let i=0;i<rt.length;i++){ while (rt[i]-rt[j] > MAN_WIN_MS) j++; if (i-j+1 > rev){ rev = i-j+1; best = [rt[j], rt[i]]; } }
+  if (rev < MAN_REVERSALS) return false;
+  const win = best ? pts.filter(p => p[0] >= best[0]-MAN_WIN_MS && p[0] <= best[1]+MAN_WIN_MS) : pts;
+  const lats = win.map(p=>p[2]), lons = win.map(p=>p[3]);
+  const box = haversineKm([Math.min(...lats), Math.min(...lons)], [Math.max(...lats), Math.max(...lons)]);
+  return box > 0 && box <= MAN_BOX_KM;                     // confined display box (excludes circuits)
+}
+function isAirshowType(t){ return !!t && airshowTypes.has(String(t).toUpperCase()); }
+function maneuverPlausible(t){ return !nonAerobatic.has(String(t||'').toUpperCase()); }  // not a trainer/heli
+function isWatched(a){ return (a.r && watchRegs.has(String(a.r).toUpperCase())) || (a.hex && watchHex.has(String(a.hex).toLowerCase())); }
+// air-show candidate = on the watchlist, OR a known air-show type, OR maneuvering AND plausibly aerobatic
+function isAirshowCandidate(a){ return isWatched(a) || isAirshowType(a.t) || (maneuverPlausible(a.t) && maneuvering(a.hex)); }
+
+// Deep link: ?icao=<hex> / ?reg=<registration> / ?callsign=<cs>. Select that aircraft once the
+// live feed loads; if it isn't currently flying, fall back to its History (trail replay).
+let deepLink = null, dlTries = 0;
+(function(){
+  const u = new URLSearchParams(location.search);
+  const hex = (u.get('icao') || u.get('hex') || '').trim().toLowerCase().replace(/^~/, '');
+  const reg = (u.get('reg') || u.get('registration') || '').trim().toLowerCase();
+  const cs  = (u.get('callsign') || u.get('flight') || '').trim().toLowerCase();
+  if (hex || reg || cs) deepLink = { hex, reg, cs };
+})();
+function setUrlHex(hex){ history.replaceState(null, '', hex ? '?icao=' + encodeURIComponent(hex) : location.pathname); }
+function resolveDeepLink(){
+  const w = deepLink, list = [...lastData.values()];
+  let a = null;
+  if (w.hex) a = list.find(x => (x.hex||'').toLowerCase().replace(/^~/,'') === w.hex);
+  if (!a && w.reg) a = list.find(x => (x.r||'').toLowerCase() === w.reg);
+  if (!a && w.cs)  a = list.find(x => (x.flight||'').trim().toLowerCase() === w.cs);
+  deepLink = null;                                   // resolve only once
+  if (a){
+    select(a.hex);
+    if (a.lat!=null && a.lon!=null){ fitted = true; map.setView([a.lat, a.lon], Math.max(map.getZoom(), 9)); }
+  } else {
+    const q = new URLSearchParams();                 // not live -> show its history
+    if (w.hex) q.set('icao', w.hex); else if (w.reg) q.set('reg', w.reg); else if (w.cs) q.set('callsign', w.cs);
+    location.replace('index.html?' + q.toString());
+  }
+}
+let listSort = { key: 'alt', dir: -1 };   // live-list sort (default: highest altitude first)
+let siteLoc = null, pendingScroll = false;
+function distNm(a){   // great-circle nm from the receiver to an aircraft (null if no site)
+  if (!siteLoc || a.lat==null || a.lon==null) return null;
+  const r=Math.PI/180, dLat=(a.lat-siteLoc.lat)*r, dLon=(a.lon-siteLoc.lon)*r;
+  const s=Math.sin(dLat/2)**2 + Math.cos(siteLoc.lat*r)*Math.cos(a.lat*r)*Math.sin(dLon/2)**2;
+  return 3440.065 * 2*Math.atan2(Math.sqrt(s), Math.sqrt(1-s));   // earth radius in nm
+}
+
+function planeColor(a){ return (a.military || isMil(a.squawk)) ? '#ff4d4d' : altColor(a.alt); }
+function tipOpts(){ return { permanent: showLabels, direction: showLabels ? 'right' : 'top',
+  offset: showLabels ? [10,0] : [0,-10], opacity: .95, className: 'actip' }; }
+function tipText(a){
+  const alt = a.alt === 'ground' ? ' · grnd'
+            : (a.alt != null ? ' · ' + Math.round(cvAlt(a.alt)).toLocaleString() + ' ' + uAlt() : '');
+  return (a.flight || a.r || a.hex || '') + alt;
+}
+
+async function poll(){
+  if (document.hidden) return;
+  let j;
+  try { j = await (await fetch('api/live')).json(); }
+  catch(e){ $('status').textContent = 'live feed unreachable: ' + e; $('status').style.display='block'; return; }
+  if (j.error){ $('status').textContent = j.error; $('status').style.display='block'; return; }
+  render(j);
+}
+
+let lastJ = null;   // last feed payload, so the altitude tuner can re-filter instantly (no refetch)
+function render(j){
+  lastJ = j;
+  const acs = j.aircraft || [];
+  trackAlt(acs);   // feed altitude history for the air-show maneuver detector (all aircraft, pre-filter)
+  if (j.site && !siteLoc){ siteLoc = j.site; $('list-tbl').classList.add('has-dist'); drawRings(); }
+  const seen = new Set();
+  lastData = new Map();
+  const pts = [];
+  for (const a of acs){
+    if (a.lat==null || a.lon==null) continue;
+    if (!showGround && a.alt === 'ground') continue;
+    if (!passFilters(a)) continue;
+    lastData.set(a.hex, a);
+    seen.add(a.hex);
+    const sel = a.hex === selectedHex;
+    const size = Math.round((sel ? 32 : 22) * iconScale);
+    const col  = planeColor(a);
+    const trk  = a.track || 0;
+    const key  = `${Math.round(trk/3)}|${col}|${size}`;
+    let e = markers.get(a.hex);
+    if (!e){
+      const m = L.marker([a.lat, a.lon], { icon: makePlaneIcon(a.t, col, trk, size, sel, a.category),
+        interactive:true, keyboard:false, riseOnHover:true });
+      m.on('click', ()=> select(a.hex));
+      m.bindTooltip(tipText(a), tipOpts());
+      m.addTo(map);
+      e = { marker:m, key:'' };
+      markers.set(a.hex, e);
+    }
+    e.marker.setLatLng([a.lat, a.lon]);
+    if (e.key !== key){ e.marker.setIcon(makePlaneIcon(a.t, col, trk, size, sel, a.category)); e.key = key; }
+    e.marker.setTooltipContent(tipText(a));
+    if (!fitted) pts.push([a.lat, a.lon]);
+  }
+  // drop aircraft that are no longer shown (gone from the feed, or hidden by the Ground filter)
+  for (const [hex, e] of markers){ if (!seen.has(hex)){ map.removeLayer(e.marker); markers.delete(hex); } }
+
+  if (!fitted && pts.length){ map.fitBounds(L.latLngBounds(pts).pad(0.15)); fitted = true; }
+  applyFilter();
+  // resolve a ?icao/?reg deep link once the feed has loaded (give an empty feed a few tries)
+  if (deepLink && (acs.length || ++dlTries >= 3)) resolveDeepLink();
+
+  $('count').innerHTML = `<b>${lastData.size}</b> shown` +
+    (j.count_pos!=null ? ` · ${j.count_pos} with position` : '') +
+    (j.count_total ? ` · ${j.count_total} tracked` : '');
+  $('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
+  $('status').style.display = acs.length ? 'none' : 'block';
+  if (!acs.length) $('status').textContent = 'No aircraft with a position right now.';
+
+  renderList(acs);
+  if (selectedHex) renderInfo(lastData.get(selectedHex));   // keep the bubble live
+  if (gv.isOpen()) gvLiveUpdate();                          // refresh the ground view with this tick
+}
+
+// ---- live aircraft list (tar1090-style, modern glass, sortable + minimizable) -------------
+function renderList(acs){
+  const b = map.getBounds();   // only list aircraft currently visible on the map
+  let rows = acs.filter(a => a.lat!=null && (showGround || a.alt!=='ground') && passFilters(a) && b.contains([a.lat, a.lon]));
+  if (filter) rows = rows.filter(a => `${a.flight||''} ${a.hex} ${a.r||''} ${a.t||''}`.toLowerCase().includes(filter));
+  const k = listSort.key, dir = listSort.dir;
+  const val = a => k==='alt'    ? (a.alt==='ground' ? -1 : (a.alt ?? -2))
+                 : k==='gs'     ? (a.gs ?? -1)
+                 : k==='dist'   ? (distNm(a) ?? 1e9)
+                 : k==='squawk' ? (a.squawk ?? '')
+                 : (a[k] || '').toString().toLowerCase();
+  rows.sort((x,y)=>{ const vx=val(x), vy=val(y); return vx<vy ? -dir : vx>vy ? dir : 0; });
+  const body = $('list-body'), keep = body.scrollTop;
+  $('list-rows').innerHTML = rows.map(a => {
+    const alt = a.alt==='ground' ? 'grnd' : (a.alt!=null ? Math.round(cvAlt(a.alt)).toLocaleString() : '—');
+    const d = cvDist(distNm(a));
+    return `<tr class="lr${a.hex===selectedHex?' sel':''}${a.military?' mil':''}${emerg(a.squawk)?' emerg':''}" data-hex="${a.hex}">`
+      + `<td class="cs c-flight">${a.flight || a.r || a.hex}</td><td class="c-t">${a.t || ''}</td>`
+      + `<td class="n c-alt">${alt}</td><td class="n c-gs">${a.gs!=null ? Math.round(cvSpeed(a.gs)) : '—'}</td>`
+      + `<td class="n c-squawk">${a.squawk || '—'}</td>`
+      + `<td class="n dist c-dist">${d!=null ? (d<10 ? d.toFixed(1) : Math.round(d)) : '—'}</td></tr>`;
+  }).join('');
+  body.scrollTop = keep;
+  if (pendingScroll && selectedHex){                 // bring a map-picked aircraft into view
+    const r = $('list-rows').querySelector(`tr[data-hex="${selectedHex}"]`);
+    if (r){ r.scrollIntoView({ block: 'nearest' }); pendingScroll = false; }
+  }
+  $('list-count').textContent = `· ${rows.length}`;
+  // reflect the active sort column + chosen units in the header
+  document.querySelectorAll('#list-tbl thead th').forEach(th => {
+    const k = th.dataset.k;
+    const u = k==='alt' ? uAlt() : k==='gs' ? uSpeed() : k==='dist' ? uDist() : '';
+    const ar = k===listSort.key ? ` <span class="ar">${dir<0?'▼':'▲'}</span>` : '';
+    th.innerHTML = th.dataset.label + (u ? ` <span class="u">${u}</span>` : '') + ar;
+  });
+}
+
+function select(hex){
+  selectedHex = hex;
+  for (const e of markers.values()) e.key = '';     // force halo/size refresh on next render
+  const a = lastData.get(hex), e = markers.get(hex);
+  if (a && e){                                       // highlight the picked aircraft immediately
+    e.marker.setIcon(makePlaneIcon(a.t, planeColor(a), a.track||0, Math.round(32*iconScale), true, a.category));
+  }
+  renderInfo(a); showPhoto(a);
+  if (showTrails) loadSelTrail(hex); else { selTrailReq++; selLayer.clearLayers(); }
+  $('card').classList.add('on');
+  setUrlHex(hex);                                    // shareable / bookmarkable URL
+  pendingScroll = true; renderList([...lastData.values()]);   // highlight + scroll the list row now
+}
+function deselect(){ selectedHex = null; $('card').classList.remove('on'); selTrailReq++; selLayer.clearLayers();
+  altScale = null; buildLegend();   // back to the absolute altitude scale
+  setUrlHex(null); for (const e of markers.values()) e.key=''; }
+
+// Pull the selected aircraft's actual trail (readsb's live run-dir trace) and draw it
+// altitude-coloured, the same way the History map draws a single flight.
+async function loadSelTrail(hex){
+  const my = ++selTrailReq;
+  selLayer.clearLayers();
+  const end = Math.floor(Date.now()/1000), start = end - 6*3600;
+  let j;
+  try { j = await (await fetch(`api/trace?hex=${encodeURIComponent(hex)}&start=${start}&end=${end}`)).json(); }
+  catch(e){ return; }
+  if (my !== selTrailReq || hex !== selectedHex) return;     // superseded / deselected
+  const p = j.points || [];
+  // extend the trail to the aircraft's current live position so it reaches the marker
+  const a = lastData.get(hex);
+  if (a && a.lat!=null && p.length){
+    const last = p[p.length-1];
+    if (last[1] !== a.lat || last[2] !== a.lon)
+      p.push([Date.now(), a.lat, a.lon, a.alt==='ground' ? 0 : a.alt]);
+  }
+  setAltScale(p.map(x => x[3]));   // granular per-flight colour scale (loops/wiggles become visible)
+  for (let i=1;i<p.length;i++){
+    L.polyline([[p[i-1][1],p[i-1][2]],[p[i][1],p[i][2]]],
+      { color: altColorFor(p[i][3]), weight: 3, opacity: .9 }).addTo(selLayer);
+  }
+  buildLegend();                   // rescale the legend ticks to this flight's altitude range
+}
+
+function renderInfo(a){
+  if (!a){ return; }
+  const sub = [a.r, a.t, a.desc].filter(Boolean).join(' · ') || 'unknown aircraft';
+  const tag = a.military ? ' <span class="mil">MIL</span>'
+            : isMil(a.squawk) ? ' <span class="mil">⚠</span>' : '';
+  const em = emerg(a.squawk);
+  $('info').innerHTML =
+    `<div class="hd"><div><div class="cs">${a.flight || a.r || a.hex}${tag}</div><div class="sub">${sub}</div></div>`
+    + `<div class="x" title="Deselect">✕</div></div>`
+    + (em ? `<div class="emerg-banner">⚠ ${em}</div>` : '')
+    + `<div class="grid">`
+    + cell('Altitude', fmtAlt(a.alt)) + cell('Ground speed', fmtSpd(a.gs))
+    + cell('Track', fmtTrk(a.track)) + cell('Vertical rate', fmtRate(a.baro_rate))
+    + cell('Squawk', a.squawk || '—') + cell('Last seen', fmtSeen(a.seen))
+    + cell('ICAO hex', (a.hex||'—').toUpperCase()) + cell('Signal', a.rssi!=null ? a.rssi+' <small>dBFS</small>' : '—')
+    + (a.operator ? cell('Operator', a.operator, true) : '')
+    + cell('Position', `${a.lat.toFixed(4)}, ${a.lon.toFixed(4)}`, true)
+    + `</div>`;
+  $('info').querySelector('.x').onclick = deselect;
+}
+function cell(k, v, wide){ return `<div class="cell${wide?' wide':''}"><div class="k">${k}</div><div class="v">${v}</div></div>`; }
+
+// ---- photo (planespotters.net, same source as the rest of the UI) --------------------------
+const PS_API = 'https://api.planespotters.net/pub/photos/hex/';
+let photoReq = 0, photoHex = null;
+async function showPhoto(a){
+  const ph = $('photo');
+  if (!a || !a.hex || a.hex[0] === '~'){ ph.classList.remove('on'); ph.innerHTML=''; photoHex=null; return; }
+  if (a.hex === photoHex) return;                    // already showing this one
+  photoHex = a.hex; ph.classList.remove('on'); ph.innerHTML='';
+  const my = ++photoReq;
+  let url = PS_API + a.hex.toUpperCase();
+  const qs = [];
+  if (a.r) qs.push('reg=' + encodeURIComponent(a.r));
+  if (a.t) qs.push('icaoType=' + encodeURIComponent(a.t));
+  if (qs.length) url += '?' + qs.join('&');
+  let j; try { const r = await fetch(url); if (!r.ok) return; j = await r.json(); } catch(e){ return; }
+  if (my !== photoReq) return;
+  const p = (j.photos || [])[0], thumb = p && p.thumbnail, src = thumb && (thumb.src || thumb);
+  if (!src) return;
+  ph.innerHTML = '';
+  const img = document.createElement('img'); img.alt = '';
+  img.onload = ()=> { if (my === photoReq) ph.classList.add('on'); };
+  img.onerror = ()=> { ph.classList.remove('on'); ph.innerHTML=''; };
+  if (p.link && /^https?:\/\//.test(p.link)){
+    const link = document.createElement('a'); link.href=p.link; link.target='_blank'; link.rel='noopener noreferrer';
+    link.appendChild(img); ph.appendChild(link);
+  } else ph.appendChild(img);
+  if (p.photographer){ const d=document.createElement('div'); d.className='cr'; d.textContent='© '+p.photographer; ph.appendChild(d); }
+  img.src = src;
+}
+
+// ---- find/highlight box --------------------------------------------------------------------
+$('find').addEventListener('input', e => { filter = e.target.value.trim().toLowerCase(); applyFilter(); });
+function applyFilter(){
+  if (!filter){ for (const e of markers.values()) e.marker._icon && (e.marker._icon.style.opacity = ''); return; }
+  let hit = null;
+  for (const [hex, e] of markers){
+    const a = lastData.get(hex) || {};
+    const hay = `${a.flight||''} ${hex} ${a.r||''} ${a.t||''}`.toLowerCase();
+    const match = hay.includes(filter);
+    if (e.marker._icon) e.marker._icon.style.opacity = match ? '' : '0.18';
+    if (match && !hit) hit = [a.lat, a.lon];
+  }
+  if (hit && hit[0]!=null) map.panTo(hit, { animate:true });
+}
+
+// ---- toggle buttons (tar1090-style, but matching our modern card) --------------------------
+function applyLabels(){
+  for (const [hex, e] of markers){ const a = lastData.get(hex) || { hex };
+    e.marker.unbindTooltip(); e.marker.bindTooltip(tipText(a), tipOpts()); }
+}
+function fitAll(){ const pts = []; for (const e of markers.values()){ const ll = e.marker.getLatLng(); pts.push([ll.lat, ll.lng]); }
+  if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.15)); }
+
+// ---- ground view (observer sky) — live: the aircraft now in the list, viewed from your site ----
+function gvHue(s){ let h=0; for (let i=0;i<s.length;i++) h=(h*31 + s.charCodeAt(i))>>>0; return 'hsl('+(h%360)+',70%,62%)'; }
+const gv = new GroundView({ altColor: altColor, onClose: gvOnClose });
+let gvObs = null, gvObsMarker = null;
+function gvLiveTracks(){
+  const out = [];
+  for (const [hex, a] of lastData){           // lastData already respects the Ground/Air-show filters
+    const hist = altHistC.get(hex); if (!hist || hist.length < 2) continue;
+    out.push({ id: hex, label: (a.flight || a.r || hex).trim(),
+               color: (a.military || isMil(a.squawk)) ? '#ff5d5d' : gvHue(hex),
+               points: hist.map(p => [p[0], p[2], p[3], p[1]]) });   // [t,alt,lat,lon] -> [t,lat,lon,alt]
+    if (out.length >= 14) break;
+  }
+  return out;
+}
+function gvCentroidLive(tr){ let la=0, lo=0, n=0; for (const t of tr) for (const p of t.points){ la+=p[1]; lo+=p[2]; n++; } return n ? {lat:la/n, lon:lo/n} : null; }
+function gvPlaceObs(){
+  if (gvObsMarker) map.removeLayer(gvObsMarker);
+  if (!gvObs) return;
+  gvObsMarker = L.marker([gvObs.lat, gvObs.lon], { draggable: true, zIndexOffset: 2000,
+    icon: L.divIcon({ className: 'gvplane', html: '<div class="obsdot"></div>', iconSize:[16,16], iconAnchor:[8,8] }) }).addTo(map);
+  gvObsMarker.bindTooltip('You are here — drag to move', { direction:'top', offset:[0,-8] });
+  gvObsMarker.on('drag', ()=>{ const ll = gvObsMarker.getLatLng(); gvObs = { lat: ll.lat, lon: ll.lng };
+    $('gv-from').textContent = `${ll.lat.toFixed(4)}, ${ll.lng.toFixed(4)}`; gv.setObserver(ll.lat, ll.lng); });
+}
+function gvLiveUpdate(){ if (gv.isOpen()) gv.updateTracks(gvLiveTracks()); }
+function gvOnClose(){ if (gvObsMarker){ map.removeLayer(gvObsMarker); gvObsMarker = null; } $('t-ground').classList.remove('on'); }
+function gvOpenLive(){
+  const tr = gvLiveTracks();
+  if (!tr.length){ $('status').style.display='block'; $('status').textContent = 'No aircraft with a position to show yet — let the feed run a few seconds.'; return; }
+  if (!gvObs) gvObs = siteLoc ? { lat: siteLoc.lat, lon: siteLoc.lon } : map.getCenter() && { lat: map.getCenter().lat, lon: map.getCenter().lng };
+  $('gv-from').textContent = siteLoc ? 'your receiver' : 'the map centre';
+  gvPlaceObs();
+  $('t-ground').classList.add('on');
+  gv.open(tr, gvObs, { live: true });
+}
+$('t-ground').onclick = ()=> gv.isOpen() ? gv.close() : gvOpenLive();
+
+$('t-labels').onclick   = e => { showLabels = !showLabels; e.currentTarget.classList.toggle('on', showLabels); applyLabels(); };
+// Trails: show/hide the SELECTED aircraft's trail. With it off, picking a plane shows no trail.
+$('t-trails').onclick    = e => { showTrails = !showTrails; e.currentTarget.classList.toggle('on', showTrails);
+  if (showTrails && selectedHex) loadSelTrail(selectedHex);
+  else { selTrailReq++; selLayer.clearLayers(); } };
+$('t-ground').onclick    = e => { showGround = !showGround; e.currentTarget.classList.toggle('on', showGround); poll(); };
+$('t-rings').onclick      = e => { showRings = !showRings; e.currentTarget.classList.toggle('on', showRings); drawRings();
+  if (showRings && siteLoc) map.setView([siteLoc.lat, siteLoc.lon], map.getZoom()); };
+$('t-recenter').onclick  = () => fitAll();
+$('t-filter').onclick     = e => { const on = $('filterbar').classList.toggle('on'); e.currentTarget.classList.toggle('on', on); };
+$('t-airshow').onclick    = e => { airshowMode = !airshowMode; e.currentTarget.classList.toggle('on', airshowMode);
+  if (lastJ) render(lastJ); else poll(); };
+function readFilters(){
+  fAltMin = $('f-altmin').value !== '' ? +$('f-altmin').value : null;
+  fAltMax = $('f-altmax').value !== '' ? +$('f-altmax').value : null;
+  fMil = $('f-mil').checked;
+  const arr = ($('f-type').value || '').toUpperCase().split(',').map(s => s.trim().replace(/\*/g,'')).filter(Boolean);
+  fType = arr.length ? arr : '';
+  $('t-filter').classList.toggle('on', $('filterbar').classList.contains('on') || fAltMin!=null || fAltMax!=null || fMil || !!fType);
+  updateLegendBand();   // mirror a typed alt range onto the legend tuner (and clear it when emptied)
+  poll();
+}
+['f-altmin','f-altmax','f-type'].forEach(id => $(id).addEventListener('input', readFilters));
+$('f-mil').addEventListener('change', readFilters);
+$('f-clear').onclick = () => { $('f-altmin').value = $('f-altmax').value = $('f-type').value = ''; $('f-mil').checked = false; readFilters(); };
+
+// altitude legend bar, built straight from altColor() so it always matches the icons/trails;
+// tick labels follow the chosen altitude unit
+function buildLegend(){
+  const max = 45000, steps = 30, stops = [];
+  for (let i=0;i<=steps;i++){ const a = max*i/steps; stops.push(`${altColor(a)} ${(i/steps*100).toFixed(1)}%`); }
+  $('lgbar').style.background = `linear-gradient(to top, ${stops.join(',')})`;
+  // ticks: the flight's own range when one is selected (granular), else the absolute 0..40k scale
+  const top = altScale ? altScale.hi : 40000, bot = altScale ? altScale.lo : 0;
+  $('lgticks').innerHTML = [0,1,2,3,4].map(i => {
+    const ft = top - (top-bot)*i/4, v = ft * UNITS.alt[settings.alt].f;
+    const txt = Math.abs(v)>=1000 ? (v/1000).toFixed(Math.abs(v)>=10000?0:1)+'k' : String(Math.round(v));
+    return `<span>${txt}</span>`;
+  }).join('');
+  $('legend').classList.toggle('flt', !!altScale);
+  if (altScale) $('lgtitle').textContent = '✈ ' + altLbl(bot) + '–' + altLbl(top) + ' ' + uAlt();
+  else { $('lgtitle').textContent = 'Altitude · ' + uAlt(); updateLegendBand(); }   // tuner band only in absolute mode
+}
+
+// ---- altitude tuner: drag the legend like a fader to show only aircraft in that band ---------
+// The legend maps top = LG_MAX ft, bottom = 0 ft (same scale as the colour gradient). Dragging
+// sets the band centre; the mouse wheel widens/narrows it ("volume"). It just drives the existing
+// fAltMin/fAltMax filter, so the map markers and the list narrow to the tuned range together.
+const LG_MAX = 45000;       // legend top, feet
+let altBuffer = 2000;       // half-width of the tuned band, feet
+function altLbl(ft){ const v = ft * UNITS.alt[settings.alt].f;
+  return v>=1000 ? (v/1000).toFixed(v>=10000?0:1)+'k' : String(Math.round(v)); }
+function updateLegendBand(){
+  const lg = $('legend'); if (!lg) return;
+  if (altScale){ lg.classList.remove('tuned'); return; }   // flight-scaled: no global tuner band
+  if (fAltMin==null && fAltMax==null){ lg.classList.remove('tuned'); $('lgtitle').textContent = 'Altitude · ' + uAlt(); return; }
+  const H = $('lgbar').clientHeight || 124;
+  const lo = Math.max(0, fAltMin!=null ? fAltMin : 0);
+  const hi = Math.min(LG_MAX, fAltMax!=null ? fAltMax : LG_MAX);
+  const yTop = H*(1 - hi/LG_MAX), yBot = H*(1 - lo/LG_MAX);
+  $('lgband').style.top = yTop+'px';  $('lgband').style.height = Math.max(2, yBot-yTop)+'px';
+  $('lgdimtop').style.top = '0px';    $('lgdimtop').style.height = Math.max(0, yTop)+'px';
+  $('lgdimbot').style.top = yBot+'px';$('lgdimbot').style.height = Math.max(0, H-yBot)+'px';
+  lg.classList.add('tuned');
+  $('lgtitle').textContent = altLbl(lo)+'–'+altLbl(hi)+' '+uAlt()+' ✕';
+}
+function setAltBand(lo, hi){
+  lo = Math.max(0, Math.round(lo)); hi = Math.min(LG_MAX, Math.round(hi));
+  if (hi <= lo) hi = lo + 1;
+  fAltMin = lo; fAltMax = hi;
+  $('f-altmin').value = lo; $('f-altmax').value = hi;   // keep the filter bar in sync
+  $('t-filter').classList.add('on');
+  updateLegendBand();
+  if (lastJ) render(lastJ); else poll();               // re-filter instantly from the cached feed
+}
+function clearAltBand(){
+  fAltMin = fAltMax = null;
+  $('f-altmin').value = ''; $('f-altmax').value = '';
+  $('legend').classList.remove('tuned');
+  $('t-filter').classList.toggle('on', $('filterbar').classList.contains('on') || fMil || !!fType);
+  buildLegend();
+  if (lastJ) render(lastJ); else poll();
+}
+function initLegendTuner(){
+  const bar = $('lgbar');
+  const yToAlt = (clientY)=>{ const r = bar.getBoundingClientRect();
+    const y = Math.min(r.height, Math.max(0, clientY - r.top));
+    return LG_MAX * (1 - y/r.height); };
+  let dragging = false;
+  const tune = (clientY)=>{ const c = yToAlt(clientY); setAltBand(c-altBuffer, c+altBuffer); };
+  bar.addEventListener('pointerdown', e=>{ e.preventDefault(); dragging=true;
+    try{ bar.setPointerCapture(e.pointerId); }catch(_){}; tune(e.clientY); });
+  bar.addEventListener('pointermove', e=>{ if (dragging) tune(e.clientY); });
+  const end = e=>{ dragging=false; try{ bar.releasePointerCapture(e.pointerId); }catch(_){}; };
+  bar.addEventListener('pointerup', end); bar.addEventListener('pointercancel', end);
+  bar.addEventListener('dblclick', clearAltBand);
+  $('legend').addEventListener('wheel', e=>{       // wheel = band width ("volume")
+    if (fAltMin==null && fAltMax==null) return;
+    e.preventDefault();
+    altBuffer = Math.min(25000, Math.max(250, altBuffer + (e.deltaY<0 ? 500 : -500)));
+    setAltBand((fAltMin+fAltMax)/2 - altBuffer, (fAltMin+fAltMax)/2 + altBuffer);
+  }, { passive:false });
+  $('lgtitle').addEventListener('click', ()=>{ if ($('legend').classList.contains('tuned')) clearAltBand(); });
+}
+buildLegend();
+initLegendTuner();
+
+// ---- settings gear: unit preferences, persisted -------------------------------------------
+const COLS = [['t','Type'],['alt','Alt'],['gs','Spd'],['squawk','Sqk'],['dist','Dist']];
+function buildSettings(){
+  const groups = [
+    ['speed', 'Speed',    { kt:'kt', kmh:'km/h', mph:'mph' }],
+    ['alt',   'Altitude', { ft:'ft', m:'m' }],
+    ['dist',  'Distance', { nm:'nm', km:'km', mi:'mi' }],
+  ];
+  let html = groups.map(([key,label,opts]) =>
+    `<div class="sg"><div class="sgk">${label}</div><div class="sgv">`
+    + Object.entries(opts).map(([v,t]) => `<button class="seg${settings[key]===v?' on':''}" data-g="${key}" data-v="${v}">${t}</button>`).join('')
+    + `</div></div>`).join('');
+  html += `<div class="sg"><div class="sgk">Columns</div><div class="sgv wrap">`
+    + COLS.map(([k,t]) => `<button class="seg${settings.cols[k]?' on':''}" data-g="col" data-v="${k}">${t}</button>`).join('')
+    + `</div></div>`;
+  $('list-settings').innerHTML = html;
+}
+function applyCols(){ COLS.forEach(([k]) => $('list-tbl').classList.toggle('hide-'+k, !settings.cols[k])); }
+function applyUnits(){
+  buildLegend();
+  if (lastData.size) renderList([...lastData.values()]);
+  if (selectedHex) renderInfo(lastData.get(selectedHex));
+  applyLabels();
+  drawRings();                 // ring distance labels follow the distance unit
+}
+
+// Merge built-in defaults <- admin global defaults <- this viewer's prefs (if allowed) and apply
+// to units, columns, which toggle buttons show, and their initial on/off state.
+function applyEffective(cfg){
+  const B = (cfg && cfg.builtin) || {}, G = (cfg && cfg.global) || {};
+  allowPrefs = (B.allow_user_prefs !== false) && (G.allow_user_prefs !== false);
+  userPrefs  = (cfg && cfg.prefs) || {};
+  const P = allowPrefs ? userPrefs : {};
+  const buttons  = Object.assign({ labels:true, trails:true, ground:true, fit:true, rings:true }, B.buttons, G.buttons);
+  const defaults = Object.assign({ labels:false, trails:false, ground:true, rings:false }, B.defaults, G.defaults, P.defaults);
+  const units    = Object.assign({ speed:'kt', alt:'ft', dist:'nm' }, B.units, G.units, P.units);
+  const cols     = Object.assign({ t:true, alt:true, gs:true, squawk:true, dist:true }, B.cols, G.cols, P.cols);
+  const mapcfg   = Object.assign({ base:'osm' }, B.map, G.map, P.map);
+  const rings    = Object.assign({ distances:[100,150,200] }, B.rings, G.rings);     // distances are admin-set
+  const sizes    = Object.assign({ icon:1, label:1 }, B.sizes, G.sizes, P.sizes);
+  settings.speed = units.speed; settings.alt = units.alt; settings.dist = units.dist; settings.cols = cols;
+  iconScale = +sizes.icon || 1; labelScale = +sizes.label || 1;
+  document.documentElement.style.setProperty('--label-scale', labelScale);
+  ringDist = Array.isArray(rings.distances) ? rings.distances : [100,150,200];
+  saveSettingsLocal(); buildSettings(); applyCols(); buildLegend();
+  setBaseLayer(mapcfg.base);
+  // toggle-button visibility (admin-controlled)
+  const btnIds = { labels:'t-labels', trails:'t-trails', ground:'t-ground', fit:'t-recenter', rings:'t-rings' };
+  for (const k in btnIds){ const b = $(btnIds[k]); if (b) b.style.display = buttons[k] === false ? 'none' : ''; }
+  // initial toggle state
+  showLabels = !!defaults.labels; $('t-labels').classList.toggle('on', showLabels);
+  showTrails = !!defaults.trails; $('t-trails').classList.toggle('on', showTrails);
+  showGround = defaults.ground !== false; $('t-ground').classList.toggle('on', showGround);
+  showRings  = !!defaults.rings;  $('t-rings').classList.toggle('on', showRings);
+  drawRings();
+}
+async function loadEffective(){
+  let cfg = null;
+  try { cfg = await (await fetch('api/settings')).json(); } catch(e){}
+  applyEffective(cfg);
+}
+buildSettings();
+applyCols();
+$('list-gear').onclick = e => { e.stopPropagation(); $('list-settings').classList.toggle('on'); };
+$('list-settings').addEventListener('click', e => {
+  const b = e.target.closest('.seg'); if (!b) return;
+  if (b.dataset.g === 'col'){ settings.cols[b.dataset.v] = !settings.cols[b.dataset.v]; saveSettings(); buildSettings(); applyCols(); }
+  else { settings[b.dataset.g] = b.dataset.v; saveSettings(); buildSettings(); applyUnits(); }
+});
+
+// live-list: sort on header click, select on row click, minimize/expand on header click
+document.querySelectorAll('#list-tbl thead th').forEach(th => th.addEventListener('click', () => {
+  const k = th.dataset.k;
+  if (listSort.key === k) listSort.dir *= -1;
+  else listSort = { key: k, dir: (k==='alt' || k==='gs') ? -1 : 1 };
+  renderList([...lastData.values()]);
+}));
+$('list-rows').addEventListener('click', e => {
+  const tr = e.target.closest('tr'); if (!tr) return;
+  const a = lastData.get(tr.dataset.hex);
+  select(tr.dataset.hex);
+  if (a) map.panTo([a.lat, a.lon], { animate: true });
+});
+$('list-hd').onclick = () => {
+  const min = $('list').classList.toggle('min');
+  $('list-min').textContent = min ? '▢' : '─';
+  $('list-min').title = min ? 'Expand' : 'Minimize';
+};
+
+map.on('click', deselect);
+// keep the list in sync with what's visible as the user pans/zooms
+map.on('moveend', () => { if (lastData.size) renderList([...lastData.values()]); });
+loadEffective().finally(() => { poll(); setInterval(poll, 1000); });
+document.addEventListener('visibilitychange', ()=> { if (!document.hidden) poll(); });
+</script>
+<script src="auth.js"></script>
+</body>
+</html>

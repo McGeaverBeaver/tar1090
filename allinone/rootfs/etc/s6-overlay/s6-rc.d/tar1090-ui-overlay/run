@@ -1,0 +1,64 @@
+#!/command/with-contenv bash
+# tar1090-ui-overlay: apply this fork's modified web files on top of the GUI that
+# the base image installs into the web root at container start.
+#
+# The base image populates the web root on startup (it is NOT present at image
+# build time) and cache-busts asset names (script_<md5>.js). We therefore wait
+# for the web root to appear, then overwrite the matching files IN PLACE so the
+# filenames index.html already references now serve our content. The staged
+# source files are baked into the image at /usr/local/share/tar1090-uioverlay.
+
+set -u
+
+overlay_src=/usr/local/share/tar1090-uioverlay
+
+# Default to enabled; tolerate the var being unset under `set -u`.
+ui_overlay="${ENABLE_UI_OVERLAY:-true}"
+if [[ "${ui_overlay,,}" == "false" ]]; then
+  echo "[ui-overlay] disabled (ENABLE_UI_OVERLAY=false)"
+  exec sleep infinity
+fi
+
+apply_overlay() {
+  local htmldir="$1" pair name ext target
+  for pair in early:js script:js planeObject:js style:css; do
+    name="${pair%:*}"; ext="${pair#*:}"
+    target="$(ls "$htmldir/${name}_"*."$ext" 2>/dev/null | head -n1 || true)"
+    [[ -n "$target" ]] || target="$htmldir/${name}.${ext}"
+    if [[ -f "$target" && -f "$overlay_src/${name}.${ext}" ]]; then
+      cp "$overlay_src/${name}.${ext}" "$target"
+      echo "[ui-overlay] ${name}.${ext} -> $target"
+    fi
+  done
+}
+
+# Locate the tar1090 web root by a distinctive asset (planeObject[_<md5>].js).
+find_htmldir() {
+  local d hit
+  for d in /usr/local/share/tar1090/html /run/tar1090/html /run/tar1090 \
+           /var/www/html/tar1090 /var/www/html; do
+    if ls "$d"/planeObject*.js >/dev/null 2>&1; then echo "$d"; return 0; fi
+  done
+  hit="$(find /usr /run /var/www /opt -maxdepth 8 -name 'planeObject*.js' 2>/dev/null | head -n1)"
+  [[ -n "$hit" ]] && { dirname "$hit"; return 0; }
+  return 1
+}
+
+echo "[ui-overlay] waiting for tar1090 web root..."
+htmldir=""
+for _ in $(seq 1 150); do
+  if htmldir="$(find_htmldir)" && [[ -n "$htmldir" ]]; then break; fi
+  sleep 2
+done
+
+if [[ -n "${htmldir:-}" ]]; then
+  echo "[ui-overlay] applying overlay to: $htmldir"
+  apply_overlay "$htmldir"
+  # Re-apply a few times in case the base image finishes writing slightly later.
+  for _ in 1 2 3; do sleep 5; apply_overlay "$htmldir"; done
+  echo "[ui-overlay] done"
+else
+  echo "[ui-overlay] WARNING: tar1090 web root not found; serving stock UI"
+fi
+
+exec sleep infinity

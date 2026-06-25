@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · tar1090 reports</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font: 15px/1.5 system-ui, sans-serif; color: #e6e6e6; display: flex; align-items: center; justify-content: center;
+         background: radial-gradient(1200px 600px at 50% -10%, #1b2540 0%, #0e1016 55%, #0b0d10 100%); overflow: hidden; }
+  .stars { position: fixed; inset: 0; opacity: .5; background-image:
+      radial-gradient(1.4px 1.4px at 20% 30%, #ffffff77, transparent), radial-gradient(1.2px 1.2px at 70% 20%, #ffffff55, transparent),
+      radial-gradient(1.6px 1.6px at 40% 70%, #ffffff66, transparent), radial-gradient(1.1px 1.1px at 85% 60%, #ffffff44, transparent),
+      radial-gradient(1.3px 1.3px at 60% 85%, #ffffff55, transparent); }
+  .card { position: relative; width: 380px; max-width: 92vw; padding: 30px 28px 26px; text-align: center;
+          background: rgba(20,23,28,.72); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+          border: 1px solid #2c3340; border-radius: 20px; box-shadow: 0 24px 70px rgba(0,0,0,.6); }
+  .brand { font-size: 13px; letter-spacing: .14em; text-transform: uppercase; color: #7f8aa0; margin-bottom: 18px; }
+  .brand b { color: #cdd5e0; font-weight: 700; }
+  .scene { position: relative; height: 96px; margin: 4px 0 14px; overflow: hidden; }
+  .runway { position: absolute; left: 8%; right: 8%; bottom: 16px; height: 3px; border-radius: 3px;
+            background: repeating-linear-gradient(90deg, #3a4150, #3a4150 14px, transparent 14px, transparent 28px); }
+  .plane { position: absolute; bottom: 14px; font-size: 40px; animation: taxi 2.8s ease-in-out infinite;
+           filter: drop-shadow(0 4px 6px rgba(0,0,0,.5)); }
+  @keyframes taxi { 0% { left: -16%; transform: translateY(0) rotate(0deg); }
+                    55% { transform: translateY(-6px) rotate(-6deg); }
+                    100% { left: 108%; transform: translateY(-30px) rotate(-12deg); } }
+  h1 { font-size: 20px; margin: 2px 0 4px; }
+  p { color: #9aa3b2; margin: 0 0 18px; font-size: 14px; }
+  .spinner { width: 26px; height: 26px; margin: 0 auto 16px; border-radius: 50%;
+             border: 3px solid #2c3340; border-top-color: #4d9bff; animation: spin .9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .btn { display: inline-block; text-decoration: none; background: #2d6cdf; color: #fff; font-weight: 600;
+         padding: 11px 22px; border-radius: 10px; border: 1px solid #3b78e8; transition: background .12s, transform .06s; }
+  .btn:hover { background: #3b78e8; } .btn:active { transform: translateY(1px); }
+</style>
+</head>
+<body>
+<div class="stars"></div>
+<div class="card">
+  <div class="brand">✈ <b>tar1090</b> · flight reports</div>
+  <div class="scene"><div class="runway"></div><div class="plane">🛩️</div></div>
+  <div class="spinner" id="sp"></div>
+  <h1 id="h">Cleared for sign-in…</h1>
+  <p id="p">Taxiing you over to secure sign-in.</p>
+  <a class="btn" id="go" href="oidc/login">Sign in</a>
+</div>
+<noscript><meta http-equiv="refresh" content="0;url=oidc/login"></noscript>
+<script>
+  var q = new URLSearchParams(location.search);
+  var next = q.get('next') || '/';
+  var target = 'oidc/login?next=' + encodeURIComponent(next);
+  document.getElementById('go').href = target;
+  if (q.has('loggedout')) {
+    document.getElementById('h').textContent = "You’re signed out";
+    document.getElementById('p').textContent = "Safe flight. Cleared for takeoff whenever you want back in.";
+    document.getElementById('sp').style.display = 'none';
+  } else {
+    setTimeout(function () { location.href = target; }, 1000);   // auto sign-in
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+#!/command/with-contenv bash
+# tar1090-logger service: read the local aircraft.json that readsb produces in this
+# same container and write aircraft / flights / trail data to an EXTERNAL TimescaleDB.
+#
+# Postgres and Grafana are NOT bundled -- point TAR1090_DB_DSN at your existing
+# database (host=IP port=PORT ...). If TAR1090_DB_DSN is unset the logger stays idle
+# (the tar1090 web GUI keeps working regardless).
+
+# shellcheck disable=SC1091
+[[ "${ENABLE_LOGGER,,}" == "false" ]] && { echo "[tar1090-logger] disabled (ENABLE_LOGGER=false)"; exec sleep infinity; }
+
+if [[ -z "${TAR1090_DB_DSN:-}" ]]; then
+  echo "[tar1090-logger] TAR1090_DB_DSN is not set -- logger idle."
+  echo "[tar1090-logger] Set it to your TimescaleDB, e.g.:"
+  echo "[tar1090-logger]   TAR1090_DB_DSN=host=192.168.1.50 port=5432 dbname=tar1090 user=tar1090 password=secret"
+  exec sleep infinity
+fi
+
+# Live data source is local to this container (readsb writes /run/readsb/aircraft.json).
+export SOURCE_DIR="${SOURCE_DIR:-/run/readsb}"
+
+# Fallback metadata: if readsb is not started with --db-file, resolve
+# registration/type/operator/military from the bundled CSV instead.
+if [[ -z "${AIRCRAFT_CSV:-}" && -f /usr/local/share/tar1090/aircraft.csv.gz ]]; then
+  export AIRCRAFT_CSV=/usr/local/share/tar1090/aircraft.csv.gz
+fi
+
+echo "[tar1090-logger] starting; DB=${TAR1090_DB_DSN%%password=*}*** source=${SOURCE_DIR}"
+exec s6-setuidgid nobody python3 /usr/local/share/tar1090/tar1090-logger.py

@@ -1,0 +1,17 @@
+#!/command/with-contenv bash
+# tar1090 history search & replay API: serves the history page and reads trails from
+# the local globe_history files, querying the aircraft/flights index in your database.
+# Runs independently of the logger and the tar1090 web GUI.
+
+if [[ "${ENABLE_HISTORY_API,,}" == "false" ]]; then
+  echo "[history-api] disabled (ENABLE_HISTORY_API=false)"
+  exec sleep infinity
+fi
+
+if [[ -z "${TAR1090_DB_DSN:-}" ]]; then
+  echo "[history-api] note: TAR1090_DB_DSN is not set -- the page will load but searches"
+  echo "[history-api]       return 'database unavailable' until you set it."
+fi
+
+echo "[history-api] starting on :${HISTORY_API_PORT:-8090} (globe_history=${GLOBE_HISTORY_DIR:-/var/globe_history})"
+exec s6-setuidgid nobody python3 /usr/local/share/tar1090/tar1090-history-api.py

@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tar1090 — settings</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.5 system-ui, sans-serif; background: #14161a; color: #e6e6e6; }
+  header { padding: 8px 12px 0; background: #1d2026; border-bottom: 1px solid #2c313a; }
+  #tabs { display: flex; gap: 2px; }
+  #tabs a { color: #9aa3b2; text-decoration: none; padding: 7px 14px; border-radius: 6px 6px 0 0; font-size: 13px; }
+  #tabs a:hover { background: #23272f; color: #e6e6e6; }
+  #tabs a.active { background: #2d6cdf; color: #fff; }
+  main { max-width: 740px; margin: 0 auto; padding: 16px 12px 40px; }
+  .subtabs { display: flex; gap: 6px; margin: 0 0 16px; flex-wrap: wrap; }
+  .subtab { background: #21252c; color: #cdd5e0; border: 1px solid #2c313a; border-radius: 8px; padding: 7px 14px; cursor: pointer; font-size: 13px; }
+  .subtab:hover { background: #262b33; }
+  .subtab.on { background: #2d6cdf; color: #fff; border-color: #3b78e8; }
+  .panel { display: none; }
+  .panel.on { display: block; }
+  fieldset { border: 1px solid #2c313a; border-radius: 8px; margin: 0 0 16px; padding: 12px 14px; }
+  legend { color: #9aa3b2; font-size: 12px; padding: 0 6px; }
+  .row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+  .row label { width: 150px; color: #b9c1cd; flex: none; }
+  .row textarea { background: #0f1115; color: #e6e6e6; border: 1px solid #333; border-radius: 4px;
+                  padding: 6px 8px; font: 13px/1.4 ui-monospace, monospace; resize: vertical; }
+  #ac_watch input { background: #0f1115; color: #e6e6e6; border: 1px solid #333; border-radius: 4px; padding: 4px 7px; font-size: 13px; }
+  #ac_builtin b { color: #b9c1cd; }
+  label.ck { width: auto; display: inline-flex; gap: 5px; align-items: center; color: #cdd5e0; cursor: pointer; }
+  input[type=text], input[type=number], input[type=password] { flex: 1; background: #0f1115; color: #e6e6e6;
+    border: 1px solid #333; border-radius: 4px; padding: 6px 8px; font-size: 13px; }
+  input[type=checkbox] { width: 16px; height: 16px; }
+  button { background: #2d6cdf; color: #fff; border: 0; border-radius: 5px; padding: 8px 16px; cursor: pointer; font-size: 13px; }
+  button.ghost { background: #2a2f38; }
+  button.danger { background: #b3403a; }
+  button.mini { padding: 4px 10px; font-size: 12px; }
+  button:hover { filter: brightness(1.1); }
+  button:disabled { opacity: .5; cursor: default; filter: none; }
+  .actions { display: flex; gap: 8px; margin-top: 4px; }
+  #status { margin-top: 12px; color: #9aa3b2; min-height: 18px; }
+  .help { color: #7e8794; font-size: 11.5px; margin: 2px 0 0 160px; }
+  .panel .help.wide { margin-left: 0; margin-bottom: 8px; }
+  code { background: #0f1115; padding: 1px 5px; border-radius: 3px; color: #cbd3df; }
+  #imp_bar, #as_bar { height: 8px; background: #0f1115; border: 1px solid #2c313a; border-radius: 5px; overflow: hidden; margin: 12px 0 6px; }
+  #imp_fill, #as_fill { height: 100%; width: 0; background: #2d6cdf; transition: width .3s; }
+  #imp_status { color: #9aa3b2; font-size: 12.5px; }
+  #imp_status b.run { color: #4ea1ff; } #imp_status b.done { color: #2e9e6b; }
+  #imp_status b.err { color: #ff6b6b; } #imp_status b.idle { color: #b9c1cd; }
+  .imp-done { color: #2e9e6b; } .imp-err { color: #ff6b6b; } .imp-cancel { color: #b9c1cd; }
+  .tblwrap { overflow-x: auto; }
+  table.users { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.users th, table.users td { text-align: left; padding: 8px; border-bottom: 1px solid #23262d; vertical-align: top; white-space: nowrap; }
+  table.users th { color: #9aa3b2; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+  table.users td .sub { color: #7e8794; font-size: 11px; white-space: normal; }
+  table.users tr.blk td { color: #8a93a2; }
+  .pill { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; }
+  .pill.ok { background: rgba(46,158,107,.16); color: #7bdcab; border: 1px solid #2e6e52; }
+  .pill.no { background: rgba(179,64,58,.18); color: #ffb4a8; border: 1px solid #6e2d2a; }
+</style>
+</head>
+<body>
+<header>
+  <nav id="tabs"><a href="live.html">Live</a><a href="index.html">History</a><a href="alerts.html" class="admin-only">Alerts</a><a href="settings.html" class="active">Settings</a></nav>
+</header>
+<main>
+  <div class="subtabs">
+    <button class="subtab admin-only" data-p="display">Display defaults</button>
+    <button class="subtab admin-only" data-p="integrations">Integrations</button>
+    <button class="subtab admin-only" data-p="import">Historical import</button>
+    <button class="subtab admin-only" data-p="users">Users</button>
+    <button class="subtab admin-only" data-p="airshow">Air show</button>
+    <button class="subtab" data-p="prefs">My preferences</button>
+  </div>
+
+  <!-- Display defaults (admin, site-wide) -->
+  <section class="panel admin-only" id="p_display">
+    <div class="help wide">Site-wide defaults for the Live map. These apply to everyone; viewers can
+      override the ones you allow under their own “My preferences”.</div>
+    <fieldset>
+      <legend>Toggle buttons shown on the Live map</legend>
+      <div class="row"><label>Labels</label><input type="checkbox" id="g_btn_labels"></div>
+      <div class="row"><label>Trails</label><input type="checkbox" id="g_btn_trails"></div>
+      <div class="row"><label>Ground</label><input type="checkbox" id="g_btn_ground"></div>
+      <div class="row"><label>Rings</label><input type="checkbox" id="g_btn_rings"></div>
+      <div class="row"><label>Fit</label><input type="checkbox" id="g_btn_fit"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Default view — what’s on when the map first loads</legend>
+      <div class="row"><label>Labels on</label><input type="checkbox" id="g_def_labels"></div>
+      <div class="row"><label>Trails on</label><input type="checkbox" id="g_def_trails"></div>
+      <div class="row"><label>Ground on</label><input type="checkbox" id="g_def_ground"></div>
+      <div class="row"><label>Range rings on</label><input type="checkbox" id="g_def_rings"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Map &amp; sizes</legend>
+      <div class="row"><label>Base map</label><select id="g_map_base"><option value="osm">OSM (dimmed)</option><option value="dark">Dark</option><option value="light">Light</option><option value="sat">Satellite</option></select></div>
+      <div class="row"><label>Range rings</label><input type="text" id="g_rings_dist" placeholder="100, 150, 200" style="max-width:160px"> <span class="help" style="margin:0">in the distance unit</span></div>
+      <div class="row"><label>Aircraft icon size</label><input type="number" id="g_sz_icon" min="0.5" max="3" step="0.1" style="max-width:90px"></div>
+      <div class="row"><label>Label size</label><input type="number" id="g_sz_label" min="0.5" max="3" step="0.1" style="max-width:90px"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Default units</legend>
+      <div class="row"><label>Speed</label><select id="g_u_speed"><option value="kt">kt</option><option value="kmh">km/h</option><option value="mph">mph</option></select></div>
+      <div class="row"><label>Altitude</label><select id="g_u_alt"><option value="ft">ft</option><option value="m">m</option></select></div>
+      <div class="row"><label>Distance</label><select id="g_u_dist"><option value="nm">nm</option><option value="km">km</option><option value="mi">mi</option></select></div>
+    </fieldset>
+    <fieldset>
+      <legend>Default Live table columns</legend>
+      <div class="row"><label>Type</label><input type="checkbox" id="g_col_t"></div>
+      <div class="row"><label>Altitude</label><input type="checkbox" id="g_col_alt"></div>
+      <div class="row"><label>Speed</label><input type="checkbox" id="g_col_gs"></div>
+      <div class="row"><label>Squawk</label><input type="checkbox" id="g_col_squawk"></div>
+      <div class="row"><label>Distance</label><input type="checkbox" id="g_col_dist"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Default History table columns</legend>
+      <div class="row"><label>Live flag</label><input type="checkbox" id="g_hc_active"></div>
+      <div class="row"><label>Callsign</label><input type="checkbox" id="g_hc_callsign"></div>
+      <div class="row"><label>Registration</label><input type="checkbox" id="g_hc_registration"></div>
+      <div class="row"><label>Type</label><input type="checkbox" id="g_hc_icao_type"></div>
+      <div class="row"><label>Military</label><input type="checkbox" id="g_hc_military"></div>
+      <div class="row"><label>Start time</label><input type="checkbox" id="g_hc_start"></div>
+      <div class="row"><label>Duration</label><input type="checkbox" id="g_hc_duration_s"></div>
+      <div class="row"><label>Max altitude</label><input type="checkbox" id="g_hc_max_alt"></div>
+      <div class="row"><label>Operator</label><input type="checkbox" id="g_hc_operator"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Viewer overrides</legend>
+      <div class="row"><label>Let viewers customize</label><input type="checkbox" id="g_allow"></div>
+      <div class="help">When off, everyone sees exactly the defaults above and the “My preferences” tab is read-only.</div>
+    </fieldset>
+    <div class="actions"><button id="g_save">Save defaults</button></div>
+    <div id="g_status" class="help wide"></div>
+  </section>
+
+  <!-- My preferences (per-user) -->
+  <section class="panel" id="p_prefs">
+    <div class="help wide">Customize your own Live view. Saved to your account, so it follows you across devices.</div>
+    <div id="prefs_locked" class="help wide" style="display:none;color:#ffb4a8">The administrator has locked display settings, so these won’t take effect.</div>
+    <fieldset>
+      <legend>Default view</legend>
+      <div class="row"><label>Labels on</label><input type="checkbox" id="u_def_labels"></div>
+      <div class="row"><label>Trails on</label><input type="checkbox" id="u_def_trails"></div>
+      <div class="row"><label>Ground on</label><input type="checkbox" id="u_def_ground"></div>
+      <div class="row"><label>Range rings on</label><input type="checkbox" id="u_def_rings"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Map &amp; sizes</legend>
+      <div class="row"><label>Base map</label><select id="u_map_base"><option value="osm">OSM (dimmed)</option><option value="dark">Dark</option><option value="light">Light</option><option value="sat">Satellite</option></select></div>
+      <div class="row"><label>Aircraft icon size</label><input type="number" id="u_sz_icon" min="0.5" max="3" step="0.1" style="max-width:90px"></div>
+      <div class="row"><label>Label size</label><input type="number" id="u_sz_label" min="0.5" max="3" step="0.1" style="max-width:90px"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Units</legend>
+      <div class="row"><label>Speed</label><select id="u_u_speed"><option value="kt">kt</option><option value="kmh">km/h</option><option value="mph">mph</option></select></div>
+      <div class="row"><label>Altitude</label><select id="u_u_alt"><option value="ft">ft</option><option value="m">m</option></select></div>
+      <div class="row"><label>Distance</label><select id="u_u_dist"><option value="nm">nm</option><option value="km">km</option><option value="mi">mi</option></select></div>
+    </fieldset>
+    <fieldset>
+      <legend>Live table columns</legend>
+      <div class="row"><label>Type</label><input type="checkbox" id="u_col_t"></div>
+      <div class="row"><label>Altitude</label><input type="checkbox" id="u_col_alt"></div>
+      <div class="row"><label>Speed</label><input type="checkbox" id="u_col_gs"></div>
+      <div class="row"><label>Squawk</label><input type="checkbox" id="u_col_squawk"></div>
+      <div class="row"><label>Distance</label><input type="checkbox" id="u_col_dist"></div>
+    </fieldset>
+    <fieldset>
+      <legend>History table columns</legend>
+      <div class="row"><label>Live flag</label><input type="checkbox" id="u_hc_active"></div>
+      <div class="row"><label>Callsign</label><input type="checkbox" id="u_hc_callsign"></div>
+      <div class="row"><label>Registration</label><input type="checkbox" id="u_hc_registration"></div>
+      <div class="row"><label>Type</label><input type="checkbox" id="u_hc_icao_type"></div>
+      <div class="row"><label>Military</label><input type="checkbox" id="u_hc_military"></div>
+      <div class="row"><label>Start time</label><input type="checkbox" id="u_hc_start"></div>
+      <div class="row"><label>Duration</label><input type="checkbox" id="u_hc_duration_s"></div>
+      <div class="row"><label>Max altitude</label><input type="checkbox" id="u_hc_max_alt"></div>
+      <div class="row"><label>Operator</label><input type="checkbox" id="u_hc_operator"></div>
+    </fieldset>
+    <div class="actions"><button id="u_save">Save preferences</button><button id="u_reset" class="ghost">Reset to site defaults</button></div>
+    <div id="u_status" class="help wide"></div>
+  </section>
+
+  <!-- Integrations: MQTT / Home Assistant -->
+  <section class="panel" id="p_integrations">
+    <fieldset>
+      <legend>MQTT broker → Home Assistant</legend>
+      <div class="row"><label>Alerting enabled</label><input type="checkbox" id="enabled"></div>
+      <div class="row"><label>Broker host</label><input type="text" id="mqtt_host" placeholder="192.168.1.x (your Mosquitto / HA broker)"></div>
+      <div class="row"><label>Port</label><input type="number" id="mqtt_port" value="1883" style="max-width:120px"></div>
+      <div class="row"><label>Username</label><input type="text" id="mqtt_username" placeholder="(optional)"></div>
+      <div class="row"><label>Password</label><input type="password" id="mqtt_password" placeholder="(optional)"></div>
+      <div class="row"><label>Use TLS</label><input type="checkbox" id="mqtt_tls"></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Topics & Home Assistant</legend>
+      <div class="row"><label>Base topic</label><input type="text" id="base_topic" value="tar1090"></div>
+      <div class="help">Events publish to <code>&lt;base&gt;/event</code>; per-rule sensors to <code>&lt;base&gt;/rule/&lt;id&gt;/state</code>.</div>
+      <div class="row"><label>HA MQTT Discovery</label><input type="checkbox" id="ha_discovery"></div>
+      <div class="help">Auto-creates a <code>binary_sensor</code> in Home Assistant per rule — no YAML. It pulses on for each detection.</div>
+      <div class="row"><label>Discovery prefix</label><input type="text" id="discovery_prefix" value="homeassistant"></div>
+    </fieldset>
+
+    <div class="actions">
+      <button id="save">Save</button>
+      <button id="test" class="ghost">Save &amp; send test</button>
+    </div>
+    <div id="status">Configure your broker, Save, then use the Alerts tab to add rules.</div>
+  </section>
+
+  <!-- Historical import -->
+  <section class="panel" id="p_import">
+    <fieldset>
+      <legend>Live ingestion (normal operation)</legend>
+      <div class="help wide">The bundled logger writes flights to the database in real time from the
+        live feed — no import needed. This is the normal mode; the historical import below is only an
+        optional one-time backfill.</div>
+      <div id="ingest_status" class="help wide">checking…</div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Historical import — optional, one-time backfill for a new setup</legend>
+      <div class="help wide">Only needed if you have an existing <code>globe_history</code> folder and want
+        traffic from <b>before</b> logging began (or recorded with traces off) to become searchable. Day-to-day
+        operation does not use this — live ingestion above keeps History up to date on its own.</div>
+      <div class="row"><label>globe_history path</label><input type="text" id="globe_dir" placeholder="/var/globe_history"></div>
+      <div class="help">Scans readsb's heatmap <code>.ttf</code> chunks under this path and fills the flight
+        index. Runs in the background and <b>resumes automatically</b> if it crashes or the container restarts.
+        Imported flights have <b>no callsign</b> (the heatmap doesn't store it) — search them by registration /
+        type / operator / military / time.</div>
+      <div class="actions">
+        <button id="imp_start">Start / resume import</button>
+        <button id="imp_restart" class="ghost">Restart from scratch</button>
+        <button id="imp_stop" class="ghost">Stop</button>
+      </div>
+      <div id="imp_bar"><div id="imp_fill"></div></div>
+      <div id="imp_status"></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Previous imports</legend>
+      <div id="imp_runs_empty" class="help wide">No imports have finished yet.</div>
+      <div class="tblwrap">
+        <table class="users" id="imp_runs" style="display:none">
+          <thead><tr><th>Finished</th><th>Outcome</th><th>Chunks</th><th>Flights</th><th>Fixes</th><th>Details</th></tr></thead>
+          <tbody id="imp_runs_rows"></tbody>
+        </table>
+      </div>
+      <div class="actions" style="margin-top:10px"><button id="imp_clear" class="ghost mini">Clear history</button></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Flight patterns — flag interesting flights from existing data</legend>
+      <div class="help wide">Scans the flights you already have and tags ones that match an interesting
+        flying pattern, from their trail geometry:
+        <b>✈ air show</b> (known air-show type, or aerobatic maneuvering — confined, steep, repeated reversals),
+        <b>◎ surveillance / orbit</b> (sustained circling over a point — police / news / ISR / patrol), and
+        <b>▦ aerial survey</b> (parallel lawnmower grid — mapping / photography). Ordinary circuits and
+        flight-school “up and down” are ignored. Results power the <b>Patterns</b> picker on the History
+        page. Re-run any time after more history is logged or imported. Reads each flight's trail, so a
+        large history can take a while.</div>
+      <div class="actions">
+        <button id="as_build">Build flight patterns</button>
+        <button id="as_rebuild" class="ghost" title="Clear existing tags and scan everything again">Rebuild from scratch</button>
+        <button id="as_stop" class="ghost">Stop</button>
+      </div>
+      <div id="as_bar"><div id="as_fill"></div></div>
+      <div id="as_status" class="help wide"></div>
+    </fieldset>
+  </section>
+
+  <!-- Users -->
+  <section class="panel" id="p_users">
+    <fieldset>
+      <legend>Users</legend>
+      <div class="help wide">Everyone who has signed in appears here. <b>Block</b> someone to deny them access —
+        any active session is cut within ~20&nbsp;seconds and their next sign-in is refused. Blocking only takes
+        effect when OIDC login is enabled.</div>
+      <div id="users_msg" class="help wide"></div>
+      <div class="tblwrap">
+        <table class="users">
+          <thead><tr><th>User</th><th>Role</th><th>Logins</th><th>First seen</th><th>Last seen</th><th>Access</th></tr></thead>
+          <tbody id="users_rows"></tbody>
+        </table>
+      </div>
+      <div class="actions" style="margin-top:12px"><button id="users_refresh" class="ghost mini">Refresh</button></div>
+    </fieldset>
+  </section>
+
+  <section class="panel admin-only" id="p_airshow">
+    <fieldset>
+      <legend>Air-show aircraft — customise detection</legend>
+      <div class="help wide">Tune which aircraft count as “air show”, on top of the built-in lists. Changes
+        apply to the History <b>Patterns</b> views, the Live <b>✈ Air show</b> filter, and maneuver alerts.
+        Type designators are ICAO codes (e.g. <code>P51</code>, <code>EA30</code>); separate with spaces or
+        commas. After editing, <b>rebuild flight patterns</b> (Historical import tab) to re-tag past flights.</div>
+      <div id="as_cfg_msg" class="help wide"></div>
+      <div class="row"><label>Extra air-show types</label>
+        <textarea id="ac_extra_types" rows="2" placeholder="e.g. RV8, GLAS, YK11" style="flex:1;min-width:260px"></textarea></div>
+      <div class="help">Added to the air-show type list — these always count as air-show aircraft.</div>
+      <div class="row"><label>Extra excluded types</label>
+        <textarea id="ac_extra_exclude" rows="2" placeholder="e.g. C172, PA28" style="flex:1;min-width:260px"></textarea></div>
+      <div class="help">Never flagged by the maneuvering test (for non-aerobatic types that slip through).</div>
+      <div class="actions" style="margin-top:10px"><button id="ac_save">Save</button></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Watchlist — specific aircraft always treated as air show</legend>
+      <div class="help wide">Pin known performers by registration (tail number) and/or ICAO hex — the most
+        reliable way to flag a specific display aircraft regardless of its type or how it flies.</div>
+      <div class="tblwrap">
+        <table class="users" id="ac_watch">
+          <thead><tr><th>Registration</th><th>ICAO hex</th><th>Note</th><th></th></tr></thead>
+          <tbody id="ac_watch_rows"></tbody>
+        </table>
+      </div>
+      <div class="actions" style="margin-top:10px">
+        <button id="ac_watch_add" class="ghost mini">+ Add aircraft</button>
+        <button id="ac_save2">Save</button>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Find aircraft in your database (global)</legend>
+      <div class="help wide">Scans the aircraft your receiver has actually seen — using the worldwide
+        aircraft database (registration / type / military / “interesting” flags), not any single
+        country's registry. Pick what to look for, then add any you recognise to the watchlist above.</div>
+      <div class="row" style="gap:16px">
+        <label style="width:auto">Match</label>
+        <label class="ck"><input type="checkbox" id="sc_types" checked> air-show types</label>
+        <label class="ck"><input type="checkbox" id="sc_mil" checked> military</label>
+        <label class="ck"><input type="checkbox" id="sc_int"> interesting</label>
+        <button id="sc_run" class="ghost mini">Scan</button>
+        <span id="sc_msg" class="help"></span>
+      </div>
+      <div class="tblwrap">
+        <table class="users" id="sc_tbl" style="display:none">
+          <thead><tr><th></th><th>Registration</th><th>Type</th><th>Operator</th><th>Flags</th><th>Last seen</th></tr></thead>
+          <tbody id="sc_rows"></tbody>
+        </table>
+      </div>
+      <div class="actions" style="margin-top:10px"><button id="sc_add" class="ghost mini" style="display:none">+ Add selected to watchlist</button></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Built-in lists (reference)</legend>
+      <div id="ac_builtin" class="help wide">…</div>
+    </fieldset>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
+function setMsg(t){ $('status').textContent = t; }
+async function post(path, body){
+  const r = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  return r.json();
+}
+
+// ---- sub-tabs ----
+const ADMIN_PANELS = ['display', 'integrations', 'import', 'users', 'airshow'];
+const PANELS = ADMIN_PANELS.concat(['prefs']);
+let isAdmin = true;
+function showPanel(name){
+  if (!PANELS.includes(name) || (!isAdmin && name !== 'prefs')) name = isAdmin ? 'display' : 'prefs';
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('on', p.id === 'p_' + name));
+  document.querySelectorAll('.subtab').forEach(b => b.classList.toggle('on', b.dataset.p === name));
+  if (location.hash.slice(1) !== name) history.replaceState(null, '', '#' + name);
+  if (name === 'users') loadUsers();
+  if (name === 'import'){ loadImport(); loadPatternBuild(); }
+  if (name === 'airshow') loadAirshowCfg();
+  if (name === 'display') populateDisplay();
+  if (name === 'prefs') populatePrefs();
+}
+document.querySelectorAll('.subtab').forEach(b => b.onclick = () => showPanel(b.dataset.p));
+
+// ---- integrations (MQTT / HA) ----
+async function load(){
+  try {
+    const j = await (await fetch('api/alerts/config')).json();
+    const c = j.config || {};
+    $('enabled').checked = c.enabled !== false;
+    $('mqtt_host').value = c.mqtt_host || '';
+    $('mqtt_port').value = c.mqtt_port || 1883;
+    $('mqtt_username').value = c.mqtt_username || '';
+    $('mqtt_password').value = '';
+    $('mqtt_password').placeholder = c.has_password ? '•••••• (stored — leave blank to keep)' : '(optional)';
+    $('mqtt_tls').checked = !!c.mqtt_tls;
+    $('base_topic').value = c.base_topic || 'tar1090';
+    $('ha_discovery').checked = c.ha_discovery !== false;
+    $('discovery_prefix').value = c.discovery_prefix || 'homeassistant';
+  } catch(e){ setMsg('Could not load settings: ' + e); }
+}
+function collect(){
+  return {
+    enabled: $('enabled').checked,
+    mqtt_host: $('mqtt_host').value.trim(),
+    mqtt_port: +$('mqtt_port').value || 1883,
+    mqtt_username: $('mqtt_username').value.trim(),
+    mqtt_password: $('mqtt_password').value,        // blank => API keeps the stored one
+    mqtt_tls: $('mqtt_tls').checked,
+    base_topic: $('base_topic').value.trim() || 'tar1090',
+    ha_discovery: $('ha_discovery').checked,
+    discovery_prefix: $('discovery_prefix').value.trim() || 'homeassistant',
+  };
+}
+$('save').onclick = async ()=>{
+  setMsg('Saving…');
+  const r = await post('api/alerts/config', collect());
+  if (r.ok){ setMsg('Saved.'); load(); } else setMsg('Error: ' + (r.error || 'save failed'));
+};
+$('test').onclick = async ()=>{
+  setMsg('Saving, then publishing a test message…');
+  let r = await post('api/alerts/config', collect());
+  if (!r.ok){ setMsg('Error saving: ' + (r.error || 'failed')); return; }
+  load();
+  r = await post('api/alerts/test', {});
+  setMsg(r.ok ? 'Test published ✓ — look for topic <base>/test in Home Assistant / MQTT.'
+              : 'Test failed: ' + (r.error || 'unknown error'));
+};
+load();
+
+// ---- historical import ----
+const fmtN = n => (n == null ? 0 : n).toLocaleString();
+function renderIngest(r){
+  const last = r.ingest_last_seen, n = r.ingest_last_hour || 0;
+  const ageS = last ? Math.round((Date.now() - last) / 1000) : null;
+  if (ageS != null && ageS < 180){
+    const ago = ageS < 60 ? ageS + 's' : Math.round(ageS/60) + 'm';
+    $('ingest_status').innerHTML = `<b class="imp-done">● active</b> — ${fmtN(n)} flights logged in the last hour · last update ${ago} ago`;
+  } else if (last){
+    const mins = Math.round(ageS/60);
+    $('ingest_status').innerHTML = `<b class="imp-cancel">○ quiet</b> — last flight logged ${mins}m ago (${fmtN(n)} in the last hour). Low traffic, or the logger/DB may be down.`;
+  } else {
+    $('ingest_status').innerHTML = `<b class="imp-err">○ no recent data</b> — is the logger running and <code>TAR1090_DB_DSN</code> set? (Live map still works without it.)`;
+  }
+}
+function renderImport(r){
+  renderIngest(r);
+  $('globe_dir').placeholder = r.default_globe_dir || '/var/globe_history';
+  if (!$('globe_dir').value && r.globe_dir) $('globe_dir').value = r.globe_dir;
+  const running = !!r.running, ok = r.available !== false;
+  // The progress bar + live line only mean anything while a job is actually running; when idle
+  // the panel just says so and the history table below shows what previous runs did.
+  $('imp_bar').style.display = running ? '' : 'none';
+  if (!ok){
+    $('imp_status').innerHTML = '<b class="err">the heatmap importer is not installed on this server</b>';
+  } else if (running){
+    const total = r.chunks_total || 0, done = r.chunks_done || 0;
+    const pct = total ? Math.round(100 * done / total) : 0;
+    $('imp_fill').style.width = pct + '%';
+    let line = `<b class="run">running</b> · ${fmtN(done)} / ${fmtN(total)} chunks (${pct}%) · ${fmtN(r.flights_added)} flights · ${fmtN(r.fixes_seen)} fixes`;
+    if (r.message) line += ` — ${r.message}`;
+    $('imp_status').innerHTML = line;
+  } else {
+    $('imp_status').innerHTML = '<b class="idle">idle</b> — no import running';
+  }
+  $('imp_start').disabled = running || !ok;
+  $('imp_restart').disabled = running || !ok;
+  $('imp_stop').disabled = !running;
+  renderRuns(r.runs || []);
+}
+function renderRuns(runs){
+  const tb = $('imp_runs_rows'), tbl = $('imp_runs'), empty = $('imp_runs_empty');
+  tb.innerHTML = '';
+  if (!runs.length){ tbl.style.display = 'none'; empty.style.display = ''; return; }
+  empty.style.display = 'none'; tbl.style.display = '';
+  const cls = { done:'imp-done', cancelled:'imp-cancel', error:'imp-err' };
+  const label = { done:'completed', cancelled:'stopped', error:'error' };
+  for (const h of runs){
+    const pct = h.chunks_total ? Math.round(100 * (h.chunks_done||0) / h.chunks_total) : 0;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${esc(fmtWhen(h.finished_at))}</td>`
+      + `<td><b class="${cls[h.status]||'imp-cancel'}">${esc(label[h.status]||h.status||'')}</b></td>`
+      + `<td>${fmtN(h.chunks_done)} / ${fmtN(h.chunks_total)} (${pct}%)</td>`
+      + `<td>${fmtN(h.flights_added)}</td><td>${fmtN(h.fixes_seen)}</td>`
+      + `<td class="sub">${esc(h.message || '')}</td>`;
+    tb.appendChild(tr);
+  }
+}
+async function loadImport(){
+  try { renderImport(await (await fetch('api/import/status')).json()); }
+  catch(e){ $('imp_status').textContent = 'import status unavailable: ' + e; }
+}
+async function startImport(restart){
+  if (restart && !confirm('Restart the import from scratch? It re-scans everything (safe, but slower).')) return;
+  const body = { globe_dir: $('globe_dir').value.trim() || $('globe_dir').placeholder, restart: !!restart };
+  const r = await post('api/import/start', body);
+  if (r.error){ $('imp_status').innerHTML = '<b class="err">' + r.error + '</b>'; return; }
+  renderImport(r);
+}
+$('imp_start').onclick = () => startImport(false);
+$('imp_restart').onclick = () => startImport(true);
+$('imp_stop').onclick = async () => { await post('api/import/stop', {}); setTimeout(loadImport, 300); };
+$('imp_clear').onclick = async () => {
+  if (!confirm('Clear the import history list? (Does not touch any imported flights.)')) return;
+  await post('api/import/clear-history', {}); loadImport();
+};
+// ---- flight-pattern backfill ----
+function renderPatternBuild(r){
+  const running = !!r.running;
+  $('as_build').disabled = running; $('as_rebuild').disabled = running; $('as_stop').disabled = !running;
+  $('as_bar').style.display = running ? '' : 'none';
+  const pct = r.total ? Math.round(100 * (r.scanned||0) / r.total) : 0;
+  $('as_fill').style.width = pct + '%';
+  if (running){
+    $('as_status').innerHTML = `Scanning ${fmtN(r.scanned)} / ${fmtN(r.total)} (${pct}%) — tagged ${fmtN(r.found)} so far`;
+  } else {
+    const bp = r.by_pattern || {};
+    const parts = [['airshow','✈ air show'],['orbit','◎ surveillance'],['survey','▦ survey']]
+      .filter(([k]) => bp[k]).map(([k,l]) => `${fmtN(bp[k])} ${l}`);
+    $('as_status').innerHTML = `<b class="imp-done">${fmtN(r.flagged_total||0)}</b> flight(s) tagged`
+      + (parts.length ? ` — ${parts.join(' · ')}` : '') + (r.message ? ` · ${esc(r.message)}` : '');
+  }
+}
+async function loadPatternBuild(){
+  try { renderPatternBuild(await (await fetch('api/patterns/build-status')).json()); }
+  catch(e){ $('as_status').textContent = 'pattern build status unavailable: ' + e; }
+}
+async function startPatternBuild(clear){
+  if (clear && !confirm('Rebuild flight patterns from scratch? This clears existing tags and re-scans every flight.')) return;
+  const r = await post('api/patterns/build', { clear: !!clear });
+  if (r.error){ $('as_status').innerHTML = '<b class="err">' + esc(r.error) + '</b>'; return; }
+  renderPatternBuild(r);
+}
+$('as_build').onclick   = () => startPatternBuild(false);
+$('as_rebuild').onclick = () => startPatternBuild(true);
+$('as_stop').onclick    = async () => { await post('api/patterns/build-stop', {}); setTimeout(loadPatternBuild, 300); };
+
+// keep the import progress + live-ingestion + air-show build status fresh while the panel is open
+setInterval(() => { if ($('p_import').classList.contains('on')){ loadImport(); loadPatternBuild(); } }, 3000);
+
+// ---- air-show customisation (admin) ----
+let acWatch = [];        // [{reg,hex,note}]
+async function loadAirshowCfg(){
+  let j;
+  try { j = await (await fetch('api/airshow/custom')).json(); }
+  catch(e){ $('as_cfg_msg').textContent = 'could not load: ' + e; return; }
+  const c = j.config || {};
+  $('ac_extra_types').value = (c.extra_types || []).join(', ');
+  $('ac_extra_exclude').value = (c.extra_exclude || []).join(', ');
+  acWatch = (c.watch || []).map(w => ({ reg: w.reg||'', hex: w.hex||'', note: w.note||'' }));
+  renderWatch();
+  renderBuiltin(j.builtin || {});
+  $('as_cfg_msg').textContent = '';
+}
+function renderWatch(){
+  const tb = $('ac_watch_rows'); tb.innerHTML = '';
+  if (!acWatch.length){ tb.innerHTML = '<tr><td colspan="4" class="sub">No watched aircraft yet.</td></tr>'; return; }
+  acWatch.forEach((w, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><input data-i="${i}" data-k="reg" value="${esc(w.reg)}" placeholder="C-GXYZ" style="width:120px"></td>`
+      + `<td><input data-i="${i}" data-k="hex" value="${esc(w.hex)}" placeholder="ab1234" style="width:110px"></td>`
+      + `<td><input data-i="${i}" data-k="note" value="${esc(w.note)}" placeholder="optional" style="width:170px"></td>`
+      + `<td><button class="mini danger" data-del="${i}">✕</button></td>`;
+    tb.appendChild(tr);
+  });
+  tb.querySelectorAll('input').forEach(inp => inp.oninput = e => {
+    acWatch[+e.target.dataset.i][e.target.dataset.k] = e.target.value; });
+  tb.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { acWatch.splice(+b.dataset.del, 1); renderWatch(); });
+}
+function renderBuiltin(b){
+  const cats = (b.categories || []).map(c => `<b>${esc(c.label)}:</b> ${esc((c.types||[]).join(', '))}`).join('<br>');
+  $('ac_builtin').innerHTML = cats + (b.non_aerobatic ? `<br><br><b>Non-aerobatic (excluded):</b> ${esc(b.non_aerobatic.join(', '))}` : '');
+}
+async function saveAirshowCfg(){
+  const body = { extra_types: $('ac_extra_types').value, extra_exclude: $('ac_extra_exclude').value,
+                 watch: acWatch.filter(w => (w.reg||'').trim() || (w.hex||'').trim()) };
+  const r = await post('api/airshow/custom', body);
+  if (r.ok){ $('as_cfg_msg').innerHTML = '<b class="imp-done">Saved.</b> Rebuild flight patterns (Historical import tab) to re-tag past flights.'; loadAirshowCfg(); }
+  else $('as_cfg_msg').innerHTML = '<b class="err">' + esc(r.error || 'save failed') + '</b>';
+}
+$('ac_watch_add').onclick = () => { acWatch.push({ reg:'', hex:'', note:'' }); renderWatch(); };
+$('ac_save').onclick = saveAirshowCfg;
+$('ac_save2').onclick = saveAirshowCfg;
+
+// discover air-show aircraft already in the (global) aircraft database
+let scResults = [];
+async function runScan(){
+  const p = new URLSearchParams({ types: $('sc_types').checked?'1':'0',
+    military: $('sc_mil').checked?'1':'0', interesting: $('sc_int').checked?'1':'0' });
+  $('sc_msg').textContent = 'scanning…';
+  let j;
+  try { j = await (await fetch('api/airshow/scan?' + p)).json(); }
+  catch(e){ $('sc_msg').textContent = 'scan failed: ' + e; return; }
+  scResults = j.aircraft || [];
+  renderScan();
+  $('sc_msg').textContent = scResults.length ? `${scResults.length}${scResults.length>=500?'+':''} aircraft seen` : 'none found';
+}
+function renderScan(){
+  const tb = $('sc_rows'); tb.innerHTML = '';
+  const show = scResults.length > 0;
+  $('sc_tbl').style.display = show ? '' : 'none';
+  $('sc_add').style.display = show ? '' : 'none';
+  scResults.forEach((a, i) => {
+    const flags = [a.military ? 'MIL' : '', a.interesting ? '★' : ''].filter(Boolean).join(' ');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><input type="checkbox" data-i="${i}"></td>`
+      + `<td>${esc(a.registration || '—')}</td>`
+      + `<td>${esc(a.icao_type || '')} <span class="sub">${esc(a.type_desc || '')}</span></td>`
+      + `<td>${esc(a.operator || '')}</td><td>${esc(flags)}</td>`
+      + `<td class="sub">${a.last_seen ? fmtWhen(a.last_seen) : '—'}</td>`;
+    tb.appendChild(tr);
+  });
+}
+$('sc_run').onclick = runScan;
+$('sc_add').onclick = () => {
+  const picks = [...$('sc_rows').querySelectorAll('input:checked')].map(c => scResults[+c.dataset.i]);
+  let added = 0;
+  for (const a of picks){
+    const reg = (a.registration || '').toUpperCase(), hex = (a.icao_hex || '').toLowerCase();
+    const dup = acWatch.some(w => (reg && (w.reg||'').toUpperCase() === reg) || (hex && (w.hex||'').toLowerCase() === hex));
+    if (dup) continue;
+    acWatch.push({ reg: a.registration || '', hex: a.icao_hex || '',
+                   note: (a.icao_type || '') + (a.type_desc ? ' ' + a.type_desc : '') });
+    added++;
+  }
+  renderWatch();
+  $('sc_msg').textContent = `added ${added} — review the watchlist above, then Save`;
+};
+
+// ---- users ----
+let meSub = null;
+function fmtWhen(ms){ return ms ? new Date(ms).toLocaleString() : '—'; }
+async function loadUsers(){
+  $('users_msg').textContent = 'Loading…';
+  try {
+    const meP = fetch('api/me').then(r => r.json()).catch(() => ({}));
+    const j = await (await fetch('api/users')).json();
+    if (j.error){ $('users_msg').textContent = 'Could not load users: ' + j.error; return; }
+    meSub = (await meP).sub || null;
+    const list = j.users || [];
+    renderUsers(list);
+    $('users_msg').textContent = list.length ? '' : 'No sign-ins recorded yet.';
+  } catch(e){ $('users_msg').textContent = 'Could not load users: ' + e; }
+}
+function renderUsers(list){
+  const tb = $('users_rows'); tb.innerHTML = '';
+  for (const u of list){
+    const self = meSub && u.sub === meSub;
+    const tr = document.createElement('tr'); if (u.blocked) tr.className = 'blk';
+    tr.innerHTML = `<td><b>${esc(u.name || '(no name)')}</b>${self ? ' <span class="help" style="margin:0">(you)</span>' : ''}`
+      + `<div class="sub">${esc(u.email || u.sub || '')}</div></td>`
+      + `<td>${esc(u.role || '')}</td><td>${u.login_count || 0}</td>`
+      + `<td>${esc(fmtWhen(u.first_seen))}</td><td>${esc(fmtWhen(u.last_seen))}</td>`
+      + `<td><span class="pill ${u.blocked ? 'no' : 'ok'}">${u.blocked ? 'Blocked' : 'Allowed'}</span></td>`;
+    const btn = document.createElement('button');
+    btn.className = 'mini ' + (u.blocked ? 'ghost' : 'danger');
+    btn.textContent = u.blocked ? 'Unblock' : 'Block';
+    btn.style.marginLeft = '8px';
+    btn.disabled = !!self;
+    btn.title = self ? "You can't block your own account" : '';
+    btn.onclick = async () => {
+      if (!u.blocked && !confirm('Block ' + (u.name || u.email || 'this user') + "? They'll be signed out and can't log back in.")) return;
+      btn.disabled = true;
+      const r = await post('api/users/block', { sub: u.sub, blocked: !u.blocked });
+      if (r.error){ $('users_msg').textContent = 'Error: ' + r.error; btn.disabled = false; return; }
+      loadUsers();
+    };
+    tr.lastElementChild.appendChild(btn);
+    tb.appendChild(tr);
+  }
+}
+$('users_refresh').onclick = loadUsers;
+
+// ---- display defaults (admin global) + my preferences (per-user) ----
+let CFG = { builtin:{}, global:{}, prefs:{}, role:'admin' };
+const HC_DEFAULT = { active:true, callsign:true, registration:true, icao_type:true, military:true,
+                     start:true, duration_s:true, max_alt:true, operator:true };
+function merged(){                                    // built-in <- admin global  (for the Display tab)
+  const B = CFG.builtin || {}, G = CFG.global || {};
+  return {
+    buttons:  Object.assign({ labels:true, trails:true, ground:true, fit:true, rings:true }, B.buttons, G.buttons),
+    defaults: Object.assign({ labels:false, trails:false, ground:true, rings:false }, B.defaults, G.defaults),
+    units:    Object.assign({ speed:'kt', alt:'ft', dist:'nm' }, B.units, G.units),
+    cols:     Object.assign({ t:true, alt:true, gs:true, squawk:true, dist:true }, B.cols, G.cols),
+    hist_cols: Object.assign({}, HC_DEFAULT, B.hist_cols, G.hist_cols),
+    map:      Object.assign({ base:'osm' }, B.map, G.map),
+    rings:    Object.assign({ distances:[100,150,200] }, B.rings, G.rings),
+    sizes:    Object.assign({ icon:1, label:1 }, B.sizes, G.sizes),
+    allow:    (G.allow_user_prefs !== undefined) ? G.allow_user_prefs !== false : (B.allow_user_prefs !== false),
+  };
+}
+function effUser(){                                   // ...<- this user's prefs (for the Preferences tab)
+  const m = merged(), P = CFG.prefs || {};
+  return {
+    defaults: Object.assign({}, m.defaults, P.defaults),
+    units:    Object.assign({}, m.units, P.units),
+    cols:     Object.assign({}, m.cols, P.cols),
+    hist_cols: Object.assign({}, m.hist_cols, P.hist_cols),
+    map:      Object.assign({}, m.map, P.map),
+    sizes:    Object.assign({}, m.sizes, P.sizes),
+    allow:    m.allow,
+  };
+}
+const COLKEYS = ['t','alt','gs','squawk','dist'];
+const HCKEYS = ['active','callsign','registration','icao_type','military','start','duration_s','max_alt','operator'];
+function populateDisplay(){
+  const m = merged();
+  ['labels','trails','ground','rings','fit'].forEach(k => $('g_btn_'+k).checked = m.buttons[k] !== false);
+  ['labels','trails','ground','rings'].forEach(k => $('g_def_'+k).checked = !!m.defaults[k]);
+  $('g_u_speed').value = m.units.speed; $('g_u_alt').value = m.units.alt; $('g_u_dist').value = m.units.dist;
+  COLKEYS.forEach(k => $('g_col_'+k).checked = m.cols[k] !== false);
+  HCKEYS.forEach(k => $('g_hc_'+k).checked = m.hist_cols[k] !== false);
+  $('g_map_base').value = m.map.base || 'osm';
+  $('g_rings_dist').value = (m.rings.distances || []).join(', ');
+  $('g_sz_icon').value = m.sizes.icon || 1; $('g_sz_label').value = m.sizes.label || 1;
+  $('g_allow').checked = m.allow;
+  $('g_status').textContent = '';
+}
+async function saveDisplay(){
+  const s = {
+    buttons:  {}, defaults: {}, units: {}, cols: {}, hist_cols: {}, map: {}, rings: {}, sizes: {},
+    allow_user_prefs: $('g_allow').checked,
+  };
+  ['labels','trails','ground','rings','fit'].forEach(k => s.buttons[k] = $('g_btn_'+k).checked);
+  ['labels','trails','ground','rings'].forEach(k => s.defaults[k] = $('g_def_'+k).checked);
+  s.units = { speed:$('g_u_speed').value, alt:$('g_u_alt').value, dist:$('g_u_dist').value };
+  s.map = { base: $('g_map_base').value };
+  s.rings = { distances: ($('g_rings_dist').value || '').split(',').map(x => +x.trim()).filter(x => x > 0) };
+  s.sizes = { icon: +$('g_sz_icon').value || 1, label: +$('g_sz_label').value || 1 };
+  COLKEYS.forEach(k => s.cols[k] = $('g_col_'+k).checked);
+  HCKEYS.forEach(k => s.hist_cols[k] = $('g_hc_'+k).checked);
+  $('g_status').textContent = 'Saving…';
+  const r = await post('api/settings/global', { settings: s });
+  if (r.ok){ CFG.global = s; $('g_status').textContent = 'Saved. Reload the Live map to see the changes.'; }
+  else $('g_status').textContent = 'Error: ' + (r.error || 'save failed');
+}
+function populatePrefs(){
+  const e = effUser();
+  ['labels','trails','ground','rings'].forEach(k => $('u_def_'+k).checked = !!e.defaults[k]);
+  $('u_u_speed').value = e.units.speed; $('u_u_alt').value = e.units.alt; $('u_u_dist').value = e.units.dist;
+  COLKEYS.forEach(k => $('u_col_'+k).checked = e.cols[k] !== false);
+  HCKEYS.forEach(k => $('u_hc_'+k).checked = e.hist_cols[k] !== false);
+  $('u_map_base').value = e.map.base || 'osm';
+  $('u_sz_icon').value = e.sizes.icon || 1; $('u_sz_label').value = e.sizes.label || 1;
+  const locked = !e.allow;
+  $('prefs_locked').style.display = locked ? '' : 'none';
+  $('p_prefs').querySelectorAll('input,select,#u_save').forEach(el => { if (el.id !== 'u_reset') el.disabled = locked; });
+  $('u_status').textContent = '';
+}
+async function savePrefs(){
+  const p = { defaults: {}, units: {}, cols: {}, hist_cols: {}, map: {}, sizes: {} };
+  ['labels','trails','ground','rings'].forEach(k => p.defaults[k] = $('u_def_'+k).checked);
+  p.units = { speed:$('u_u_speed').value, alt:$('u_u_alt').value, dist:$('u_u_dist').value };
+  COLKEYS.forEach(k => p.cols[k] = $('u_col_'+k).checked);
+  HCKEYS.forEach(k => p.hist_cols[k] = $('u_hc_'+k).checked);
+  p.map = { base: $('u_map_base').value };
+  p.sizes = { icon: +$('u_sz_icon').value || 1, label: +$('u_sz_label').value || 1 };
+  $('u_status').textContent = 'Saving…';
+  const r = await post('api/settings/prefs', { prefs: p });
+  if (r.ok){ CFG.prefs = p; $('u_status').textContent = 'Saved. Reload the Live map to see the changes.'; }
+  else $('u_status').textContent = 'Error: ' + (r.error || 'save failed');
+}
+$('g_save').onclick = saveDisplay;
+$('u_save').onclick = savePrefs;
+$('u_reset').onclick = async () => {
+  $('u_status').textContent = 'Resetting…';
+  const r = await post('api/settings/prefs', { prefs: {} });
+  if (r.ok){ CFG.prefs = {}; populatePrefs(); $('u_status').textContent = 'Reset to site defaults.'; }
+  else $('u_status').textContent = 'Error: ' + (r.error || 'failed');
+};
+
+// load settings + role, gate the admin tabs, then open the right panel
+(async function(){
+  try { CFG = await (await fetch('api/settings')).json(); } catch(e){}
+  isAdmin = CFG.role === 'admin';
+  if (!isAdmin) document.querySelectorAll('.subtab.admin-only, .panel.admin-only').forEach(el => el.style.display = 'none');
+  const want = (location.hash || '').slice(1);
+  showPanel(want || (isAdmin ? 'display' : 'prefs'));
+})();
+</script>
+<script src="auth.js"></script>
+</body>
+</html>

@@ -2161,6 +2161,11 @@ PlaneObject.prototype.makeTR = function (trTemplate) {
         }
 
         if(!mapIsVisible) {
+            if (onMobile && toggles['sidebar_visible']) {
+                // Phone full-screen list: tapping a flight switches back to the
+                // map and centres/follows it (no jarring zoom-out).
+                toggles['sidebar_visible'].toggle(false);
+            }
             selectPlaneByHex(this.icao, {follow: true});
         } else {
             selectPlaneByHex(this.icao, {follow: false});
