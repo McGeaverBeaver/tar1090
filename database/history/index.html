@@ -132,6 +132,8 @@
   #gv-hd .sp { flex: 1; } #gv-hd b { color: #6cc1ff; font-weight: 600; }
   #gv-hd .m { cursor: pointer; color: #9aa3b2; font-size: 16px; padding: 0 4px; }
   #gv-hd .m:hover { color: #fff; }
+  #gv-hd .m.mode { font-size: 12px; padding: 2px 8px; border: 1px solid #313845; border-radius: 999px; }
+  #gv-hd .m.mode:hover { background: #2a2f38; color: #fff; }
   #gv-canvas { display: block; width: 100%; height: 300px; background: #0a0e16; cursor: default; }
   #gv-ctrls { display: flex; align-items: center; gap: 8px; padding: 7px 12px 2px; }
   #gv-ctrls #gv-play { background: #2d6cdf; color: #fff; border: 0; border-radius: 999px; padding: 4px 12px; cursor: pointer; }
@@ -269,7 +271,7 @@
 
   <div id="groundview">
     <div id="gv-hd"><span>Ground view — looking up from <b id="gv-from">the crowd line</b></span>
-      <span class="sp"></span><span class="m" id="gv-close" title="Close">✕</span></div>
+      <span class="sp"></span><span class="m mode" id="gv-mode" title="Switch between fly-around and stand (first-person) view">🎥 Fly</span><span class="m" id="gv-close" title="Close">✕</span></div>
     <canvas id="gv-canvas"></canvas>
     <div id="gv-ctrls"><button id="gv-play">▶</button><input id="gv-scrub" type="range" min="0" max="0" value="0"></div>
     <div id="gv-readout"></div>
@@ -281,7 +283,7 @@
 <script src="acicons.js"></script>
 <script src="https://unpkg.com/three@0.149.0/build/three.min.js"></script>
 <script src="https://unpkg.com/three@0.149.0/examples/js/controls/OrbitControls.js"></script>
-<script src="groundview.js"></script>
+<script src="groundview.js?v=3d2"></script>
 <script>
 const $ = id => document.getElementById(id);
 const pad = n => String(n).padStart(2, '0');

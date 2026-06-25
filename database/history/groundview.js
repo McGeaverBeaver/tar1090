@@ -66,12 +66,15 @@
       this.onClose = o.onClose || (() => {});
       this.observer = null; this.tracks = []; this.t = 0; this.tmin = 0; this.tmax = 0;
       this.live = false; this._open = false; this.three = null;
+      this.mode = 'fly';                         // 'fly' = orbit the action, 'stand' = FPV in place
+      this.fpv = { yaw: 0, pitch: 18, fov: 58 };
       this._wire();
     }
     _wire() {
       const sc = $('gv-scrub'); if (sc) sc.oninput = () => { this.pause(); this.setTime(+sc.value); };
       const pl = $('gv-play'); if (pl) pl.onclick = () => this.playing ? this.pause() : this.play();
       const cl = $('gv-close'); if (cl) cl.onclick = () => this.close();
+      const md = $('gv-mode'); if (md) md.onclick = () => this.setMode(this.mode === 'fly' ? 'stand' : 'fly');
       window.addEventListener('resize', () => this._resize());
     }
 
@@ -117,6 +120,26 @@
       const controls = new T.OrbitControls(camera, renderer.domElement);
       controls.enableDamping = true; controls.dampingFactor = 0.08;
       controls.minDistance = 4; controls.maxDistance = 300000; controls.zoomSpeed = 1.2;
+      // first-person ("stand") controls: look around in place by dragging, zoom = field of view
+      const dom = renderer.domElement, ptrs = new Map(); let pinch = 0;
+      const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+      dom.addEventListener('pointerdown', e => { if (this.mode !== 'stand') return; ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); dom.setPointerCapture(e.pointerId); });
+      dom.addEventListener('pointermove', e => {
+        if (this.mode !== 'stand' || !ptrs.has(e.pointerId)) return;
+        const p = ptrs.get(e.pointerId);
+        if (ptrs.size >= 2) {                              // pinch -> field of view
+          const a = [...ptrs.values()]; const d = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
+          if (pinch) { this.fpv.fov = clamp(this.fpv.fov * (pinch / d), 20, 85); camera.fov = this.fpv.fov; camera.updateProjectionMatrix(); }
+          pinch = d;
+        } else {                                           // drag -> look around
+          this.fpv.yaw -= (e.clientX - p.x) * 0.22; this.fpv.pitch = clamp(this.fpv.pitch + (e.clientY - p.y) * 0.22, -8, 88); this._applyFpv();
+        }
+        p.x = e.clientX; p.y = e.clientY;
+      });
+      const drop = e => { ptrs.delete(e.pointerId); if (ptrs.size < 2) pinch = 0; };
+      dom.addEventListener('pointerup', drop); dom.addEventListener('pointercancel', drop);
+      dom.addEventListener('wheel', e => { if (this.mode !== 'stand') return; e.preventDefault();
+        this.fpv.fov = clamp(this.fpv.fov + Math.sign(e.deltaY) * 3, 20, 85); camera.fov = this.fpv.fov; camera.updateProjectionMatrix(); }, { passive: false });
       // sky dome
       const skyCanvas = document.createElement('canvas'); skyCanvas.width = 8; skyCanvas.height = 256;
       const skyTex = new T.CanvasTexture(skyCanvas);
@@ -185,17 +208,39 @@
       const sp = new T.Sprite(new T.SpriteMaterial({ map: tex, depthTest: false, depthWrite: false }));
       sp.scale.set(c.width/c.height * 1400, 1400, 1); sp.userData.aspect = c.width/c.height; return sp;
     }
-    fitView() {
-      if (!this.three) return;
-      // aim the orbit target at the centroid of the action so scroll zooms toward it
+    _centroid() {
       let n = 0, cx = 0, cy = 0, cz = 0;
       for (const tr of this.tracks) for (const p of tr.points) { if (p[1] == null) continue; const e = enu(this.observer, p[1], p[2], p[3]); cx += e.x; cy += e.y; cz += e.z; n++; }
-      const c = this.three.controls;
-      if (n) { c.target.set(cx/n, cy/n, cz/n); } else { c.target.set(0, 500, -2000); }
-      // start the camera near the observer looking toward the action
-      const d = Math.hypot(c.target.x, c.target.z) || 2000;
-      this.three.camera.position.set(c.target.x * 0.02, Math.max(2, c.target.y * 0.15), c.target.z * 0.02 + Math.sign(c.target.z || -1) * 0.1);
-      c.update();
+      return n ? { x: cx/n, y: cy/n, z: cz/n, n } : { x: 0, y: 500, z: -2000, n: 0 };
+    }
+    fitView() {
+      if (!this.three) return;
+      if (this.mode === 'stand') { this._standAim(); return; }
+      const c = this.three.controls, m = this._centroid();
+      c.target.set(m.x, m.y, m.z);                          // orbit around the action; scroll zooms toward it
+      this.three.camera.position.set(m.x * 0.02, Math.max(2, m.y * 0.15), m.z * 0.02 + Math.sign(m.z || -1) * 0.1);
+      c.enabled = true; c.update();
+    }
+    _standAim() {                                            // point the FPV camera at the action centroid
+      const m = this._centroid(), d = Math.hypot(m.x, m.z);
+      this.fpv.yaw = (Math.atan2(m.x, -m.z) * R2D);          // azimuth toward the action
+      this.fpv.pitch = Math.max(0, Math.min(85, Math.atan2(m.y, Math.max(d, 1)) * R2D));
+      this._applyFpv();
+    }
+    _applyFpv() {
+      if (!this.three) return;
+      const cam = this.three.camera, y = this.fpv.yaw * D2R, p = this.fpv.pitch * D2R;
+      const dir = new this.three.T.Vector3(Math.sin(y) * Math.cos(p), Math.sin(p), -Math.cos(y) * Math.cos(p));
+      cam.position.set(0, 2, 0);
+      cam.lookAt(dir.x * 1000, 2 + dir.y * 1000, dir.z * 1000);
+      cam.fov = this.fpv.fov; cam.updateProjectionMatrix();
+    }
+    setMode(m) {
+      this.mode = (m === 'stand') ? 'stand' : 'fly';
+      const md = $('gv-mode'); if (md) md.textContent = this.mode === 'stand' ? '🧍 Stand' : '🎥 Fly';
+      if (!this.three) return;
+      if (this.mode === 'stand') { this.three.controls.enabled = false; this._standAim(); }
+      else { this.three.camera.fov = 58; this.three.camera.updateProjectionMatrix(); this.fitView(); }
     }
     _sampleRaw(track, t) {
       const p = track.points; if (!p.length) return null;
@@ -260,7 +305,9 @@
       const c = $('gv-canvas'), w = c.clientWidth || c.getBoundingClientRect().width, h = c.clientHeight || 300;
       this.three.renderer.setSize(w, h, false); this.three.camera.aspect = w / Math.max(1, h); this.three.camera.updateProjectionMatrix();
     }
-    _start() { if (this._raf) return; const loop = () => { if (!this._open) return; this._raf = requestAnimationFrame(loop); this.three.controls.update(); this.three.renderer.render(this.three.scene, this.three.camera); }; this._raf = requestAnimationFrame(loop); }
+    _start() { if (this._raf) return; const loop = () => { if (!this._open) return; this._raf = requestAnimationFrame(loop);
+      if (this.mode === 'fly') this.three.controls.update();   // FPV ("stand") sets the camera itself
+      this.three.renderer.render(this.three.scene, this.three.camera); }; this._raf = requestAnimationFrame(loop); }
     _stop() { if (this._raf) { cancelAnimationFrame(this._raf); this._raf = 0; } }
     play() {
       if (this.live) return; this.playing = true; const pl = $('gv-play'); if (pl) pl.textContent = '❚❚';
