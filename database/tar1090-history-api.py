@@ -107,7 +107,8 @@ OIDC_USER_AGENT = os.environ.get("OIDC_USER_AGENT", "Mozilla/5.0 (compatible; ta
 SESSION_COOKIE = "tar1090_session"
 TX_COOKIE      = "tar1090_oidc_tx"
 # Anything under these is admin-only; viewers get 403 (and the UI hides it too).
-ADMIN_PREFIXES = ("/api/alerts", "/api/import", "/api/patterns/build", "/api/users", "/api/settings/global")
+ADMIN_PREFIXES = ("/api/alerts", "/api/import", "/api/patterns/build", "/api/airshow/custom",
+                  "/api/users", "/api/settings/global")
 # settings.html is reachable by viewers (their Preferences tab); its admin sub-tabs are hidden in
 # the UI and the admin APIs above stay server-gated.
 ADMIN_PAGES    = ("/alerts.html",)
@@ -1255,26 +1256,97 @@ def _flight_track(hexid, start_dt, end_dt):
     return [(p[0] / 1000.0, p[3], p[1], p[2]) for p in pts if p[3] is not None]
 
 
-def _classify_flight(icao_type, track):
-    """{pattern: detail} for one flight: geometric patterns + air-show-by-type, with a type gate so
-    a non-aerobatic aircraft (e.g. a Cessna 172 doing steep practice turns) isn't called an air show."""
+_AIRSHOW_TYPESET = set(t.upper() for t in airshow_types.all_types())
+
+# --- admin-customisable air-show config (DB-backed, merged with the built-in lists) ----------
+AIRSHOW_CUSTOM_DDL = """
+CREATE TABLE IF NOT EXISTS airshow_custom (
+  id int PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  config jsonb NOT NULL DEFAULT '{}'::jsonb,
+  updated_at timestamptz NOT NULL DEFAULT now());
+INSERT INTO airshow_custom (id) VALUES (1) ON CONFLICT DO NOTHING;
+"""
+_airshow_custom_ready = False
+_airshow_custom_cache = {"t": 0.0, "v": None}
+
+
+def _ensure_airshow_custom():
+    global _airshow_custom_ready
+    if not _airshow_custom_ready:
+        execute(AIRSHOW_CUSTOM_DDL, ())
+        _airshow_custom_ready = True
+
+
+def _norm_types(val):
+    """Accept a list or a free-text blob; return a set of UPPERCASE type tokens."""
+    if isinstance(val, str):
+        val = [val]
+    out = set()
+    for x in (val or []):
+        for tok in str(x).replace(",", " ").split():
+            t = tok.strip().upper()
+            if t:
+                out.add(t)
+    return out
+
+
+def _norm_watch(val):
+    out = []
+    for w in (val or []):
+        if not isinstance(w, dict):
+            continue
+        reg = (w.get("reg") or "").strip().upper()
+        hexid = (w.get("hex") or "").strip().lower().lstrip("~")
+        note = (w.get("note") or "").strip()[:80]
+        if reg or hexid:
+            out.append({"reg": reg, "hex": hexid, "note": note})
+    return out
+
+
+def _airshow_custom():
+    """Effective air-show config (built-in merged with the admin edits), cached ~20s."""
+    now = time.time()
+    if _airshow_custom_cache["v"] is not None and now - _airshow_custom_cache["t"] < 20:
+        return _airshow_custom_cache["v"]
+    try:
+        _ensure_airshow_custom()
+        row = query("SELECT config FROM airshow_custom WHERE id=1", ())
+        cfg = (row[0]["config"] if row else {}) or {}
+    except psycopg.Error:
+        cfg = {}
+    extra_types = _norm_types(cfg.get("extra_types"))
+    extra_exclude = _norm_types(cfg.get("extra_exclude"))
+    watch = _norm_watch(cfg.get("watch"))
+    eff = {"extra_types": extra_types, "extra_exclude": extra_exclude, "watch": watch,
+           "watch_regs": {w["reg"] for w in watch if w["reg"]},
+           "watch_hex": {w["hex"] for w in watch if w["hex"]},
+           "type_set": _AIRSHOW_TYPESET | extra_types}
+    _airshow_custom_cache["t"], _airshow_custom_cache["v"] = now, eff
+    return eff
+
+
+def _classify_flight(icao_type, registration, hexid, track, eff):
+    """{pattern: detail} for one flight: geometric patterns + air-show-by-type + watchlist, with a
+    type gate so a non-aerobatic aircraft (e.g. a Cessna 172 doing steep turns) isn't an air show."""
     found = dict(patterns.classify(track)) if track else {}
     ty = (icao_type or "").upper()
-    if "airshow" in found and not airshow_types.maneuver_plausible(ty):
-        del found["airshow"]                                            # maneuvering, but not an aerobatic type
-    if ty in _AIRSHOW_TYPESET:
-        found["airshow"] = "both" if found.get("airshow") else "type"   # known air-show type (with/without maneuver)
+    if "airshow" in found and not airshow_types.maneuver_plausible(ty, eff["extra_exclude"]):
+        del found["airshow"]                                            # maneuvering, but not aerobatic
+    if airshow_types.is_airshow_type(ty, eff["extra_types"]):
+        found["airshow"] = "both" if found.get("airshow") else "type"   # curated / extra air-show type
+    reg = (registration or "").upper()
+    hx = (hexid or "").lower().lstrip("~")
+    if (reg and reg in eff["watch_regs"]) or (hx and hx in eff["watch_hex"]):
+        found["airshow"] = "watch"                                      # admin watchlist -> always air show
     return found
-
-
-_AIRSHOW_TYPESET = set(t.upper() for t in airshow_types.all_types())
 
 
 def _pattern_worker(t_from, t_to):
     wconn = None
     try:
         wconn = psycopg.connect(DB_DSN, autocommit=True)
-        cur = wconn.execute("SELECT f.id, f.icao_hex, a.icao_type, f.start_time, f.end_time "
+        eff = _airshow_custom()        # admin extra/excluded types + watchlist, merged with built-ins
+        cur = wconn.execute("SELECT f.id, f.icao_hex, a.registration, a.icao_type, f.start_time, f.end_time "
                             "FROM flights f JOIN aircraft a USING (icao_hex) "
                             "WHERE f.start_time <= %s AND f.end_time >= %s "
                             "ORDER BY f.start_time DESC", (t_to, t_from))
@@ -1290,7 +1362,7 @@ def _pattern_worker(t_from, t_to):
                 outcome = "cancelled"
                 break
             track = _flight_track(r["icao_hex"], r["start_time"], r["end_time"])
-            hits = _classify_flight(r["icao_type"], track)
+            hits = _classify_flight(r["icao_type"], r["registration"], r["icao_hex"], track, eff)
             for pattern, detail in hits.items():
                 wconn.execute(
                     "INSERT INTO flight_patterns (flight_id, pattern, detail) VALUES (%s,%s,%s) "
@@ -1365,11 +1437,37 @@ def pattern_build_stop(body):
 
 # --- HTTP -------------------------------------------------------------------
 def airshow_get(q):
-    """Curated air-show aircraft type database -- served to the Live filter and the Alerts editor."""
+    """Air-show aircraft types + non-aerobatic exclusions + watchlist (built-in merged with admin
+    edits) -- served to the Live filter and the Alerts editor."""
+    eff = _airshow_custom()
     return {"categories": [{"key": k, "label": v["label"], "desc": v.get("desc", ""), "types": v["types"]}
                            for k, v in airshow_types.AIRSHOW_TYPES.items()],
-            "all": airshow_types.all_types(),
-            "non_aerobatic": sorted(airshow_types.NON_AEROBATIC)}
+            "all": sorted(eff["type_set"]),
+            "non_aerobatic": sorted(airshow_types.NON_AEROBATIC | eff["extra_exclude"]),
+            "watch": [{"reg": w["reg"], "hex": w["hex"]} for w in eff["watch"]]}
+
+
+def airshow_custom_get(q):
+    """Admin view of the customisable air-show config + the built-in lists for reference."""
+    _ensure_airshow_custom()
+    row = query("SELECT config FROM airshow_custom WHERE id=1", ())
+    cfg = (row[0]["config"] if row else {}) or {}
+    return {"config": {"extra_types": cfg.get("extra_types") or [],
+                       "extra_exclude": cfg.get("extra_exclude") or [],
+                       "watch": _norm_watch(cfg.get("watch"))},
+            "builtin": {"categories": [{"key": k, "label": v["label"], "types": v["types"]}
+                                       for k, v in airshow_types.AIRSHOW_TYPES.items()],
+                        "non_aerobatic": sorted(airshow_types.NON_AEROBATIC)}}
+
+
+def airshow_custom_save(body):
+    _ensure_airshow_custom()
+    cfg = {"extra_types": sorted(_norm_types((body or {}).get("extra_types"))),
+           "extra_exclude": sorted(_norm_types((body or {}).get("extra_exclude"))),
+           "watch": _norm_watch((body or {}).get("watch"))}
+    execute("UPDATE airshow_custom SET config=%s, updated_at=now() WHERE id=1", (Jsonb(cfg),))
+    _airshow_custom_cache["v"] = None        # invalidate so the next read reflects the edit
+    return {"ok": True, "config": cfg}
 
 
 def patterns_get(q):
@@ -1379,8 +1477,8 @@ def patterns_get(q):
 
 ROUTES = {"/api/search": search, "/api/options": options,
           "/api/trace": trace, "/api/traces": traces, "/api/live": live,
-          "/api/airshow": airshow_get, "/api/patterns": patterns_get,
-          "/api/patterns/build-status": pattern_build_status,
+          "/api/airshow": airshow_get, "/api/airshow/custom": airshow_custom_get,
+          "/api/patterns": patterns_get, "/api/patterns/build-status": pattern_build_status,
           "/api/alerts/rules": alerts_rules_get, "/api/alerts/config": alerts_config_get,
           "/api/alerts/log": alerts_log_get, "/api/import/status": import_status,
           "/api/users": users_get}
@@ -1389,6 +1487,7 @@ POST_ROUTES = {"/api/alerts/rules": alerts_rule_save, "/api/alerts/rules/delete"
                "/api/import/start": import_start, "/api/import/stop": import_stop,
                "/api/import/clear-history": import_clear_history,
                "/api/patterns/build": pattern_build_start, "/api/patterns/build-stop": pattern_build_stop,
+               "/api/airshow/custom": airshow_custom_save,
                "/api/users/block": users_block, "/api/settings/global": settings_global_save}
 CONTENT = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
            ".css": "text/css", ".json": "application/json", ".ico": "image/x-icon",

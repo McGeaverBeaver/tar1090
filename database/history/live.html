@@ -390,6 +390,7 @@ function passFilters(a){
 let airshowMode = false;
 const airshowTypes = new Set();              // ICAO type tokens from /api/airshow
 const nonAerobatic = new Set();              // types that maneuver but aren't air-show (trainers, helis)
+const watchRegs = new Set(), watchHex = new Set();   // admin watchlist: always air-show
 const altHistC = new Map();                  // hex -> [[t_ms, alt_ft, lat, lon], ...]
 // Match the server's maneuver detector: confined box + steep vertical rate + many reversals in a
 // short window -- so flight-school "up and down" (wide area, gentle climbs) does NOT qualify.
@@ -398,6 +399,7 @@ const MAN_WIN_MS = 120000, MAN_KEEP_MS = 240000, MAN_DEAD = 200,
 fetch('api/airshow').then(r=>r.json()).then(j=>{
   (j.all||[]).forEach(t=> airshowTypes.add(String(t).toUpperCase()));
   (j.non_aerobatic||[]).forEach(t=> nonAerobatic.add(String(t).toUpperCase()));
+  (j.watch||[]).forEach(w=>{ if (w.reg) watchRegs.add(String(w.reg).toUpperCase()); if (w.hex) watchHex.add(String(w.hex).toLowerCase()); });
 }).catch(()=>{});
 function trackAlt(acs){
   const now = Date.now();
@@ -437,8 +439,9 @@ function maneuvering(hex){
 }
 function isAirshowType(t){ return !!t && airshowTypes.has(String(t).toUpperCase()); }
 function maneuverPlausible(t){ return !nonAerobatic.has(String(t||'').toUpperCase()); }  // not a trainer/heli
-// air-show candidate = a known air-show type, OR maneuvering AND a plausibly aerobatic type
-function isAirshowCandidate(a){ return isAirshowType(a.t) || (maneuverPlausible(a.t) && maneuvering(a.hex)); }
+function isWatched(a){ return (a.r && watchRegs.has(String(a.r).toUpperCase())) || (a.hex && watchHex.has(String(a.hex).toLowerCase())); }
+// air-show candidate = on the watchlist, OR a known air-show type, OR maneuvering AND plausibly aerobatic
+function isAirshowCandidate(a){ return isWatched(a) || isAirshowType(a.t) || (maneuverPlausible(a.t) && maneuvering(a.hex)); }
 
 // Deep link: ?icao=<hex> / ?reg=<registration> / ?callsign=<cs>. Select that aircraft once the
 // live feed loads; if it isn't currently flying, fall back to its History (trail replay).

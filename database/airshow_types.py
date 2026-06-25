@@ -87,7 +87,18 @@ NON_AEROBATIC = {
 }
 
 
-def maneuver_plausible(icao_type):
+def maneuver_plausible(icao_type, extra_exclude=None):
     """True if a maneuvering aircraft of this type could plausibly be doing air-show aerobatics
-    (i.e. it is not a known non-aerobatic trainer/tourer/helicopter). Unknown type -> allowed."""
-    return (icao_type or "").upper() not in NON_AEROBATIC
+    (i.e. it is not a known non-aerobatic trainer/tourer/helicopter). Unknown type -> allowed.
+    extra_exclude: optional admin-added designators to also treat as non-aerobatic."""
+    t = (icao_type or "").upper()
+    return t not in NON_AEROBATIC and not (extra_exclude and t in extra_exclude)
+
+
+_ALL_SET = set(all_types())
+
+
+def is_airshow_type(icao_type, extra=None):
+    """True if the ICAO type is a curated air-show type, or an admin-added extra type."""
+    t = (icao_type or "").upper()
+    return bool(t) and (t in _ALL_SET or bool(extra and t in extra))

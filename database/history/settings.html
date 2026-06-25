@@ -24,6 +24,10 @@
   legend { color: #9aa3b2; font-size: 12px; padding: 0 6px; }
   .row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
   .row label { width: 150px; color: #b9c1cd; flex: none; }
+  .row textarea { background: #0f1115; color: #e6e6e6; border: 1px solid #333; border-radius: 4px;
+                  padding: 6px 8px; font: 13px/1.4 ui-monospace, monospace; resize: vertical; }
+  #ac_watch input { background: #0f1115; color: #e6e6e6; border: 1px solid #333; border-radius: 4px; padding: 4px 7px; font-size: 13px; }
+  #ac_builtin b { color: #b9c1cd; }
   input[type=text], input[type=number], input[type=password] { flex: 1; background: #0f1115; color: #e6e6e6;
     border: 1px solid #333; border-radius: 4px; padding: 6px 8px; font-size: 13px; }
   input[type=checkbox] { width: 16px; height: 16px; }
@@ -65,6 +69,7 @@
     <button class="subtab admin-only" data-p="integrations">Integrations</button>
     <button class="subtab admin-only" data-p="import">Historical import</button>
     <button class="subtab admin-only" data-p="users">Users</button>
+    <button class="subtab admin-only" data-p="airshow">Air show</button>
     <button class="subtab" data-p="prefs">My preferences</button>
   </div>
 
@@ -282,6 +287,45 @@
       <div class="actions" style="margin-top:12px"><button id="users_refresh" class="ghost mini">Refresh</button></div>
     </fieldset>
   </section>
+
+  <section class="panel admin-only" id="p_airshow">
+    <fieldset>
+      <legend>Air-show aircraft — customise detection</legend>
+      <div class="help wide">Tune which aircraft count as “air show”, on top of the built-in lists. Changes
+        apply to the History <b>Patterns</b> views, the Live <b>✈ Air show</b> filter, and maneuver alerts.
+        Type designators are ICAO codes (e.g. <code>P51</code>, <code>EA30</code>); separate with spaces or
+        commas. After editing, <b>rebuild flight patterns</b> (Historical import tab) to re-tag past flights.</div>
+      <div id="as_cfg_msg" class="help wide"></div>
+      <div class="row"><label>Extra air-show types</label>
+        <textarea id="ac_extra_types" rows="2" placeholder="e.g. RV8, GLAS, YK11" style="flex:1;min-width:260px"></textarea></div>
+      <div class="help">Added to the air-show type list — these always count as air-show aircraft.</div>
+      <div class="row"><label>Extra excluded types</label>
+        <textarea id="ac_extra_exclude" rows="2" placeholder="e.g. C172, PA28" style="flex:1;min-width:260px"></textarea></div>
+      <div class="help">Never flagged by the maneuvering test (for non-aerobatic types that slip through).</div>
+      <div class="actions" style="margin-top:10px"><button id="ac_save">Save</button></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Watchlist — specific aircraft always treated as air show</legend>
+      <div class="help wide">Pin known performers by registration (tail number) and/or ICAO hex — the most
+        reliable way to flag a specific display aircraft regardless of its type or how it flies.</div>
+      <div class="tblwrap">
+        <table class="users" id="ac_watch">
+          <thead><tr><th>Registration</th><th>ICAO hex</th><th>Note</th><th></th></tr></thead>
+          <tbody id="ac_watch_rows"></tbody>
+        </table>
+      </div>
+      <div class="actions" style="margin-top:10px">
+        <button id="ac_watch_add" class="ghost mini">+ Add aircraft</button>
+        <button id="ac_save2">Save</button>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Built-in lists (reference)</legend>
+      <div id="ac_builtin" class="help wide">…</div>
+    </fieldset>
+  </section>
 </main>
 
 <script>
@@ -294,7 +338,7 @@ async function post(path, body){
 }
 
 // ---- sub-tabs ----
-const ADMIN_PANELS = ['display', 'integrations', 'import', 'users'];
+const ADMIN_PANELS = ['display', 'integrations', 'import', 'users', 'airshow'];
 const PANELS = ADMIN_PANELS.concat(['prefs']);
 let isAdmin = true;
 function showPanel(name){
@@ -304,6 +348,7 @@ function showPanel(name){
   if (location.hash.slice(1) !== name) history.replaceState(null, '', '#' + name);
   if (name === 'users') loadUsers();
   if (name === 'import'){ loadImport(); loadPatternBuild(); }
+  if (name === 'airshow') loadAirshowCfg();
   if (name === 'display') populateDisplay();
   if (name === 'prefs') populatePrefs();
 }
@@ -464,6 +509,50 @@ $('as_stop').onclick    = async () => { await post('api/patterns/build-stop', {}
 
 // keep the import progress + live-ingestion + air-show build status fresh while the panel is open
 setInterval(() => { if ($('p_import').classList.contains('on')){ loadImport(); loadPatternBuild(); } }, 3000);
+
+// ---- air-show customisation (admin) ----
+let acWatch = [];        // [{reg,hex,note}]
+async function loadAirshowCfg(){
+  let j;
+  try { j = await (await fetch('api/airshow/custom')).json(); }
+  catch(e){ $('as_cfg_msg').textContent = 'could not load: ' + e; return; }
+  const c = j.config || {};
+  $('ac_extra_types').value = (c.extra_types || []).join(', ');
+  $('ac_extra_exclude').value = (c.extra_exclude || []).join(', ');
+  acWatch = (c.watch || []).map(w => ({ reg: w.reg||'', hex: w.hex||'', note: w.note||'' }));
+  renderWatch();
+  renderBuiltin(j.builtin || {});
+  $('as_cfg_msg').textContent = '';
+}
+function renderWatch(){
+  const tb = $('ac_watch_rows'); tb.innerHTML = '';
+  if (!acWatch.length){ tb.innerHTML = '<tr><td colspan="4" class="sub">No watched aircraft yet.</td></tr>'; return; }
+  acWatch.forEach((w, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><input data-i="${i}" data-k="reg" value="${esc(w.reg)}" placeholder="C-GXYZ" style="width:120px"></td>`
+      + `<td><input data-i="${i}" data-k="hex" value="${esc(w.hex)}" placeholder="ab1234" style="width:110px"></td>`
+      + `<td><input data-i="${i}" data-k="note" value="${esc(w.note)}" placeholder="optional" style="width:170px"></td>`
+      + `<td><button class="mini danger" data-del="${i}">✕</button></td>`;
+    tb.appendChild(tr);
+  });
+  tb.querySelectorAll('input').forEach(inp => inp.oninput = e => {
+    acWatch[+e.target.dataset.i][e.target.dataset.k] = e.target.value; });
+  tb.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { acWatch.splice(+b.dataset.del, 1); renderWatch(); });
+}
+function renderBuiltin(b){
+  const cats = (b.categories || []).map(c => `<b>${esc(c.label)}:</b> ${esc((c.types||[]).join(', '))}`).join('<br>');
+  $('ac_builtin').innerHTML = cats + (b.non_aerobatic ? `<br><br><b>Non-aerobatic (excluded):</b> ${esc(b.non_aerobatic.join(', '))}` : '');
+}
+async function saveAirshowCfg(){
+  const body = { extra_types: $('ac_extra_types').value, extra_exclude: $('ac_extra_exclude').value,
+                 watch: acWatch.filter(w => (w.reg||'').trim() || (w.hex||'').trim()) };
+  const r = await post('api/airshow/custom', body);
+  if (r.ok){ $('as_cfg_msg').innerHTML = '<b class="imp-done">Saved.</b> Rebuild flight patterns (Historical import tab) to re-tag past flights.'; loadAirshowCfg(); }
+  else $('as_cfg_msg').innerHTML = '<b class="err">' + esc(r.error || 'save failed') + '</b>';
+}
+$('ac_watch_add').onclick = () => { acWatch.push({ reg:'', hex:'', note:'' }); renderWatch(); };
+$('ac_save').onclick = saveAirshowCfg;
+$('ac_save2').onclick = saveAirshowCfg;
 
 // ---- users ----
 let meSub = null;

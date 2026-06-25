@@ -178,6 +178,31 @@ class AltTracker:
         return [s for s in dq if s[0] >= now - window_sec]
 
 
+# Admin-added non-aerobatic types (from the history-api's airshow_custom table), refreshed ~30s.
+EXTRA_EXCLUDE = set()
+_extra_exclude_at = [0.0]
+
+
+def load_extra_exclude():
+    now = time.time()
+    if now - _extra_exclude_at[0] < 30:
+        return
+    _extra_exclude_at[0] = now
+    global EXTRA_EXCLUDE
+    try:
+        rows = fetch("SELECT config FROM airshow_custom WHERE id=1")
+    except psycopg.Error:
+        return                                  # table not created yet (history-api owns it)
+    cfg = (rows[0]["config"] if rows else {}) or {}
+    vals = cfg.get("extra_exclude") or []
+    s = set()
+    for x in (vals if isinstance(vals, list) else [vals]):
+        for tok in str(x).replace(",", " ").split():
+            if tok.strip():
+                s.add(tok.strip().upper())
+    EXTRA_EXCLUDE = s
+
+
 # --- matching ---------------------------------------------------------------
 def _txt_match(pattern, value):
     if not pattern:
@@ -261,7 +286,7 @@ def matches_conditions(cond, p, tracker=None):
     if man:
         if tracker is None:
             return False
-        if not airshow_types.maneuver_plausible(p["icao_type"]):
+        if not airshow_types.maneuver_plausible(p["icao_type"], EXTRA_EXCLUDE):
             return False
         pts = tracker.points(p["hex"], float(man.get("window_sec") or 180))
         m = maneuver.metrics([(t, al, la, lo) for (t, al, la, lo) in pts])
@@ -486,6 +511,8 @@ def main():
             log.warning("DB unavailable: %s", e)
             time.sleep(min(INTERVAL * 2, 30))
             continue
+
+        load_extra_exclude()        # admin-added non-aerobatic types (so maneuver rules match the UI)
 
         mqtt_up = mqtt_mgr.ensure(cfg)
         if mqtt_up:
