@@ -123,6 +123,7 @@
             -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border: 1px solid #313845;
             border-radius: 12px; padding: 9px 11px; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
   #legend .lg-title { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: #8a93a2; margin-bottom: 6px; text-align: center; }
+  #legend.flt .lg-title { color: #6cc1ff; }
   #legend .lg-body { display: flex; gap: 7px; height: 124px; }
   #legend .lg-bar { width: 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,.12); }
   #legend .lg-ticks { display: flex; flex-direction: column; justify-content: space-between; font-size: 10px;
@@ -219,10 +220,10 @@
   </div>
 
   <div id="legend">
-    <div class="lg-title">Altitude</div>
+    <div class="lg-title" id="lgtitle">Altitude</div>
     <div class="lg-body">
       <div class="lg-bar" id="lgbar"></div>
-      <div class="lg-ticks"><span>40k+</span><span>30k</span><span>20k</span><span>10k</span><span>0 ft</span></div>
+      <div class="lg-ticks" id="lgticks"><span>40k</span><span>30k</span><span>20k</span><span>10k</span><span>0</span></div>
     </div>
   </div>
   <div id="acphoto"></div>
@@ -462,6 +463,32 @@ function altColor(altitude){
   h = ((h % 360) + 360) % 360;
   return `hsl(${h.toFixed(0)},88%,${l.toFixed(0)}%)`;
 }
+// A selected flight is coloured on an auto-ranged scale (its own min..max altitude stretched over
+// the full spectrum) so small 50-500 ft changes -- loops, circuits, terrain-following -- show up on
+// the trail instead of one flat colour. The legend ticks rescale to match. Null = absolute scale.
+let altScale = null;
+const ALT_SPAN_FLOOR = 100;
+function setAltScale(alts){
+  const v = alts.filter(a => a!=null && a!=='ground').map(a => +a);
+  if (v.length < 2){ altScale = null; return; }
+  let lo = Math.min(...v), hi = Math.max(...v);
+  if (hi - lo < ALT_SPAN_FLOOR){ const mid=(lo+hi)/2; lo=mid-ALT_SPAN_FLOOR/2; hi=mid+ALT_SPAN_FLOOR/2; }
+  altScale = { lo, hi };
+}
+function altColorFor(alt){
+  if (altScale && alt!=null && alt!=='ground'){
+    const t = Math.min(1, Math.max(0, (+alt - altScale.lo)/(altScale.hi - altScale.lo)));
+    return altColor(t * 45000);
+  }
+  return altColor(alt);
+}
+function altLblFt(ft){ return Math.abs(ft)>=1000 ? (ft/1000).toFixed(Math.abs(ft)>=10000?0:1)+'k' : String(Math.round(ft)); }
+function refreshLegend(){
+  const top = altScale ? altScale.hi : 40000, bot = altScale ? altScale.lo : 0;
+  $('lgticks').innerHTML = [0,1,2,3,4].map(i => `<span>${altLblFt(top-(top-bot)*i/4)}</span>`).join('');
+  $('lgtitle').textContent = altScale ? ('✈ '+altLblFt(bot)+'–'+altLblFt(top)+' ft') : 'Altitude';
+  $('legend').classList.toggle('flt', !!altScale);
+}
 function hue(s){ let h=0; for (let i=0;i<s.length;i++) h=(h*31 + s.charCodeAt(i))>>>0; return 'hsl('+(h%360)+',70%,60%)'; }
 function setStatus(extra){ const el = $('status'); if (el) el.textContent = searchMsg + (extra ? ' — ' + extra : ''); }
 
@@ -627,18 +654,21 @@ async function drawSingle(f){
   traceCache[f.id] = pts;
   if (!pts.length){ setStatus(`${f.callsign||f.icao_hex}: no trail on disk (aged out, or before globe-history was collected)`); return; }
   // A selected single flight always shows its trail (the icon/trail toggle only governs the
-  // multi-flight overview), plus the replay marker.
+  // multi-flight overview), plus the replay marker. Auto-range the colour to this flight so small
+  // altitude changes (loops/circuits) are visible; the legend ticks rescale to match.
+  setAltScale(pts.map(x => x[3]));
   for (let i=1;i<pts.length;i++){
     const seg = L.polyline([[pts[i-1][1],pts[i-1][2]],[pts[i][1],pts[i][2]]],
-      { color: altColor(pts[i][3]), weight: 3, opacity: .9, bubblingMouseEvents: false });
+      { color: altColorFor(pts[i][3]), weight: 3, opacity: .9, bubblingMouseEvents: false });
     seg.on('click', ()=> toggleId(f.id));
     seg.addTo(trailLayer);
   }
+  refreshLegend();
   // Rest the plane at the END of the trail (latest position) with the trail behind it, like the
   // Live map; pressing play replays from the start. Same altitude gradient as Live.
   markerCat = f.icao_type;
   const last = pts.length - 1;
-  marker = L.marker([pts[last][1],pts[last][2]], { icon: makePlaneIcon(markerCat, altColor(pts[last][3]), headingAt(last)),
+  marker = L.marker([pts[last][1],pts[last][2]], { icon: makePlaneIcon(markerCat, altColorFor(pts[last][3]), headingAt(last)),
     interactive:false, zIndexOffset:1000, keyboard:false }).addTo(trailLayer);
   lastBounds = L.latLngBounds(pts.map(p=>[p[1],p[2]])).pad(0.1);
   map.fitBounds(lastBounds);
@@ -650,6 +680,7 @@ async function drawSingle(f){
 
 // Many aircraft (or "all in range"): one light line per flight, no scrubber.
 async function drawMany(ids, isAll){
+  altScale = null; refreshLegend();   // overview uses the absolute altitude scale
   const capped = ids.slice(0, MAX_DRAW);
   setStatus('loading trails…');
   let j;
@@ -696,7 +727,7 @@ async function drawMany(ids, isAll){
 function showPoint(i){
   const p = pts[i]; if(!p || !marker) return;
   marker.setLatLng([p[1],p[2]]);
-  marker.setIcon(makePlaneIcon(markerCat, altColor(p[3]), headingAt(i)));
+  marker.setIcon(makePlaneIcon(markerCat, altColorFor(p[3]), headingAt(i)));
   $('ptlabel').textContent = `${fmtUTC(p[0])} · ${p[3]!=null?p[3]+' ft':'—'} · ${i+1}/${pts.length}`;
 }
 $('slider').oninput = e => showPoint(+e.target.value);
@@ -720,7 +751,7 @@ document.querySelectorAll('#presets button').forEach(b=> b.onclick = ()=>{
 $('go').onclick = ()=> doSearch();
 $('pagesize').onchange = ()=> doSearch();   // change the max -> reload the range
 $('clear').onclick = ()=>{
-  selected.clear(); flights = []; byId.clear(); pts = []; traceCache = {};
+  selected.clear(); flights = []; byId.clear(); pts = []; traceCache = {}; altScale = null; refreshLegend();
   ['q','callsign','registration','type','operator'].forEach(k=> $(k).value='');
   $('mil').value = 'any';
   $('rows').innerHTML=''; trailLayer.clearLayers(); stopAnim(); $('replay').classList.remove('on'); hidePhoto();
