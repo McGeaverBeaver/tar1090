@@ -73,6 +73,26 @@
   #info .mil { color: #ff6b6b; }
   #status { position: absolute; left: 304px; bottom: 10px; z-index: 600; background: rgba(20,22,26,.9); border: 1px solid #2c313a;
             border-radius: 8px; padding: 6px 11px; color: #cdd5e0; font-size: 12px; max-width: 50%; }
+  /* ground view (observer sky) — shared with the History page */
+  #groundview { position: absolute; left: 50%; transform: translateX(-50%); bottom: 56px; z-index: 660;
+                width: min(700px, calc(100% - 24px)); display: none; overflow: hidden;
+                background: rgba(12,15,20,.85); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+                border: 1px solid #313845; border-radius: 14px; box-shadow: 0 18px 48px rgba(0,0,0,.6); }
+  #groundview.on { display: block; }
+  #gv-hd { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12px; color: #cdd5e0; border-bottom: 1px solid rgba(255,255,255,.06); }
+  #gv-hd .sp { flex: 1; } #gv-hd b { color: #6cc1ff; font-weight: 600; }
+  #gv-hd .m { cursor: pointer; color: #9aa3b2; font-size: 16px; padding: 0 4px; } #gv-hd .m:hover { color: #fff; }
+  #gv-canvas { display: block; width: 100%; height: 300px; background: #0a0e16; }
+  #gv-ctrls { display: flex; align-items: center; gap: 8px; padding: 7px 12px 2px; }
+  #gv-ctrls #gv-play { background: #2d6cdf; color: #fff; border: 0; border-radius: 999px; padding: 4px 12px; cursor: pointer; }
+  #gv-ctrls #gv-scrub { flex: 1; }
+  #gv-readout { font: 11px/1.5 ui-monospace, monospace; color: #cbd3df; padding: 4px 12px; display: flex; gap: 16px; flex-wrap: wrap; }
+  #gv-readout b { color: #fff; font-weight: 600; }
+  #gv-hint { font-size: 10px; color: #6b7480; padding: 0 12px 8px; }
+  .obsdot { width: 16px; height: 16px; border-radius: 50%; background: #2ec86b; border: 2px solid #fff;
+            box-shadow: 0 0 0 4px rgba(46,200,107,.35), 0 1px 4px rgba(0,0,0,.6); cursor: grab; }
+  .gvplane { background: transparent; border: 0; }
+  @media (max-width: 760px){ #groundview { bottom: 8px; } #gv-canvas { height: 200px; } }
 
   /* live aircraft list — transparent glass panel, docked left, minimizable */
   #list { position: absolute; left: 10px; top: 10px; max-height: calc(100% - 20px); width: 322px; z-index: 610;
@@ -176,6 +196,7 @@
     <button class="tgl" id="t-recenter" title="Zoom to fit every aircraft">⤢ Fit</button>
     <button class="tgl" id="t-filter" title="Filter by altitude / military / type">⏷ Filter</button>
     <button class="tgl" id="t-airshow" title="Show only likely air-show aircraft: aerobatic / warbird / jet-demo types, or anything maneuvering with big altitude swings">✈ Air show</button>
+    <button class="tgl" id="t-ground" title="Watch the aircraft now in the list as they'd look from the ground (your receiver site)">👁 Ground</button>
   </div>
   <span id="count">—</span>
   <span id="updated"></span>
@@ -224,10 +245,20 @@
     <div id="info"></div>
   </div>
   <div id="status">Connecting to the live feed…</div>
+
+  <div id="groundview">
+    <div id="gv-hd"><span>Ground view — looking up from <b id="gv-from">your receiver</b></span>
+      <span class="sp"></span><span class="m" id="gv-close" title="Close">✕</span></div>
+    <canvas id="gv-canvas"></canvas>
+    <div id="gv-ctrls"><button id="gv-play" style="display:none">▶</button><input id="gv-scrub" type="range" min="0" max="0" value="0" style="display:none"></div>
+    <div id="gv-readout"></div>
+    <div id="gv-hint">Live — the aircraft now in the list, as seen from the green dot (drag it to move). Across = compass direction, up = angle above the horizon; the sky is tinted for the current time.</div>
+  </div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="acicons.js"></script>
+<script src="groundview.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const map = L.map('map', { worldCopyJump:true, zoomControl:false }).setView([40, -74], 7);
@@ -549,6 +580,7 @@ function render(j){
 
   renderList(acs);
   if (selectedHex) renderInfo(lastData.get(selectedHex));   // keep the bubble live
+  if (gv.isOpen()) gvLiveUpdate();                          // refresh the ground view with this tick
 }
 
 // ---- live aircraft list (tar1090-style, modern glass, sortable + minimizable) -------------
@@ -705,6 +737,44 @@ function applyLabels(){
 }
 function fitAll(){ const pts = []; for (const e of markers.values()){ const ll = e.marker.getLatLng(); pts.push([ll.lat, ll.lng]); }
   if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.15)); }
+
+// ---- ground view (observer sky) — live: the aircraft now in the list, viewed from your site ----
+function gvHue(s){ let h=0; for (let i=0;i<s.length;i++) h=(h*31 + s.charCodeAt(i))>>>0; return 'hsl('+(h%360)+',70%,62%)'; }
+const gv = new GroundView({ altColor: altColor, onClose: gvOnClose });
+let gvObs = null, gvObsMarker = null;
+function gvLiveTracks(){
+  const out = [];
+  for (const [hex, a] of lastData){           // lastData already respects the Ground/Air-show filters
+    const hist = altHistC.get(hex); if (!hist || hist.length < 2) continue;
+    out.push({ id: hex, label: (a.flight || a.r || hex).trim(),
+               color: (a.military || isMil(a.squawk)) ? '#ff5d5d' : gvHue(hex),
+               points: hist.map(p => [p[0], p[2], p[3], p[1]]) });   // [t,alt,lat,lon] -> [t,lat,lon,alt]
+    if (out.length >= 14) break;
+  }
+  return out;
+}
+function gvCentroidLive(tr){ let la=0, lo=0, n=0; for (const t of tr) for (const p of t.points){ la+=p[1]; lo+=p[2]; n++; } return n ? {lat:la/n, lon:lo/n} : null; }
+function gvPlaceObs(){
+  if (gvObsMarker) map.removeLayer(gvObsMarker);
+  if (!gvObs) return;
+  gvObsMarker = L.marker([gvObs.lat, gvObs.lon], { draggable: true, zIndexOffset: 2000,
+    icon: L.divIcon({ className: 'gvplane', html: '<div class="obsdot"></div>', iconSize:[16,16], iconAnchor:[8,8] }) }).addTo(map);
+  gvObsMarker.bindTooltip('You are here — drag to move', { direction:'top', offset:[0,-8] });
+  gvObsMarker.on('drag', ()=>{ const ll = gvObsMarker.getLatLng(); gvObs = { lat: ll.lat, lon: ll.lng };
+    $('gv-from').textContent = `${ll.lat.toFixed(4)}, ${ll.lng.toFixed(4)}`; gv.setObserver(ll.lat, ll.lng); });
+}
+function gvLiveUpdate(){ if (gv.isOpen()) gv.updateTracks(gvLiveTracks()); }
+function gvOnClose(){ if (gvObsMarker){ map.removeLayer(gvObsMarker); gvObsMarker = null; } $('t-ground').classList.remove('on'); }
+function gvOpenLive(){
+  const tr = gvLiveTracks();
+  if (!tr.length){ $('status').style.display='block'; $('status').textContent = 'No aircraft with a position to show yet — let the feed run a few seconds.'; return; }
+  if (!gvObs) gvObs = siteLoc ? { lat: siteLoc.lat, lon: siteLoc.lon } : map.getCenter() && { lat: map.getCenter().lat, lon: map.getCenter().lng };
+  $('gv-from').textContent = siteLoc ? 'your receiver' : 'the map centre';
+  gvPlaceObs();
+  $('t-ground').classList.add('on');
+  gv.open(tr, gvObs, { live: true });
+}
+$('t-ground').onclick = ()=> gv.isOpen() ? gv.close() : gvOpenLive();
 
 $('t-labels').onclick   = e => { showLabels = !showLabels; e.currentTarget.classList.toggle('on', showLabels); applyLabels(); };
 // Trails: show/hide the SELECTED aircraft's trail. With it off, picking a plane shows no trail.

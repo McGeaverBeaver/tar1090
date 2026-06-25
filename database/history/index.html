@@ -133,13 +133,15 @@
   #gv-hd .m { cursor: pointer; color: #9aa3b2; font-size: 16px; padding: 0 4px; }
   #gv-hd .m:hover { color: #fff; }
   #gv-canvas { display: block; width: 100%; height: 300px; background: #0a0e16; cursor: default; }
-  #gv-readout { font: 11px/1.5 ui-monospace, monospace; color: #cbd3df; padding: 6px 12px; display: flex; gap: 16px; flex-wrap: wrap; }
+  #gv-ctrls { display: flex; align-items: center; gap: 8px; padding: 7px 12px 2px; }
+  #gv-ctrls #gv-play { background: #2d6cdf; color: #fff; border: 0; border-radius: 999px; padding: 4px 12px; cursor: pointer; }
+  #gv-ctrls #gv-scrub { flex: 1; }
+  #gv-readout { font: 11px/1.5 ui-monospace, monospace; color: #cbd3df; padding: 4px 12px; display: flex; gap: 16px; flex-wrap: wrap; }
   #gv-readout b { color: #fff; font-weight: 600; }
   #gv-hint { font-size: 10px; color: #6b7480; padding: 0 12px 8px; }
   .obsdot { width: 16px; height: 16px; border-radius: 50%; background: #2ec86b; border: 2px solid #fff;
             box-shadow: 0 0 0 4px rgba(46,200,107,.35), 0 1px 4px rgba(0,0,0,.6); cursor: grab; }
-  #replay #ground { background: rgba(42,47,56,.7); }
-  #replay #ground.on { background: #2d6cdf; }
+  .gvplane { background: transparent; border: 0; }
   @media (max-width: 760px){ #groundview { bottom: 8px; } #gv-canvas { height: 200px; } }
   /* modern altitude colour legend (matches the Live map) */
   #legend { position: absolute; right: 12px; bottom: 12px; z-index: 600; background: rgba(20,23,28,.78);
@@ -224,6 +226,7 @@
   <button id="showall" class="toggle" title="Load every flight for the time period (ignores the Max limit). The list still narrows to the map view as you zoom.">Show all</button>
   <button id="viewbtn" title="Switch the map between altitude-coloured trails and directional aircraft icons">〰 Altitude trails</button>
   <button id="multi" class="toggle ghost" title="Multi-select: when on, each tap adds/removes a flight">Multi</button>
+  <button id="ground" class="toggle ghost" title="Watch the selected flight(s) as they'd look from the ground — select several (Multi) to see a formation">👁 Ground view</button>
   <div id="colmenu-wrap">
     <button id="colbtn" title="Show / hide columns">Columns ▾</button>
     <div id="colmenu"></div>
@@ -262,20 +265,21 @@
     <button id="play">▶</button>
     <input id="slider" type="range" min="0" max="0" value="0">
     <span id="ptlabel"></span>
-    <button id="ground" title="See this flight as it would look from a point on the ground (drag the green dot on the map to stand somewhere else)">👁 Ground view</button>
   </div>
 
   <div id="groundview">
     <div id="gv-hd"><span>Ground view — looking up from <b id="gv-from">the crowd line</b></span>
       <span class="sp"></span><span class="m" id="gv-close" title="Close">✕</span></div>
     <canvas id="gv-canvas"></canvas>
+    <div id="gv-ctrls"><button id="gv-play">▶</button><input id="gv-scrub" type="range" min="0" max="0" value="0"></div>
     <div id="gv-readout"></div>
-    <div id="gv-hint">Drag the green dot on the map to move where you're standing. Across = compass direction, up = angle above the horizon; planes look bigger when they're closer.</div>
+    <div id="gv-hint">Drag the green dot on the map to move where you're standing. Across = compass direction, up = angle above the horizon; planes look bigger when they're closer, and the sky is tinted for the time of day.</div>
   </div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="acicons.js"></script>
+<script src="groundview.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const pad = n => String(n).padStart(2, '0');
@@ -763,15 +767,15 @@ async function drawSingle(f){
   lastBounds = L.latLngBounds(pts.map(p=>[p[1],p[2]])).pad(0.1);
   map.fitBounds(lastBounds);
   const s=$('slider'); s.max=last; s.value=last; showPoint(last);
-  $('replay').classList.add('on');
+  if (!gv.isOpen()) $('replay').classList.add('on');   // ground view owns the player while it's open
   const srcLabel = j.source==='heatmap' ? 'heatmap' : j.source==='live' ? 'live (in progress)' : 'full trace';
   setStatus(`${f.callsign||f.icao_hex}: ${pts.length} points · ${srcLabel} — play to replay; click the trail or its row to deselect`);
-  refreshGround();   // if the ground view is open, re-project this flight from the observer
+  gvRefresh();   // if the ground view is open, re-project this flight from the observer
 }
 
 // Many aircraft (or "all in range"): one light line per flight, no scrubber.
 async function drawMany(ids, isAll){
-  altScale = null; refreshLegend(); closeGround();   // overview: no single-flight ground view
+  altScale = null; refreshLegend();
   const capped = ids.slice(0, MAX_DRAW);
   setStatus('loading trails…');
   let j;
@@ -813,6 +817,7 @@ async function drawMany(ids, isAll){
     return;
   }
   setStatus(`${count} trail(s) shown${more}${trunc} · ${isAll?'all in range':'selected'} — click a line or row to focus; Ctrl/⌘-click or Multi to add`);
+  gvRefresh();   // if the ground view is open (formation / overview), re-project with the cached trails
 }
 
 function showPoint(i){
@@ -820,130 +825,69 @@ function showPoint(i){
   marker.setLatLng([p[1],p[2]]);
   marker.setIcon(makePlaneIcon(markerCat, altColorFor(p[3]), headingAt(i)));
   $('ptlabel').textContent = `${fmtUTC(p[0])} · ${p[3]!=null?p[3]+' ft':'—'} · ${i+1}/${pts.length}`;
-  if (groundOn) drawGround(i);
 }
 $('slider').oninput = e => showPoint(+e.target.value);
 
-// ===== observer "ground view" =================================================================
-// Projects the selected flight's trail to how it would look from a point on the ground: each fix
-// becomes an azimuth (compass bearing observer->aircraft) and an elevation angle above the horizon
-// (atan2 of altitude over ground distance). It's literally the line of sight your eye follows.
-let groundOn = false, observer = null, obsMarker = null, skyPts = [], gvView = null;
+// ===== observer "ground view" (shared GroundView module) =====================================
+// Watch the selected flight(s) as they'd look from a point on the ground. Supports a formation
+// (several selected flights at once), a perspective sky, and time-of-day tint (groundview.js).
+let observer = null, obsMarker = null;
 function haversineM(la1, lo1, la2, lo2){
-  const R = 6371000, r = Math.PI/180;
-  const dla = (la2-la1)*r, dlo = (lo2-lo1)*r;
+  const R = 6371000, r = Math.PI/180, dla = (la2-la1)*r, dlo = (lo2-lo1)*r;
   const a = Math.sin(dla/2)**2 + Math.cos(la1*r)*Math.cos(la2*r)*Math.sin(dlo/2)**2;
   return 2*R*Math.asin(Math.sqrt(a));
 }
-function trailCentroid(){ let la=0, lo=0, n=0; for (const p of pts){ la+=p[1]; lo+=p[2]; n++; } return n ? {lat:la/n, lon:lo/n} : null; }
-function buildSky(){
-  skyPts = []; gvView = null;
-  if (!observer || pts.length < 2) return;
-  let prevAz = null, off = 0;
-  let amin=Infinity, amax=-Infinity, emin=Infinity, emax=-Infinity;
-  for (const p of pts){
-    const d = haversineM(observer.lat, observer.lon, p[1], p[2]);
-    let az = bearingDeg([observer.lat, observer.lon], [p[1], p[2]]) + off;
-    if (prevAz != null){ while (az - prevAz > 180){ az -= 360; off -= 360; } while (az - prevAz < -180){ az += 360; off += 360; } }
-    prevAz = az;
-    const h = (p[3]==null ? 0 : Math.max(0, p[3])) * 0.3048;     // ft -> m (approx height above observer)
-    const el = Math.atan2(h, Math.max(d, 1)) * 180/Math.PI;
-    skyPts.push({ az, el, dist: Math.sqrt(d*d + h*h), ground: d, alt: p[3], t: p[0] });
-    amin=Math.min(amin,az); amax=Math.max(amax,az); emin=Math.min(emin,el); emax=Math.max(emax,el);
+const gv = new GroundView({ altColor: altColor, onTime: gvOnTime, onClose: gvOnClose });
+let gvLayer = L.layerGroup();         // per-track position markers on the map at the replay time
+function gvTracks(){                   // selected flights, else everything loaded (capped), with trails
+  const ids = selected.size ? [...selected] : flights.map(f => f.id).slice(0, 12);
+  const out = [];
+  for (const id of ids){
+    const p = ptsFor(id); if (!p || p.length < 2) continue;
+    const f = byId.get(id) || {};
+    out.push({ id, points: p, label: (f.callsign || f.registration || f.icao_type || f.icao_hex || '').trim(),
+               color: f.military ? '#ff5d5d' : hue(f.icao_hex || String(id)) });
   }
-  gvView = { amin, amax, emin: Math.min(emin, 0), emax: Math.max(emax, emin + 5) };
+  return out;
 }
-function compass(az){ az = ((az % 360) + 360) % 360; const c = ['N','NE','E','SE','S','SW','W','NW'][Math.round(az/45)%8];
-  return `${Math.round(az)}° ${c}`; }
-function gvCtx(){ const c = $('gv-canvas'), r = c.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
-  c.width = Math.max(1, r.width*dpr); c.height = Math.max(1, r.height*dpr);
-  const ctx = c.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0); return { ctx, w: r.width, h: r.height }; }
-function drawGround(idx){
-  if (!groundOn) return;
-  const { ctx, w, h } = gvCtx();
-  const g = ctx.createLinearGradient(0,0,0,h); g.addColorStop(0,'#0a1326'); g.addColorStop(1,'#1d2c49');
-  ctx.fillStyle = g; ctx.fillRect(0,0,w,h);
-  if (!skyPts.length || !gvView){ ctx.fillStyle='#6b7480'; ctx.font='12px system-ui'; ctx.fillText('Select a flight, then press ▶ to watch it from the ground.', 16, h/2); return; }
-  const pad = 24;
-  const aspan = Math.max(3, gvView.amax - gvView.amin), espan = Math.max(3, gvView.emax - gvView.emin);
-  const scale = Math.min((w - 2*pad)/aspan, (h - 2*pad)/espan);   // px per degree (uniform -> shapes true)
-  const cx = (gvView.amin + gvView.amax)/2, cy = (gvView.emin + gvView.emax)/2;
-  const X = az => w/2 + (az - cx)*scale, Y = el => h/2 - (el - cy)*scale;
-  // elevation gridlines + horizon
-  ctx.font = '10px ui-monospace, monospace'; ctx.textBaseline = 'middle';
-  for (const e of [0,15,30,45,60,75,90]){
-    if (e < gvView.emin-2 || e > gvView.emax+2) continue;
-    const y = Y(e); ctx.strokeStyle = e===0 ? 'rgba(120,150,200,.55)' : 'rgba(255,255,255,.08)';
-    ctx.lineWidth = e===0 ? 1.5 : 1; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke();
-    ctx.fillStyle = e===0 ? '#9fb4d8' : '#5b6678'; ctx.fillText(e===0 ? 'horizon' : e+'°', 4, y-7);
-  }
-  // azimuth (compass) ticks
-  const step = aspan>120?30:aspan>50?15:aspan>20?10:5;
-  ctx.textBaseline = 'alphabetic';
-  for (let a = Math.ceil(gvView.amin/step)*step; a <= gvView.amax; a += step){
-    const x = X(a); ctx.strokeStyle = 'rgba(255,255,255,.06)'; ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke();
-    ctx.fillStyle = '#7e8aa0'; ctx.textAlign = 'center'; ctx.fillText(compass(a), x, h-6);
-  }
-  ctx.textAlign = 'start';
-  // the trajectory, altitude-coloured
-  ctx.lineWidth = 2.5; ctx.lineJoin = 'round';
-  for (let i=1;i<skyPts.length;i++){
-    ctx.strokeStyle = altColor(skyPts[i].alt);
-    ctx.beginPath(); ctx.moveTo(X(skyPts[i-1].az), Y(skyPts[i-1].el)); ctx.lineTo(X(skyPts[i].az), Y(skyPts[i].el)); ctx.stroke();
-  }
-  // the aircraft at the current replay index
-  const i = Math.max(0, Math.min(skyPts.length-1, idx|0)), s = skyPts[i];
-  const px = X(s.az), py = Y(s.el);
-  // a "drop line" from the horizon up to the plane shows where over the ground it is
-  ctx.strokeStyle = 'rgba(255,255,255,.18)'; ctx.setLineDash([3,3]); ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(px, Y(0)); ctx.lineTo(px, py); ctx.stroke(); ctx.setLineDash([]);
-  // apparent size: angular size of ~a 12 m wingspan at this slant range, in screen px
-  const sz = Math.max(5, Math.min(40, (12 / Math.max(s.dist, 50)) * (180/Math.PI) * scale));
-  const prev = skyPts[Math.max(0,i-1)], rot = Math.atan2(Y(s.el)-Y(prev.el), X(s.az)-X(prev.az));
-  ctx.save(); ctx.translate(px, py); ctx.rotate(rot);
-  ctx.fillStyle = altColor(s.alt); ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(sz*0.9,0); ctx.lineTo(-sz*0.6, sz*0.5); ctx.lineTo(-sz*0.25,0); ctx.lineTo(-sz*0.6,-sz*0.5); ctx.closePath();
-  ctx.fill(); ctx.stroke(); ctx.restore();
-  // readout
-  $('gv-readout').innerHTML =
-    `bearing <b>${compass(s.az)}</b>` +
-    ` · elevation <b>${s.el.toFixed(0)}°</b>` +
-    ` · slant range <b>${s.dist>=1000 ? (s.dist/1000).toFixed(1)+' km' : Math.round(s.dist)+' m'}</b>` +
-    ` · altitude <b>${s.alt!=null ? s.alt.toLocaleString()+' ft' : '—'}</b>`;
-}
-function placeObsMarker(){
+function gvCentroid(tracks){ let la=0, lo=0, n=0; for (const t of tracks) for (const p of t.points){ la+=p[1]; lo+=p[2]; n++; } return n ? {lat:la/n, lon:lo/n} : null; }
+function gvPlaceObs(){
   if (obsMarker) map.removeLayer(obsMarker);
+  if (!observer) return;
   obsMarker = L.marker([observer.lat, observer.lon], { draggable: true, zIndexOffset: 2000,
-    icon: L.divIcon({ className: 'planeicon', html: '<div class="obsdot"></div>', iconSize:[16,16], iconAnchor:[8,8] }) }).addTo(map);
+    icon: L.divIcon({ className: 'gvplane', html: '<div class="obsdot"></div>', iconSize:[16,16], iconAnchor:[8,8] }) }).addTo(map);
   obsMarker.bindTooltip('You are here — drag to move', { direction: 'top', offset: [0,-8] });
   obsMarker.on('drag', ()=>{ const ll = obsMarker.getLatLng(); observer = { lat: ll.lat, lon: ll.lng };
-    $('gv-from').textContent = `${ll.lat.toFixed(4)}, ${ll.lng.toFixed(4)}`; buildSky(); drawGround(+$('slider').value); });
+    $('gv-from').textContent = `${ll.lat.toFixed(4)}, ${ll.lng.toFixed(4)}`; gv.setObserver(ll.lat, ll.lng); });
 }
-// Keep the observer if it's near the new trail (same air-show field); otherwise re-centre it.
-function pickObserver(){
-  const c = trailCentroid();
-  if (!observer || (c && haversineM(observer.lat, observer.lon, c.lat, c.lon) > 50000)){
-    observer = c; $('gv-from').textContent = 'the crowd line';
+function gvOnTime(t, positions){       // drop a marker on the map for each plane at the replay moment
+  gvLayer.clearLayers();
+  for (const p of positions){
+    L.circleMarker([p.lat, p.lon], { radius: 5, color: '#0b0d10', weight: 1, fillColor: p.color || '#6cc1ff',
+      fillOpacity: 1 }).addTo(gvLayer);
   }
 }
-function openGround(){
-  if (pts.length < 2){ setStatus('select a flight first, then open the ground view to watch it from below'); return; }
-  pickObserver();
-  placeObsMarker(); buildSky();
-  groundOn = true; $('ground').classList.add('on'); $('groundview').classList.add('on');
-  drawGround(+$('slider').value || (skyPts.length-1));
-}
-function closeGround(){
-  groundOn = false; $('ground').classList.remove('on'); $('groundview').classList.remove('on');
+function gvOnClose(){
   if (obsMarker){ map.removeLayer(obsMarker); obsMarker = null; }
+  map.removeLayer(gvLayer); $('ground').classList.remove('on');
+  if (selected.size === 1) $('replay').classList.add('on');     // restore the map replay bar
 }
-function refreshGround(){            // a new flight was selected while the ground view is open
-  if (!groundOn) return;
-  pickObserver(); placeObsMarker(); buildSky(); drawGround(+$('slider').value);
+function gvOpen(){
+  const tracks = gvTracks();
+  if (!tracks.length){ setStatus('select one or more flights (use Multi for a formation), then open the ground view'); return; }
+  const c = gvCentroid(tracks);
+  if (!observer || (c && haversineM(observer.lat, observer.lon, c.lat, c.lon) > 50000)){ observer = c; $('gv-from').textContent = 'the crowd line'; }
+  gvPlaceObs(); gvLayer.addTo(map);
+  $('ground').classList.add('on'); $('replay').classList.remove('on');   // ground view becomes the player
+  gv.open(tracks, observer);
 }
-$('ground').onclick = ()=> groundOn ? closeGround() : openGround();
-$('gv-close').onclick = closeGround;
-window.addEventListener('resize', ()=>{ if (groundOn) drawGround(+$('slider').value); });
+function gvRefresh(){                   // selection changed while open -> rebuild tracks, keep viewpoint
+  if (!gv.isOpen()) return;
+  const tracks = gvTracks();
+  if (!tracks.length){ gv.close(); return; }
+  gv.setTracks(tracks); gv.projectAll(); gv.fitView(); gv.setTime(gv.tmax);
+}
+$('ground').onclick = ()=> gv.isOpen() ? gv.close() : gvOpen();
 
 function stopAnim(){ if(anim){ clearInterval(anim); anim=null; $('play').textContent='▶'; } }
 $('play').onclick = ()=>{
@@ -990,7 +934,7 @@ function resetView(){
   doSearch();
 }
 $('clear').onclick = ()=>{
-  selected.clear(); flights = []; byId.clear(); pts = []; traceCache = {}; altScale = null; refreshLegend(); closeGround();
+  selected.clear(); flights = []; byId.clear(); pts = []; traceCache = {}; altScale = null; refreshLegend(); gv.close();
   ['q','callsign','registration','type','operator'].forEach(k=> $(k).value='');
   $('mil').value = 'any';
   $('rows').innerHTML=''; trailLayer.clearLayers(); stopAnim(); $('replay').classList.remove('on'); hidePhoto();
