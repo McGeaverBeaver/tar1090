@@ -46,7 +46,6 @@
   #pager button:hover:not(:disabled) { background: #353c47; color: #fff; }
   #pager button:disabled { opacity: .45; cursor: default; }
   #pager button.toggle.on, #multi.on { background: #2d6cdf; border-color: #3b78e8; color: #fff; box-shadow: 0 0 0 1px rgba(61,120,232,.4); }
-  #pageinfo { color: #cdd5e0; font-size: 12px; font-variant-numeric: tabular-nums; }
   #main { flex: 1; min-height: 0; position: relative; }
   #map { position: absolute; inset: 0; background: #0b0d10; }
   /* floating glass results panel, docked top-left over the map (matches the Live page) */
@@ -84,7 +83,8 @@
   td { overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid rgba(255,255,255,.05); }
   th { position: sticky; top: 0; background: rgba(20,23,28,.94); font-size: 10px; text-transform: uppercase;
        letter-spacing: .3px; color: #8a93a2; user-select: none; }
-  th .thlbl { cursor: pointer; display: inline-block; overflow: hidden; text-overflow: ellipsis; max-width: calc(100% - 10px); vertical-align: bottom; }
+  th .thlbl { cursor: pointer; display: inline-block; overflow: hidden; text-overflow: ellipsis; max-width: calc(100% - 18px); vertical-align: bottom; }
+  th .thar { color: #3b78e8; font-size: 9px; padding-left: 2px; }
   th .grip { position: absolute; top: 0; right: 0; width: 8px; height: 100%; cursor: col-resize; }
   th .grip:hover { background: #3b78e8; }
   tbody tr { cursor: pointer; }
@@ -182,17 +182,14 @@
 </div>
 
 <div id="pager">
-  <label>Per page
+  <label title="Most flights to load for the time range — the list scrolls; the map filters it as you zoom/pan">Max
     <select id="pagesize">
       <option value="100">100</option>
-      <option value="500" selected>500</option>
+      <option value="500">500</option>
       <option value="1000">1000</option>
-      <option value="2000">2000</option>
+      <option value="2000" selected>2000</option>
     </select>
   </label>
-  <button id="prev" disabled>‹ Prev</button>
-  <span id="pageinfo"></span>
-  <button id="next" disabled>Next ›</button>
   <button id="viewbtn" title="Switch the map between altitude-coloured trails and directional aircraft icons">〰 Altitude trails</button>
   <button id="multi" class="toggle ghost" title="Multi-select: when on, each tap adds/removes a flight">Multi</button>
   <div id="colmenu-wrap">
@@ -263,6 +260,21 @@ let flights = [], byId = new Map(), selected = new Set(), multiMode = false;
 let deepLinkSelect = false;   // after a ?icao/?reg deep-link search, auto-focus the newest match
 let sortKey = 'start', sortDir = -1, searchMsg = '';
 
+// Cache of trail points per flight id (filled when trails are drawn) so the list can be filtered
+// to whatever's inside the current map view -- zoom/pan narrows the list to the flights on screen,
+// the same way the Live page lists only aircraft within map bounds. Keys are stringified ids.
+let traceCache = {};
+function ptsFor(id){ return traceCache[id]; }
+// A flight is "in view" if any cached trail point falls inside the current map bounds. Flights with
+// no cached track yet (e.g. trace had <2 points) are kept visible -- we can't position them to hide.
+function inView(id){
+  const tp = ptsFor(id);
+  if (!tp || !tp.length) return true;
+  const b = map.getBounds();
+  for (const p of tp) if (b.contains([p[1], p[2]])) return true;
+  return false;
+}
+
 // ---- columns: order, resize, show/hide (all persisted to localStorage) ------
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 // Order here IS the on-screen order. Operator is last (it's wide); the flight metrics
@@ -326,8 +338,11 @@ function buildHead(){
     th.style.width = (colW[c.key] || c.w) + 'px';
     if (c.title) th.title = c.title;
     const lbl = document.createElement('span'); lbl.className = 'thlbl'; lbl.textContent = c.label;
+    lbl.dataset.sort = c.sort;
     lbl.onclick = ()=>{ sortDir = (sortKey === c.sort) ? -sortDir : 1; sortKey = c.sort; render(); };
     th.appendChild(lbl);
+    const ar = document.createElement('span'); ar.className = 'thar'; ar.dataset.sort = c.sort;
+    th.appendChild(ar);
     const grip = document.createElement('span'); grip.className = 'grip';
     grip.addEventListener('mousedown', (e)=> startColResize(e, c.key, th));
     th.appendChild(grip);
@@ -408,7 +423,7 @@ function initList(){
     window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp);
   });
 }
-let pageOffset = 0, pageSize = 500, total = 0;
+let pageSize = 2000, total = 0;
 const MAX_DRAW = 2000;  // draw as many trails as the page holds (mirrors the API's HISTORY_MAX_TRAILS)
 
 // Altitude -> colour, ported from the main tar1090 UI (ColorByAlt in defaults.js) so a
@@ -483,49 +498,40 @@ async function showPhoto(f){
   img.src = src;
 }
 
-async function doSearch(keepPage){
-  if (!keepPage) pageOffset = 0;       // a fresh search / new filters / new page size -> page 1
-  pageSize = +$('pagesize').value || 500;
+async function doSearch(){
+  pageSize = +$('pagesize').value || 2000;
   const p = new URLSearchParams();
   for (const k of ['q','callsign','registration','type','operator','mil']) if ($(k).value) p.set(k, $(k).value);
   if ($('from').value) p.set('from', toMs($('from').value));
   if ($('to').value)   p.set('to',   toMs($('to').value));
-  p.set('limit', pageSize); p.set('offset', pageOffset);
+  p.set('limit', pageSize);
   searchMsg = 'Searching…'; setStatus();
   try {
     const r = await fetch('api/search?' + p.toString());
     const j = await r.json();
-    if (j.error) { searchMsg = 'Error: ' + j.error; setStatus(); renderPager(); return; }
-    flights = j.flights; selected.clear();
+    if (j.error) { searchMsg = 'Error: ' + j.error; setStatus(); return; }
+    flights = j.flights; selected.clear(); traceCache = {};
     total = (j.total != null) ? j.total : j.count;
-    pageOffset = (j.offset != null) ? j.offset : pageOffset;
-    const lo = total ? pageOffset + 1 : 0, hi = pageOffset + flights.length;
-    searchMsg = `${lo}–${hi} of ${total} flight(s) · ${fmtUTC(j.from)} → ${fmtUTC(j.to)}`;
+    const capped = total > flights.length ? ` (showing ${flights.length})` : '';
+    searchMsg = `${total} flight(s)${capped} · ${fmtUTC(j.from)} → ${fmtUTC(j.to)}`;
     render();
     if (deepLinkSelect && flights.length){          // deep link -> focus the most recent match
       deepLinkSelect = false;
       selected.clear(); selected.add(flights[0].id); markRows();
       if (mq.matches) setMView('map');
     }
-    renderMap();                       // selection (deep link) or this page's trails
-    renderPager();
-  } catch(e){ searchMsg = 'Request failed: ' + e; setStatus(); renderPager(); }
-}
-
-function renderPager(){
-  const pages = Math.max(1, Math.ceil(total / pageSize));
-  const cur = Math.floor(pageOffset / pageSize) + 1;
-  $('pageinfo').textContent = total ? `Page ${cur} / ${pages}` : '';
-  $('rescount').textContent = total ? '· ' + total.toLocaleString() : '';
-  $('prev').disabled = pageOffset <= 0;
-  $('next').disabled = pageOffset + pageSize >= total;
+    renderMap();                       // selection (deep link) or all trails in range
+  } catch(e){ searchMsg = 'Request failed: ' + e; setStatus(); }
 }
 
 function render(){
   flights.sort((a,b)=>{ const x=a[sortKey], y=b[sortKey]; return (x<y?-1:x>y?1:0)*sortDir; });
   byId = new Map(flights.map(f=>[f.id, f]));
-  const tb = $('rows'); tb.innerHTML='';
-  for (const f of flights){
+  // show only flights inside the current map view (selected flights stay regardless, so a focused
+  // flight never vanishes when you pan); the map keeps drawing everything -- zoom is the filter.
+  const visible = flights.filter(f => selected.has(f.id) || inView(f.id));
+  const tb = $('rows'), keep = $('list-body').scrollTop; tb.innerHTML='';
+  for (const f of visible){
     const tr = document.createElement('tr');
     tr.dataset.id = f.id;
     const sw = f.military ? '#ff4d4d' : hue(f.icao_hex || String(f.id));
@@ -536,7 +542,16 @@ function render(){
     tr.onclick = (ev)=> onRow(f, ev);
     tb.appendChild(tr);
   }
+  $('list-body').scrollTop = keep;
+  $('rescount').textContent = total ? (visible.length < total ? `· ${visible.length} of ${total.toLocaleString()}` : `· ${total.toLocaleString()}`) : '';
+  // reflect the active sort column in the header
+  document.querySelectorAll('#headrow .thar').forEach(ar =>
+    ar.textContent = (ar.dataset.sort === sortKey) ? (sortDir < 0 ? '▼' : '▲') : '');
 }
+
+// re-list (no map redraw) when the view changes -- debounced so a drag doesn't thrash the DOM
+let listTimer = null;
+function refreshList(){ clearTimeout(listTimer); listTimer = setTimeout(render, 90); }
 
 function markRows(){ document.querySelectorAll('#rows tr').forEach(tr=>
   tr.classList.toggle('sel', selected.has(+tr.dataset.id))); }
@@ -609,6 +624,7 @@ async function drawSingle(f){
   try { j = await (await fetch('api/trace?' + new URLSearchParams({ hex:f.icao_hex, start:f.start, end:f.end }))).json(); }
   catch(e){ setStatus('trail request failed: ' + e); return; }
   pts = j.points || [];
+  traceCache[f.id] = pts;
   if (!pts.length){ setStatus(`${f.callsign||f.icao_hex}: no trail on disk (aged out, or before globe-history was collected)`); return; }
   // A selected single flight always shows its trail (the icon/trail toggle only governs the
   // multi-flight overview), plus the replay marker.
@@ -641,6 +657,7 @@ async function drawMany(ids, isAll){
   catch(e){ setStatus('trail request failed: ' + e); return; }
   if (j.error){ setStatus('error: ' + j.error); return; }
   const fl = j.flights || {};
+  Object.assign(traceCache, fl);   // remember positions so the list can filter to the map view
   let count = 0; const bounds = [];
   for (const id of capped){
     const tp = fl[id]; if (!tp || tp.length < 2) continue;
@@ -664,6 +681,7 @@ async function drawMany(ids, isAll){
     count++;
   }
   if (bounds.length){ lastBounds = L.latLngBounds(bounds).pad(0.08); map.fitBounds(lastBounds); }
+  render();   // now that positions are cached, narrow the list to whatever's in the map view
   const more = (isAll && flights.length > capped.length) ? ` (first ${capped.length} of ${flights.length})` : '';
   // Trace-file trails are always returned; only the heatmap fallback can be truncated for a
   // very wide range, so we still draw what we have and just note that some were skipped.
@@ -699,17 +717,15 @@ document.querySelectorAll('#presets button').forEach(b=> b.onclick = ()=>{
   $('from').value = localInput(new Date(now - (+b.dataset.h) * 3600e3));
   doSearch();
 });
-$('go').onclick = ()=> doSearch(false);
-$('prev').onclick = ()=>{ if (pageOffset > 0){ pageOffset = Math.max(0, pageOffset - pageSize); doSearch(true); } };
-$('next').onclick = ()=>{ if (pageOffset + pageSize < total){ pageOffset += pageSize; doSearch(true); } };
-$('pagesize').onchange = ()=> doSearch(false);   // new page size -> back to page 1
+$('go').onclick = ()=> doSearch();
+$('pagesize').onchange = ()=> doSearch();   // change the max -> reload the range
 $('clear').onclick = ()=>{
-  selected.clear(); flights = []; byId.clear(); pts = [];
+  selected.clear(); flights = []; byId.clear(); pts = []; traceCache = {};
   ['q','callsign','registration','type','operator'].forEach(k=> $(k).value='');
   $('mil').value = 'any';
   $('rows').innerHTML=''; trailLayer.clearLayers(); stopAnim(); $('replay').classList.remove('on'); hidePhoto();
   $('bell').disabled = false; updateBell();
-  total = 0; pageOffset = 0; renderPager();
+  total = 0; $('rescount').textContent = '';
   searchMsg = 'Cleared.'; setStatus('pick a time range or preset and search');
 };
 $('multi').onclick = ()=>{ multiMode = !multiMode; $('multi').classList.toggle('on', multiMode); };
@@ -781,6 +797,8 @@ initList();
 })();
 // Clicking empty map (not a trail/marker) deselects, returning to the overview.
 map.on('click', ()=>{ if (selected.size){ selected.clear(); markRows(); renderMap(); } });
+// Pan/zoom -> re-list whatever is now inside the map view (the map drawing is untouched).
+map.on('moveend', refreshList);
 
 // mobile: show the list or the map full-screen (one at a time) instead of a cramped split
 const mq = window.matchMedia('(max-width: 760px)');
@@ -798,7 +816,7 @@ function setMView(v){
 }
 // collapsible advanced filters + the search-icon button
 $('advtoggle').onclick = ()=>{ $('adv').classList.toggle('on'); $('advtoggle').classList.toggle('on'); };
-$('searchgo').onclick = ()=> doSearch(false);
+$('searchgo').onclick = ()=> doSearch();
 $('mv-list').onclick = ()=> setMView('list');
 $('mv-map').onclick  = ()=> setMView('map');
 if (mq.matches) setMView('list');
