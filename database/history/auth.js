@@ -15,8 +15,10 @@
     document.head.appendChild(l);
   }
   if (!document.querySelector('link[rel="manifest"]')) linkTag('manifest', 'manifest.webmanifest');
+  if (!document.querySelector('link[rel="icon"]')) linkTag('icon', 'icon.svg');   // avoid /favicon.ico 404
   linkTag('apple-touch-icon', 'icon.svg');
   meta('theme-color', '#0e1016');
+  meta('mobile-web-app-capable', 'yes');                  // standard (apple- variant is deprecated)
   meta('apple-mobile-web-app-capable', 'yes');
   meta('apple-mobile-web-app-status-bar-style', 'black-translucent');
   meta('apple-mobile-web-app-title', 'Flights');

@@ -109,7 +109,7 @@
     // ---- three.js scene ---------------------------------------------------
     _ensure() {
       if (this.three) return true;
-      if (!global.THREE || !global.THREE.WebGLRenderer) return false;
+      if (!global.THREE || !global.THREE.WebGLRenderer || !global.THREE.OrbitControls) return false;
       const T = global.THREE, canvas = $('gv-canvas');
       let renderer;
       try { renderer = new T.WebGLRenderer({ canvas, antialias: true }); } catch (e) { return false; }
