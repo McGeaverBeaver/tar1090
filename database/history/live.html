@@ -128,10 +128,18 @@
             -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border: 1px solid #313845;
             border-radius: 12px; padding: 9px 11px; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
   #legend .lg-title { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: #8a93a2; margin-bottom: 6px; text-align: center; }
+  #legend.tuned .lg-title { color: #fff; cursor: pointer; }
   #legend .lg-body { display: flex; gap: 7px; height: 124px; }
-  #legend .lg-bar { width: 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,.12); }
+  #legend .lg-bar { position: relative; width: 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,.12);
+                    overflow: hidden; cursor: ns-resize; touch-action: none; }
+  /* tuned-altitude window: the band stays vivid, everything outside it dims */
+  #legend .lg-dim  { position: absolute; left: 0; right: 0; background: rgba(8,10,14,.7); pointer-events: none; display: none; }
+  #legend .lg-band { position: absolute; left: 0; right: 0; border-top: 1.5px solid #fff; border-bottom: 1.5px solid #fff;
+                     box-shadow: 0 0 7px rgba(255,255,255,.45); pointer-events: none; display: none; }
+  #legend.tuned .lg-dim, #legend.tuned .lg-band { display: block; }
   #legend .lg-ticks { display: flex; flex-direction: column; justify-content: space-between; font-size: 10px;
                       color: #cdd5e0; font-variant-numeric: tabular-nums; }
+  #legend .lg-hint { font-size: 9px; color: #6b7480; text-align: center; margin-top: 5px; }
   @media (max-width: 760px) {
     #legend, #list { display: none; }
     #bar { flex-wrap: wrap; gap: 8px; padding: 8px 10px; }
@@ -200,9 +208,14 @@
   <div id="legend">
     <div class="lg-title" id="lgtitle">Altitude</div>
     <div class="lg-body">
-      <div class="lg-bar" id="lgbar"></div>
+      <div class="lg-bar" id="lgbar">
+        <div class="lg-dim" id="lgdimtop"></div>
+        <div class="lg-band" id="lgband"></div>
+        <div class="lg-dim" id="lgdimbot"></div>
+      </div>
       <div class="lg-ticks" id="lgticks"></div>
     </div>
+    <div class="lg-hint" id="lghint">drag to tune · wheel = width</div>
   </div>
   <div id="card">
     <div id="photo"></div>
@@ -400,7 +413,9 @@ async function poll(){
   render(j);
 }
 
+let lastJ = null;   // last feed payload, so the altitude tuner can re-filter instantly (no refetch)
 function render(j){
+  lastJ = j;
   const acs = j.aircraft || [];
   if (j.site && !siteLoc){ siteLoc = j.site; $('list-tbl').classList.add('has-dist'); drawRings(); }
   const seen = new Set();
@@ -620,6 +635,7 @@ function readFilters(){
   const arr = ($('f-type').value || '').toUpperCase().split(',').map(s => s.trim().replace(/\*/g,'')).filter(Boolean);
   fType = arr.length ? arr : '';
   $('t-filter').classList.toggle('on', $('filterbar').classList.contains('on') || fAltMin!=null || fAltMax!=null || fMil || !!fType);
+  updateLegendBand();   // mirror a typed alt range onto the legend tuner (and clear it when emptied)
   poll();
 }
 ['f-altmin','f-altmax','f-type'].forEach(id => $(id).addEventListener('input', readFilters));
@@ -637,8 +653,70 @@ function buildLegend(){
     const v = ft * UNITS.alt[settings.alt].f;
     return `<span>${v>=1000 ? (v/1000).toFixed(v>=10000?0:1)+'k' : Math.round(v)}</span>`;
   }).join('');
+  updateLegendBand();   // re-apply the tuned window + range label after a rebuild (e.g. unit change)
+}
+
+// ---- altitude tuner: drag the legend like a fader to show only aircraft in that band ---------
+// The legend maps top = LG_MAX ft, bottom = 0 ft (same scale as the colour gradient). Dragging
+// sets the band centre; the mouse wheel widens/narrows it ("volume"). It just drives the existing
+// fAltMin/fAltMax filter, so the map markers and the list narrow to the tuned range together.
+const LG_MAX = 45000;       // legend top, feet
+let altBuffer = 2000;       // half-width of the tuned band, feet
+function altLbl(ft){ const v = ft * UNITS.alt[settings.alt].f;
+  return v>=1000 ? (v/1000).toFixed(v>=10000?0:1)+'k' : String(Math.round(v)); }
+function updateLegendBand(){
+  const lg = $('legend'); if (!lg) return;
+  if (fAltMin==null && fAltMax==null){ lg.classList.remove('tuned'); $('lgtitle').textContent = 'Altitude · ' + uAlt(); return; }
+  const H = $('lgbar').clientHeight || 124;
+  const lo = Math.max(0, fAltMin!=null ? fAltMin : 0);
+  const hi = Math.min(LG_MAX, fAltMax!=null ? fAltMax : LG_MAX);
+  const yTop = H*(1 - hi/LG_MAX), yBot = H*(1 - lo/LG_MAX);
+  $('lgband').style.top = yTop+'px';  $('lgband').style.height = Math.max(2, yBot-yTop)+'px';
+  $('lgdimtop').style.top = '0px';    $('lgdimtop').style.height = Math.max(0, yTop)+'px';
+  $('lgdimbot').style.top = yBot+'px';$('lgdimbot').style.height = Math.max(0, H-yBot)+'px';
+  lg.classList.add('tuned');
+  $('lgtitle').textContent = altLbl(lo)+'–'+altLbl(hi)+' '+uAlt()+' ✕';
+}
+function setAltBand(lo, hi){
+  lo = Math.max(0, Math.round(lo)); hi = Math.min(LG_MAX, Math.round(hi));
+  if (hi <= lo) hi = lo + 1;
+  fAltMin = lo; fAltMax = hi;
+  $('f-altmin').value = lo; $('f-altmax').value = hi;   // keep the filter bar in sync
+  $('t-filter').classList.add('on');
+  updateLegendBand();
+  if (lastJ) render(lastJ); else poll();               // re-filter instantly from the cached feed
+}
+function clearAltBand(){
+  fAltMin = fAltMax = null;
+  $('f-altmin').value = ''; $('f-altmax').value = '';
+  $('legend').classList.remove('tuned');
+  $('t-filter').classList.toggle('on', $('filterbar').classList.contains('on') || fMil || !!fType);
+  buildLegend();
+  if (lastJ) render(lastJ); else poll();
+}
+function initLegendTuner(){
+  const bar = $('lgbar');
+  const yToAlt = (clientY)=>{ const r = bar.getBoundingClientRect();
+    const y = Math.min(r.height, Math.max(0, clientY - r.top));
+    return LG_MAX * (1 - y/r.height); };
+  let dragging = false;
+  const tune = (clientY)=>{ const c = yToAlt(clientY); setAltBand(c-altBuffer, c+altBuffer); };
+  bar.addEventListener('pointerdown', e=>{ e.preventDefault(); dragging=true;
+    try{ bar.setPointerCapture(e.pointerId); }catch(_){}; tune(e.clientY); });
+  bar.addEventListener('pointermove', e=>{ if (dragging) tune(e.clientY); });
+  const end = e=>{ dragging=false; try{ bar.releasePointerCapture(e.pointerId); }catch(_){}; };
+  bar.addEventListener('pointerup', end); bar.addEventListener('pointercancel', end);
+  bar.addEventListener('dblclick', clearAltBand);
+  $('legend').addEventListener('wheel', e=>{       // wheel = band width ("volume")
+    if (fAltMin==null && fAltMax==null) return;
+    e.preventDefault();
+    altBuffer = Math.min(25000, Math.max(250, altBuffer + (e.deltaY<0 ? 500 : -500)));
+    setAltBand((fAltMin+fAltMax)/2 - altBuffer, (fAltMin+fAltMax)/2 + altBuffer);
+  }, { passive:false });
+  $('lgtitle').addEventListener('click', ()=>{ if ($('legend').classList.contains('tuned')) clearAltBand(); });
 }
 buildLegend();
+initLegendTuner();
 
 // ---- settings gear: unit preferences, persisted -------------------------------------------
 const COLS = [['t','Type'],['alt','Alt'],['gs','Spd'],['squawk','Sqk'],['dist','Dist']];
