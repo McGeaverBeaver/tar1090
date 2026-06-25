@@ -103,6 +103,8 @@
   #colmenu label { display: flex; align-items: center; gap: 6px; padding: 4px 6px; color: #cdd5e0; font-size: 12px; cursor: pointer; border-radius: 4px; }
   #colmenu label:hover { background: #262b33; }
   .mil { color: #ff6b6b; font-weight: 600; }
+  .asb { display: inline-block; font-size: 9px; font-weight: 700; color: #7fd1ff; background: rgba(45,108,223,.22);
+         border: 1px solid rgba(108,193,255,.45); border-radius: 6px; padding: 0 4px; margin-right: 5px; vertical-align: middle; }
   .live { color: #2ec86b; font-weight: 600; font-size: 11px; white-space: nowrap; }
   #replay { position: absolute; left: 408px; right: 116px; bottom: 12px; z-index: 500;
             background: rgba(20,22,26,.92); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
@@ -296,6 +298,16 @@ function histManeuvering(id){
   return rev >= 4;     // many up/down reversals -> aerobatic, not a normal climb-cruise-descent
 }
 function isAirshowFlight(f){ return !!f && (isAirshowType(f.icao_type) || histManeuvering(f.id)); }
+function airshowBadge(f){     // small chip in the list showing WHY a flight qualified
+  if (!airshowMode || !f) return '';
+  const ty = isAirshowType(f.icao_type), mn = histManeuvering(f.id);
+  if (!ty && !mn) return '';
+  const lbl = ty && mn ? 'T+M' : ty ? 'T' : 'M';
+  const title = ty && mn ? 'air-show aircraft type + maneuvering trail'
+              : ty ? 'known air-show aircraft type'
+              : 'maneuvering trail — big altitude swings (loops/wingovers)';
+  return `<span class="asb" title="${title}">✈${lbl}</span>`;
+}
 
 // ---- columns: order, resize, show/hide (all persisted to localStorage) ------
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
@@ -584,14 +596,20 @@ function render(){
     tr.dataset.id = f.id;
     const sw = f.military ? '#ff4d4d' : hue(f.icao_hex || String(f.id));
     let html = `<td class="swatch c_swatch" style="background:${sw}"></td>`;
-    for (const c of COLUMNS) html += `<td class="c_${c.key}">${c.html(f)}</td>`;
+    for (const c of COLUMNS){
+      let cell = c.html(f);
+      if (c.key === 'callsign') cell = airshowBadge(f) + cell;   // why it qualified (when in Air-show view)
+      html += `<td class="c_${c.key}">${cell}</td>`;
+    }
     tr.innerHTML = html;
     if (selected.has(f.id)) tr.classList.add('sel');
     tr.onclick = (ev)=> onRow(f, ev);
     tb.appendChild(tr);
   }
   $('list-body').scrollTop = keep;
-  $('rescount').textContent = total ? (visible.length < total ? `· ${visible.length} of ${total.toLocaleString()}` : `· ${total.toLocaleString()}`) : '';
+  $('rescount').textContent = !total ? ''
+    : airshowMode ? `· ${visible.length} air-show flight${visible.length===1?'':'s'}`
+    : (visible.length < total ? `· ${visible.length} of ${total.toLocaleString()}` : `· ${total.toLocaleString()}`);
   // reflect the active sort column in the header
   document.querySelectorAll('#headrow .thar').forEach(ar =>
     ar.textContent = (ar.dataset.sort === sortKey) ? (sortDir < 0 ? '▼' : '▲') : '');
