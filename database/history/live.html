@@ -249,11 +249,11 @@
 
   <div id="groundview">
     <div id="gv-hd"><span>Ground view — looking up from <b id="gv-from">your receiver</b></span>
-      <span class="sp"></span><span class="m mode" id="gv-mode" title="Switch between fly-around and stand (first-person) view">🎥 Fly</span><span class="m" id="gv-close" title="Close">✕</span></div>
+      <span class="sp"></span><span class="m mode" id="gv-mode" title="Switch camera — Chase / Cockpit / Wing follow the plane · Stand / Orbit are free">🎥 Chase</span><span class="m" id="gv-close" title="Close">✕</span></div>
     <canvas id="gv-canvas"></canvas>
     <div id="gv-ctrls"><button id="gv-play" style="display:none">▶</button><input id="gv-scrub" type="range" min="0" max="0" value="0" style="display:none"></div>
     <div id="gv-readout"></div>
-    <div id="gv-hint">Live 3D — the aircraft now in the list. Drag to look around · scroll / pinch to zoom · drag the green dot on the map to move where you're standing.</div>
+    <div id="gv-hint">Live 3D — the aircraft now in the list. Tap 🎥 to switch camera: <b>Chase</b>, <b>Cockpit</b> and <b>Wing</b> follow the plane · <b>Stand</b> looks up from the ground · <b>Orbit</b> is a free fly-around. Drag the green dot to move where you're standing.</div>
   </div>
 </div>
 
@@ -261,7 +261,7 @@
 <script src="acicons.js"></script>
 <script src="https://unpkg.com/three@0.147.0/build/three.min.js"></script>
 <script src="https://unpkg.com/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
-<script src="groundview.js?v=3d3"></script>
+<script src="groundview.js?v=3d4"></script>
 <script>
 const $ = id => document.getElementById(id);
 const map = L.map('map', { worldCopyJump:true, zoomControl:false }).setView([40, -74], 7);

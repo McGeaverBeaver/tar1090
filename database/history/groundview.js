@@ -58,6 +58,15 @@
 
   const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export';
 
+  // camera presets — icon/label for the header button, plus the field of view each one uses
+  const VIEW_META = {
+    chase:   { icon: '🎥', name: 'Chase',   fov: 55 },
+    cockpit: { icon: '🛫', name: 'Cockpit', fov: 74 },
+    wing:    { icon: '🛩️', name: 'Wing',    fov: 66 },
+    stand:   { icon: '🧍', name: 'Stand',   fov: 58 },
+    orbit:   { icon: '🛰️', name: 'Orbit',   fov: 58 },
+  };
+
   class GroundView {
     constructor(o) {
       o = o || {};
@@ -66,15 +75,19 @@
       this.onClose = o.onClose || (() => {});
       this.observer = null; this.tracks = []; this.t = 0; this.tmin = 0; this.tmax = 0;
       this.live = false; this._open = false; this.three = null;
-      this.mode = 'fly';                         // 'fly' = orbit the action, 'stand' = FPV in place
+      // camera "views": chase / cockpit / wing lock onto the aircraft and follow it like a game cam;
+      // stand = first-person from the ground, orbit = free fly-around. Tap the header button to cycle.
+      this.views = ['chase', 'cockpit', 'wing', 'stand', 'orbit'];
+      this.view = 'chase';
       this.fpv = { yaw: 0, pitch: 18, fov: 58 };
+      this._span = 264; this._follow = null; this._snapCam = true; this._followIdx = 0;
       this._wire();
     }
     _wire() {
       const sc = $('gv-scrub'); if (sc) sc.oninput = () => { this.pause(); this.setTime(+sc.value); };
       const pl = $('gv-play'); if (pl) pl.onclick = () => this.playing ? this.pause() : this.play();
       const cl = $('gv-close'); if (cl) cl.onclick = () => this.close();
-      const md = $('gv-mode'); if (md) md.onclick = () => this.setMode(this.mode === 'fly' ? 'stand' : 'fly');
+      const md = $('gv-mode'); if (md) md.onclick = () => this.cycleView();
       window.addEventListener('resize', () => this._resize());
     }
 
@@ -87,7 +100,7 @@
       if (sc) sc.style.display = this.live ? 'none' : '';
       if (pl) pl.style.display = this.live ? 'none' : '';
       if (!this._ensure()) { this._fallback(); return; }
-      this.setTracks(tracks); this._loadGround(); this.projectAll(); this.fitView(); this.setTime(this.tmax);
+      this.setTracks(tracks); this._loadGround(); this.projectAll(); this.setView(this.view); this.setTime(this.tmax);
       this._resize(); this._start();
     }
     close() {
@@ -123,9 +136,9 @@
       // first-person ("stand") controls: look around in place by dragging, zoom = field of view
       const dom = renderer.domElement, ptrs = new Map(); let pinch = 0;
       const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-      dom.addEventListener('pointerdown', e => { if (this.mode !== 'stand') return; ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); dom.setPointerCapture(e.pointerId); });
+      dom.addEventListener('pointerdown', e => { if (this.view !== 'stand') return; ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); dom.setPointerCapture(e.pointerId); });
       dom.addEventListener('pointermove', e => {
-        if (this.mode !== 'stand' || !ptrs.has(e.pointerId)) return;
+        if (this.view !== 'stand' || !ptrs.has(e.pointerId)) return;
         const p = ptrs.get(e.pointerId);
         if (ptrs.size >= 2) {                              // pinch -> field of view
           const a = [...ptrs.values()]; const d = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
@@ -138,7 +151,7 @@
       });
       const drop = e => { ptrs.delete(e.pointerId); if (ptrs.size < 2) pinch = 0; };
       dom.addEventListener('pointerup', drop); dom.addEventListener('pointercancel', drop);
-      dom.addEventListener('wheel', e => { if (this.mode !== 'stand') return; e.preventDefault();
+      dom.addEventListener('wheel', e => { if (this.view !== 'stand') return; e.preventDefault();
         this.fpv.fov = clamp(this.fpv.fov + Math.sign(e.deltaY) * 3, 20, 85); camera.fov = this.fpv.fov; camera.updateProjectionMatrix(); }, { passive: false });
       // sky dome
       const skyCanvas = document.createElement('canvas'); skyCanvas.width = 8; skyCanvas.height = 256;
@@ -182,7 +195,7 @@
         if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); } });
       while (fleet.children.length) fleet.remove(fleet.children[0]);
       this.three.meshes = {};
-      const EXAG = 22, span = 12 * EXAG;                     // exaggerate ~12 m wingspan so the model is visible
+      const EXAG = 22, span = 12 * EXAG; this._span = span;  // exaggerate ~12 m wingspan so the model is visible
       for (const tr of this.tracks) {
         const col = tr.color || '#6cc1ff';
         // trail (decimated)
@@ -215,7 +228,8 @@
     }
     fitView() {
       if (!this.three) return;
-      if (this.mode === 'stand') { this._standAim(); return; }
+      if (this.view === 'stand') { this._standAim(); return; }
+      if (this._isFollow()) { this._snapCam = true; return; }   // chase/cockpit/wing snap onto the plane next frame
       const c = this.three.controls, m = this._centroid();
       c.target.set(m.x, m.y, m.z);                          // orbit around the action; scroll zooms toward it
       this.three.camera.position.set(m.x * 0.02, Math.max(2, m.y * 0.15), m.z * 0.02 + Math.sign(m.z || -1) * 0.1);
@@ -235,12 +249,48 @@
       cam.lookAt(dir.x * 1000, 2 + dir.y * 1000, dir.z * 1000);
       cam.fov = this.fpv.fov; cam.updateProjectionMatrix();
     }
-    setMode(m) {
-      this.mode = (m === 'stand') ? 'stand' : 'fly';
-      const md = $('gv-mode'); if (md) md.textContent = this.mode === 'stand' ? '🧍 Stand' : '🎥 Fly';
+    setView(v) {
+      if (this.views.indexOf(v) < 0) v = 'chase';
+      this.view = v;
+      const meta = VIEW_META[v], md = $('gv-mode'); if (md) md.textContent = meta.icon + ' ' + meta.name;
       if (!this.three) return;
-      if (this.mode === 'stand') { this.three.controls.enabled = false; this._standAim(); }
-      else { this.three.camera.fov = 58; this.three.camera.updateProjectionMatrix(); this.fitView(); }
+      const cam = this.three.camera, c = this.three.controls;
+      if (v === 'orbit') { c.enabled = true; cam.fov = meta.fov; cam.updateProjectionMatrix(); this.fitView(); }
+      else if (v === 'stand') { c.enabled = false; this.fpv.fov = meta.fov; cam.fov = meta.fov; cam.updateProjectionMatrix(); this._standAim(); }
+      else { c.enabled = false; this._snapCam = true; }   // chase / cockpit / wing: the render loop drives the camera
+    }
+    cycleView() { this.setView(this.views[(this.views.indexOf(this.view) + 1) % this.views.length]); }
+    _isFollow() { return this.view === 'chase' || this.view === 'cockpit' || this.view === 'wing'; }
+    _followMesh() {                                          // the aircraft the game-cam locks onto (first one currently up)
+      const n = this.tracks.length; if (!n || !this.three) return null;
+      for (let k = 0; k < n; k++) { const tr = this.tracks[(this._followIdx + k) % n];
+        const m = this.three.meshes[tr.id]; if (m && m.plane.visible) return m; }
+      return null;
+    }
+    _followCam() {                                           // place + smoothly chase the camera relative to the plane
+      const T = this.three.T, cam = this.three.camera, m = this._followMesh();
+      if (!m) return;                                        // nobody up at this moment -> hold the last camera
+      const pl = m.plane, p = pl.position, s = this._span || 264;
+      const fwd = new T.Vector3(0, 0, 1).applyQuaternion(pl.quaternion);   // nose direction (the model's local +Z)
+      if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1); else fwd.normalize();
+      const up = new T.Vector3(0, 1, 0), right = new T.Vector3().crossVectors(fwd, up);
+      if (right.lengthSq() < 1e-6) right.set(1, 0, 0); else right.normalize();
+      const dPos = new T.Vector3(), dTgt = new T.Vector3(); let fov, k;
+      if (this.view === 'cockpit') {                         // sit just behind the nose, look down the heading
+        dPos.copy(p).addScaledVector(fwd, s * 0.32).addScaledVector(up, s * 0.11);
+        dTgt.copy(p).addScaledVector(fwd, s * 60); fov = VIEW_META.cockpit.fov; k = 0.24;
+      } else if (this.view === 'wing') {                     // ride the wingtip, fuselage to one side
+        dPos.copy(p).addScaledVector(right, s * 0.55).addScaledVector(up, s * 0.10).addScaledVector(fwd, -s * 0.05);
+        dTgt.copy(p).addScaledVector(fwd, s * 3.5).addScaledVector(right, -s * 0.25); fov = VIEW_META.wing.fov; k = 0.18;
+      } else {                                               // chase: behind + above, trailing the plane down its own path
+        dPos.copy(p).addScaledVector(fwd, -s * 3.2).addScaledVector(up, s * 1.15);
+        dTgt.copy(p).addScaledVector(fwd, s * 1.6); fov = VIEW_META.chase.fov; k = 0.09;
+      }
+      const fc = this._follow || (this._follow = { pos: dPos.clone(), tgt: dTgt.clone(), fov });
+      if (this._snapCam) { fc.pos.copy(dPos); fc.tgt.copy(dTgt); fc.fov = fov; this._snapCam = false; }
+      else { fc.pos.lerp(dPos, k); fc.tgt.lerp(dTgt, k); fc.fov += (fov - fc.fov) * 0.15; }
+      cam.up.set(0, 1, 0); cam.position.copy(fc.pos); cam.lookAt(fc.tgt);
+      if (Math.abs(cam.fov - fc.fov) > 0.02) { cam.fov = fc.fov; cam.updateProjectionMatrix(); }
     }
     _sampleRaw(track, t) {
       const p = track.points; if (!p.length) return null;
@@ -306,7 +356,8 @@
       this.three.renderer.setSize(w, h, false); this.three.camera.aspect = w / Math.max(1, h); this.three.camera.updateProjectionMatrix();
     }
     _start() { if (this._raf) return; const loop = () => { if (!this._open) return; this._raf = requestAnimationFrame(loop);
-      if (this.mode === 'fly') this.three.controls.update();   // FPV ("stand") sets the camera itself
+      if (this.view === 'orbit') this.three.controls.update();        // stand sets the camera from pointer drags
+      else if (this._isFollow()) this._followCam();                   // chase/cockpit/wing track the aircraft
       this.three.renderer.render(this.three.scene, this.three.camera); }; this._raf = requestAnimationFrame(loop); }
     _stop() { if (this._raf) { cancelAnimationFrame(this._raf); this._raf = 0; } }
     play() {

@@ -271,11 +271,11 @@
 
   <div id="groundview">
     <div id="gv-hd"><span>Ground view — looking up from <b id="gv-from">the crowd line</b></span>
-      <span class="sp"></span><span class="m mode" id="gv-mode" title="Switch between fly-around and stand (first-person) view">🎥 Fly</span><span class="m" id="gv-close" title="Close">✕</span></div>
+      <span class="sp"></span><span class="m mode" id="gv-mode" title="Switch camera — Chase / Cockpit / Wing follow the plane · Stand / Orbit are free">🎥 Chase</span><span class="m" id="gv-close" title="Close">✕</span></div>
     <canvas id="gv-canvas"></canvas>
     <div id="gv-ctrls"><button id="gv-play">▶</button><input id="gv-scrub" type="range" min="0" max="0" value="0"></div>
     <div id="gv-readout"></div>
-    <div id="gv-hint">Drag to look around · scroll / pinch to zoom. Drag the green dot on the map to move where you're standing. Sky &amp; light follow the time of day.</div>
+    <div id="gv-hint">Tap 🎥 to switch camera: <b>Chase</b>, <b>Cockpit</b> and <b>Wing</b> ride along with the plane · <b>Stand</b> looks up from the ground (drag to look, scroll to zoom) · <b>Orbit</b> is a free fly-around. Drag the green dot on the map to move where you're standing. Sky &amp; light follow the time of day.</div>
   </div>
 </div>
 
@@ -283,7 +283,7 @@
 <script src="acicons.js"></script>
 <script src="https://unpkg.com/three@0.147.0/build/three.min.js"></script>
 <script src="https://unpkg.com/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
-<script src="groundview.js?v=3d3"></script>
+<script src="groundview.js?v=3d4"></script>
 <script>
 const $ = id => document.getElementById(id);
 const pad = n => String(n).padStart(2, '0');
