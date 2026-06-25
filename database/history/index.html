@@ -170,7 +170,12 @@
     <input id="q" type="text" placeholder="callsign / reg / type">
   </div>
   <button id="advtoggle" class="ghost" title="More filters">Filters <span class="caret">▾</span></button>
-  <button id="t-airshow" class="ghost" title="Show only likely air-show aircraft: aerobatic / warbird / jet-demo types, or flights whose trail had big altitude swings (loops/wingovers)">✈ Air show</button>
+  <select id="patternsel" class="ghost" title="Show only flights matching an interesting pattern (built in Settings → Build flight patterns)">
+    <option value="">Patterns…</option>
+    <option value="airshow">✈ Air show</option>
+    <option value="orbit">◎ Surveillance / orbit</option>
+    <option value="survey">▦ Aerial survey</option>
+  </select>
   <button id="bell" class="ghost admin-only" title="Select one or more flights, then create alert rules">🔔 Alert</button>
   <div id="adv">
     <label>Callsign<input id="callsign" type="text"></label>
@@ -279,20 +284,26 @@ function inView(id){
   return false;
 }
 
-// ---- "Air show" view -----------------------------------------------------------------------
-// Backed by the server-side backfill (Settings -> Build air-show history): when on, the search is
-// re-run with airshow=1 so the API returns only flagged flights (known air-show aircraft type, or
-// a trail that maneuvered aerobatically) across ALL history -- fast, not capped by what the browser
-// has loaded. Each flight carries an airshow_reason ('type' | 'maneuver' | 'both') for its badge.
-let airshowMode = false;
-function airshowBadge(f){
-  if (!airshowMode || !f || !f.airshow_reason) return '';
-  const r = f.airshow_reason;
-  const lbl = r === 'both' ? 'T+M' : r === 'maneuver' ? 'M' : 'T';
-  const title = r === 'both' ? 'air-show aircraft type + aerobatic maneuvering trail'
-              : r === 'maneuver' ? 'aerobatic maneuvering trail (confined, steep, repeated reversals)'
-              : 'known air-show aircraft type';
-  return `<span class="asb" title="${title}">✈${lbl}</span>`;
+// ---- pattern views (air show / surveillance / survey) --------------------------------------
+// Backed by the server-side backfill (Settings -> Build flight patterns): picking a pattern re-runs
+// the search with pattern=<key> so the API returns only flights tagged with it across ALL history --
+// fast, not capped by what the browser loaded. Each flight carries a pattern_reason for its badge.
+let currentPattern = '';                 // '' | 'airshow' | 'orbit' | 'survey'
+const PAT_ICON = { airshow: '✈', orbit: '◎', survey: '▦' };
+const PAT_LABEL = { airshow: 'air-show', orbit: 'surveillance', survey: 'survey' };
+function patternBadge(f){
+  if (!currentPattern || !f || !f.pattern_reason) return '';
+  const d = f.pattern_reason, icon = PAT_ICON[currentPattern] || '•';
+  if (currentPattern === 'airshow'){
+    const lbl = d === 'both' ? 'T+M' : d === 'maneuver' ? 'M' : 'T';
+    const title = d === 'both' ? 'air-show aircraft type + aerobatic maneuvering trail'
+                : d === 'maneuver' ? 'aerobatic maneuvering trail (confined, steep, repeated reversals)'
+                : 'known air-show aircraft type';
+    return `<span class="asb" title="${title}">✈${lbl}</span>`;
+  }
+  const title = (currentPattern === 'orbit' ? 'surveillance / sustained circling'
+                                            : 'aerial survey / mapping (lawnmower grid)') + (d ? ` — ${d}` : '');
+  return `<span class="asb" title="${title}">${icon}${d ? ' ' + d : ''}</span>`;
 }
 
 // ---- columns: order, resize, show/hide (all persisted to localStorage) ------
@@ -550,7 +561,7 @@ async function doSearch(){
   for (const k of ['q','callsign','registration','type','operator','mil']) if ($(k).value) p.set(k, $(k).value);
   if ($('from').value) p.set('from', toMs($('from').value));
   if ($('to').value)   p.set('to',   toMs($('to').value));
-  if (airshowMode) p.set('airshow', '1');   // only flights flagged by the backfill
+  if (currentPattern) p.set('pattern', currentPattern);   // only flights tagged by the backfill
   p.set('limit', pageSize);
   searchMsg = 'Searching…'; setStatus();
   try {
@@ -585,7 +596,7 @@ function render(){
     let html = `<td class="swatch c_swatch" style="background:${sw}"></td>`;
     for (const c of COLUMNS){
       let cell = c.html(f);
-      if (c.key === 'callsign') cell = airshowBadge(f) + cell;   // why it qualified (when in Air-show view)
+      if (c.key === 'callsign') cell = patternBadge(f) + cell;   // why it matched (in a pattern view)
       html += `<td class="c_${c.key}">${cell}</td>`;
     }
     tr.innerHTML = html;
@@ -595,8 +606,8 @@ function render(){
   }
   $('list-body').scrollTop = keep;
   $('rescount').textContent = !total
-    ? (airshowMode ? '· none built yet — run “Build air-show history” in Settings' : '')
-    : airshowMode ? `· ${visible.length} air-show flight${visible.length===1?'':'s'}`
+    ? (currentPattern ? '· none built yet — run “Build flight patterns” in Settings' : '')
+    : currentPattern ? `· ${visible.length} ${PAT_LABEL[currentPattern]} flight${visible.length===1?'':'s'}`
     : (visible.length < total ? `· ${visible.length} of ${total.toLocaleString()}` : `· ${total.toLocaleString()}`);
   // reflect the active sort column in the header
   document.querySelectorAll('#headrow .thar').forEach(ar =>
@@ -787,10 +798,11 @@ $('clear').onclick = ()=>{
   searchMsg = 'Cleared.'; setStatus('pick a time range or preset and search');
 };
 $('multi').onclick = ()=>{ multiMode = !multiMode; $('multi').classList.toggle('on', multiMode); };
-$('t-airshow').onclick = ()=>{
-  airshowMode = !airshowMode; $('t-airshow').classList.toggle('on', airshowMode);
+$('patternsel').onchange = ()=>{
+  currentPattern = $('patternsel').value;
+  $('patternsel').classList.toggle('on', !!currentPattern);
   selected.clear();
-  doSearch();    // re-query: server returns only the backfilled air-show flights for this range
+  doSearch();    // re-query: server returns only the flights tagged with this pattern for the range
 };
 
 // Bell: turn the current selection into alert rules, then hand off to the Alerts tab to refine.

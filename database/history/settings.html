@@ -246,15 +246,18 @@
     </fieldset>
 
     <fieldset>
-      <legend>Air-show history — flag past air shows from existing data</legend>
-      <div class="help wide">Scans the flights you already have and flags the ones that look like air-show
-        activity — a known air-show aircraft type, or a trail that maneuvered aerobatically (confined area,
-        steep climbs/dives, repeated reversals; ordinary circuits and flight-school “up and down” are
-        ignored). Results power the <b>✈ Air show</b> button on the History page. Re-run any time after more
-        history is logged or imported. Reads each flight's trail, so a large history can take a while.</div>
+      <legend>Flight patterns — flag interesting flights from existing data</legend>
+      <div class="help wide">Scans the flights you already have and tags ones that match an interesting
+        flying pattern, from their trail geometry:
+        <b>✈ air show</b> (known air-show type, or aerobatic maneuvering — confined, steep, repeated reversals),
+        <b>◎ surveillance / orbit</b> (sustained circling over a point — police / news / ISR / patrol), and
+        <b>▦ aerial survey</b> (parallel lawnmower grid — mapping / photography). Ordinary circuits and
+        flight-school “up and down” are ignored. Results power the <b>Patterns</b> picker on the History
+        page. Re-run any time after more history is logged or imported. Reads each flight's trail, so a
+        large history can take a while.</div>
       <div class="actions">
-        <button id="as_build">Build air-show history</button>
-        <button id="as_rebuild" class="ghost" title="Clear existing flags and scan everything again">Rebuild from scratch</button>
+        <button id="as_build">Build flight patterns</button>
+        <button id="as_rebuild" class="ghost" title="Clear existing tags and scan everything again">Rebuild from scratch</button>
         <button id="as_stop" class="ghost">Stop</button>
       </div>
       <div id="as_bar"><div id="as_fill"></div></div>
@@ -300,7 +303,7 @@ function showPanel(name){
   document.querySelectorAll('.subtab').forEach(b => b.classList.toggle('on', b.dataset.p === name));
   if (location.hash.slice(1) !== name) history.replaceState(null, '', '#' + name);
   if (name === 'users') loadUsers();
-  if (name === 'import'){ loadImport(); loadAirshowBuild(); }
+  if (name === 'import'){ loadImport(); loadPatternBuild(); }
   if (name === 'display') populateDisplay();
   if (name === 'prefs') populatePrefs();
 }
@@ -428,36 +431,39 @@ $('imp_clear').onclick = async () => {
   if (!confirm('Clear the import history list? (Does not touch any imported flights.)')) return;
   await post('api/import/clear-history', {}); loadImport();
 };
-// ---- air-show backfill ----
-function renderAirshowBuild(r){
+// ---- flight-pattern backfill ----
+function renderPatternBuild(r){
   const running = !!r.running;
   $('as_build').disabled = running; $('as_rebuild').disabled = running; $('as_stop').disabled = !running;
   $('as_bar').style.display = running ? '' : 'none';
   const pct = r.total ? Math.round(100 * (r.scanned||0) / r.total) : 0;
   $('as_fill').style.width = pct + '%';
   if (running){
-    $('as_status').innerHTML = `Scanning ${fmtN(r.scanned)} / ${fmtN(r.total)} (${pct}%) — flagged ${fmtN(r.found)} so far`;
+    $('as_status').innerHTML = `Scanning ${fmtN(r.scanned)} / ${fmtN(r.total)} (${pct}%) — tagged ${fmtN(r.found)} so far`;
   } else {
-    $('as_status').innerHTML = `<b class="imp-done">${fmtN(r.flagged_total||0)}</b> air-show flight(s) flagged`
-      + (r.message ? ` · ${esc(r.message)}` : '');
+    const bp = r.by_pattern || {};
+    const parts = [['airshow','✈ air show'],['orbit','◎ surveillance'],['survey','▦ survey']]
+      .filter(([k]) => bp[k]).map(([k,l]) => `${fmtN(bp[k])} ${l}`);
+    $('as_status').innerHTML = `<b class="imp-done">${fmtN(r.flagged_total||0)}</b> flight(s) tagged`
+      + (parts.length ? ` — ${parts.join(' · ')}` : '') + (r.message ? ` · ${esc(r.message)}` : '');
   }
 }
-async function loadAirshowBuild(){
-  try { renderAirshowBuild(await (await fetch('api/airshow/build-status')).json()); }
-  catch(e){ $('as_status').textContent = 'air-show build status unavailable: ' + e; }
+async function loadPatternBuild(){
+  try { renderPatternBuild(await (await fetch('api/patterns/build-status')).json()); }
+  catch(e){ $('as_status').textContent = 'pattern build status unavailable: ' + e; }
 }
-async function startAirshowBuild(clear){
-  if (clear && !confirm('Rebuild air-show history from scratch? This clears existing flags and re-scans every flight.')) return;
-  const r = await post('api/airshow/build', { clear: !!clear });
+async function startPatternBuild(clear){
+  if (clear && !confirm('Rebuild flight patterns from scratch? This clears existing tags and re-scans every flight.')) return;
+  const r = await post('api/patterns/build', { clear: !!clear });
   if (r.error){ $('as_status').innerHTML = '<b class="err">' + esc(r.error) + '</b>'; return; }
-  renderAirshowBuild(r);
+  renderPatternBuild(r);
 }
-$('as_build').onclick   = () => startAirshowBuild(false);
-$('as_rebuild').onclick = () => startAirshowBuild(true);
-$('as_stop').onclick    = async () => { await post('api/airshow/build-stop', {}); setTimeout(loadAirshowBuild, 300); };
+$('as_build').onclick   = () => startPatternBuild(false);
+$('as_rebuild').onclick = () => startPatternBuild(true);
+$('as_stop').onclick    = async () => { await post('api/patterns/build-stop', {}); setTimeout(loadPatternBuild, 300); };
 
 // keep the import progress + live-ingestion + air-show build status fresh while the panel is open
-setInterval(() => { if ($('p_import').classList.contains('on')){ loadImport(); loadAirshowBuild(); } }, 3000);
+setInterval(() => { if ($('p_import').classList.contains('on')){ loadImport(); loadPatternBuild(); } }, 3000);
 
 // ---- users ----
 let meSub = null;

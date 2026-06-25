@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tar1090_mqtt as mq        # noqa: E402
 import airshow_types             # noqa: E402
 import maneuver                  # noqa: E402
+import patterns                  # noqa: E402
 try:
     import tar1090_heatmap_import as hm        # noqa: E402  (the Settings "Historical import" job)
 except Exception as _e:          # pragma: no cover -- import feature just disabled if missing
@@ -106,7 +107,7 @@ OIDC_USER_AGENT = os.environ.get("OIDC_USER_AGENT", "Mozilla/5.0 (compatible; ta
 SESSION_COOKIE = "tar1090_session"
 TX_COOKIE      = "tar1090_oidc_tx"
 # Anything under these is admin-only; viewers get 403 (and the UI hides it too).
-ADMIN_PREFIXES = ("/api/alerts", "/api/import", "/api/airshow/build", "/api/users", "/api/settings/global")
+ADMIN_PREFIXES = ("/api/alerts", "/api/import", "/api/patterns/build", "/api/users", "/api/settings/global")
 # settings.html is reachable by viewers (their Preferences tab); its admin sub-tabs are hidden in
 # the UI and the admin APIs above stay server-gated.
 ADMIN_PAGES    = ("/alerts.html",)
@@ -297,11 +298,13 @@ def search(q):
     elif mil == "civ":
         where.append("NOT military")
 
-    # air-show view: only flights flagged by the backfill (Settings -> Build air-show history)
-    want_airshow = (q.get("airshow", [""])[0] or "").strip() in ("1", "true", "yes")
-    if want_airshow:
-        _ensure_airshow()
-        where.append("EXISTS (SELECT 1 FROM airshow_flights af WHERE af.flight_id = v_flights.id)")
+    # pattern view: only flights tagged by the backfill (Settings -> Build flight patterns)
+    want_pattern = (q.get("pattern", [""])[0] or "").strip().lower()
+    if want_pattern:
+        _ensure_patterns()
+        where.append("EXISTS (SELECT 1 FROM flight_patterns fp "
+                     "WHERE fp.flight_id = v_flights.id AND fp.pattern = %s)")
+        params.append(want_pattern)
 
     try:
         limit = min(max(1, int(q.get("limit", [500])[0])), MAX_RESULTS)
@@ -315,16 +318,17 @@ def search(q):
     where_sql = " AND ".join(where)
     total = query("SELECT count(*) AS n FROM v_flights WHERE " + where_sql, list(params))[0]["n"]
 
-    airshow_sel = (", (SELECT af.reason FROM airshow_flights af WHERE af.flight_id = v_flights.id) "
-                   "AS airshow_reason" if want_airshow else "")
+    pattern_sel = (", (SELECT fp.detail FROM flight_patterns fp WHERE fp.flight_id = v_flights.id "
+                   "AND fp.pattern = %s) AS pattern_reason" if want_pattern else "")
+    sel_params = [ACTIVE_WINDOW_SEC] + ([want_pattern] if want_pattern else [])
     sql = ("SELECT id, icao_hex, callsign, registration, icao_type, operator, military, "
            "start_time, end_time, max_alt, "
            "EXTRACT(EPOCH FROM (end_time - start_time))::int AS duration_s, "
-           "(end_time >= now() - make_interval(secs => %s)) AS active" + airshow_sel +
+           "(end_time >= now() - make_interval(secs => %s)) AS active" + pattern_sel +
            " FROM v_flights WHERE " + where_sql +
            " ORDER BY start_time DESC LIMIT %s OFFSET %s")
 
-    rows = query(sql, [ACTIVE_WINDOW_SEC] + list(params) + [limit, offset])
+    rows = query(sql, sel_params + list(params) + [limit, offset])
     for r in rows:
         r["start"] = ms(r.pop("start_time"))
         r["end"] = ms(r.pop("end_time"))
@@ -1209,35 +1213,38 @@ def _resume_import_on_start():
         _archive_and_idle(status)
 
 
-# --- air-show backfill ------------------------------------------------------
-# A one-time (re-runnable) scan of the existing flight index that flags which past flights look
-# like air-show activity -- a known air-show aircraft type, or a trail that maneuvered aerobatically
-# (shared maneuver detector). Results live in airshow_flights so the History "Air show" view can
-# show all of history instantly (server-side) instead of detecting per-page in the browser.
-AIRSHOW_DDL = """
-CREATE TABLE IF NOT EXISTS airshow_flights (
-  flight_id bigint PRIMARY KEY REFERENCES flights(id) ON DELETE CASCADE,
-  reason text NOT NULL,                            -- 'type' | 'maneuver' | 'both'
-  peak_fpm int, rev_window int, box_km real, span_ft int,
-  built_at timestamptz NOT NULL DEFAULT now());
-CREATE TABLE IF NOT EXISTS airshow_build (
+# --- flight-pattern backfill ------------------------------------------------
+# A one-time (re-runnable) scan of the existing flight index that tags which past flights match an
+# "interesting" flying pattern: air show (known type, or aerobatic maneuvering), surveillance/orbit
+# (circling), or aerial survey/mapping (lawnmower grid). Geometry comes from each flight's trail
+# (patterns.py). Results live in flight_patterns (one row per flight+pattern) so the History pattern
+# views show all of history instantly server-side instead of detecting per-page in the browser.
+PATTERN_DDL = """
+CREATE TABLE IF NOT EXISTS flight_patterns (
+  flight_id bigint NOT NULL REFERENCES flights(id) ON DELETE CASCADE,
+  pattern text NOT NULL,                            -- 'airshow' | 'orbit' | 'survey'
+  detail text,                                      -- e.g. 'maneuver', '3 loops', '6 legs'
+  built_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (flight_id, pattern));
+CREATE INDEX IF NOT EXISTS flight_patterns_pat_idx ON flight_patterns (pattern);
+CREATE TABLE IF NOT EXISTS pattern_build (
   id int PRIMARY KEY DEFAULT 1 CHECK (id = 1),
   status text NOT NULL DEFAULT 'idle',             -- idle | running
   scanned int NOT NULL DEFAULT 0, total int NOT NULL DEFAULT 0, found int NOT NULL DEFAULT 0,
   message text, started_at timestamptz, updated_at timestamptz NOT NULL DEFAULT now());
-INSERT INTO airshow_build (id, status) VALUES (1, 'idle') ON CONFLICT DO NOTHING;
+INSERT INTO pattern_build (id, status) VALUES (1, 'idle') ON CONFLICT DO NOTHING;
 """
-_airshow_ready = False
-_airshow_lock = threading.Lock()
-_airshow_thread = None
-_airshow_cancel = threading.Event()
+_pattern_ready = False
+_pattern_lock = threading.Lock()
+_pattern_thread = None
+_pattern_cancel = threading.Event()
 
 
-def _ensure_airshow():
-    global _airshow_ready
-    if not _airshow_ready:
-        execute(AIRSHOW_DDL, ())
-        _airshow_ready = True
+def _ensure_patterns():
+    global _pattern_ready
+    if not _pattern_ready:
+        execute(PATTERN_DDL, ())
+        _pattern_ready = True
 
 
 def _flight_track(hexid, start_dt, end_dt):
@@ -1248,7 +1255,18 @@ def _flight_track(hexid, start_dt, end_dt):
     return [(p[0] / 1000.0, p[3], p[1], p[2]) for p in pts if p[3] is not None]
 
 
-def _airshow_worker(t_from, t_to):
+def _classify_flight(icao_type, track):
+    """{pattern: detail} for one flight: geometric patterns + air-show-by-type."""
+    found = dict(patterns.classify(track)) if track else {}
+    if (icao_type or "").upper() in _AIRSHOW_TYPESET:
+        found["airshow"] = "both" if found.get("airshow") else "type"   # type match (with/without maneuver)
+    return found
+
+
+_AIRSHOW_TYPESET = set(t.upper() for t in airshow_types.all_types())
+
+
+def _pattern_worker(t_from, t_to):
     wconn = None
     try:
         wconn = psycopg.connect(DB_DSN, autocommit=True)
@@ -1259,44 +1277,36 @@ def _airshow_worker(t_from, t_to):
         cols = [d.name for d in cur.description]
         rows = [dict(zip(cols, r)) for r in cur.fetchall()]
         total = len(rows)
-        wconn.execute("UPDATE airshow_build SET total=%s, scanned=0, found=0, message=NULL, "
+        wconn.execute("UPDATE pattern_build SET total=%s, scanned=0, found=0, message=NULL, "
                       "updated_at=now() WHERE id=1", (total,))
-        types = set(t.upper() for t in airshow_types.all_types())
         found, last = 0, [0.0]
         outcome = "done"
         for i, r in enumerate(rows):
-            if _airshow_cancel.is_set():
+            if _pattern_cancel.is_set():
                 outcome = "cancelled"
                 break
-            is_type = (r["icao_type"] or "").upper() in types
-            m, man = None, False
             track = _flight_track(r["icao_hex"], r["start_time"], r["end_time"])
-            if track:
-                m = maneuver.metrics(track)
-                man = maneuver.is_air_show(m)
-            if is_type or man:
-                reason = "both" if (is_type and man) else ("type" if is_type else "maneuver")
+            hits = _classify_flight(r["icao_type"], track)
+            for pattern, detail in hits.items():
                 wconn.execute(
-                    "INSERT INTO airshow_flights (flight_id, reason, peak_fpm, rev_window, box_km, span_ft) "
-                    "VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (flight_id) DO UPDATE SET "
-                    "reason=EXCLUDED.reason, peak_fpm=EXCLUDED.peak_fpm, rev_window=EXCLUDED.rev_window, "
-                    "box_km=EXCLUDED.box_km, span_ft=EXCLUDED.span_ft, built_at=now()",
-                    (r["id"], reason, (m or {}).get("peak_fpm"), (m or {}).get("rev_window"),
-                     (m or {}).get("box_km"), (m or {}).get("span")))
+                    "INSERT INTO flight_patterns (flight_id, pattern, detail) VALUES (%s,%s,%s) "
+                    "ON CONFLICT (flight_id, pattern) DO UPDATE SET detail=EXCLUDED.detail, built_at=now()",
+                    (r["id"], pattern, detail))
+            if hits:
                 found += 1
             now = time.monotonic()
             if now - last[0] > 1.0 or i == total - 1:
                 last[0] = now
-                wconn.execute("UPDATE airshow_build SET scanned=%s, found=%s, updated_at=now() "
+                wconn.execute("UPDATE pattern_build SET scanned=%s, found=%s, updated_at=now() "
                               "WHERE id=1", (i + 1, found))
         msg = ("stopped" if outcome == "cancelled"
-               else f"flagged {found} air-show flight(s) from {total} scanned")
-        wconn.execute("UPDATE airshow_build SET status='idle', found=%s, message=%s, updated_at=now() "
+               else f"tagged {found} flight(s) from {total} scanned")
+        wconn.execute("UPDATE pattern_build SET status='idle', found=%s, message=%s, updated_at=now() "
                       "WHERE id=1", (found, msg))
     except Exception as e:                               # noqa: BLE001
-        log.exception("air-show build failed")
+        log.exception("flight-pattern build failed")
         try:
-            (wconn or db()).execute("UPDATE airshow_build SET status='idle', message=%s, "
+            (wconn or db()).execute("UPDATE pattern_build SET status='idle', message=%s, "
                                     "updated_at=now() WHERE id=1", (str(e),))
         except psycopg.Error:
             pass
@@ -1308,42 +1318,44 @@ def _airshow_worker(t_from, t_to):
                 pass
 
 
-def airshow_build_status(q):
-    _ensure_airshow()
+def pattern_build_status(q):
+    _ensure_patterns()
     rows = query("SELECT status, scanned, total, found, message, started_at, updated_at "
-                 "FROM airshow_build WHERE id=1", ())
+                 "FROM pattern_build WHERE id=1", ())
     r = dict(rows[0]) if rows else {"status": "idle"}
-    r["running"] = bool(_airshow_thread and _airshow_thread.is_alive())
+    r["running"] = bool(_pattern_thread and _pattern_thread.is_alive())
     if not r["running"]:
         r["status"] = "idle"
     r["started_at"] = ms(r.get("started_at"))
     r["updated_at"] = ms(r.get("updated_at"))
-    r["flagged_total"] = query("SELECT count(*) AS n FROM airshow_flights", ())[0]["n"]
+    counts = query("SELECT pattern, count(*) AS n FROM flight_patterns GROUP BY pattern", ())
+    r["by_pattern"] = {c["pattern"]: c["n"] for c in counts}
+    r["flagged_total"] = sum(c["n"] for c in counts)
     return r
 
 
-def airshow_build_start(body):
-    global _airshow_thread
-    with _airshow_lock:
-        if _airshow_thread and _airshow_thread.is_alive():
+def pattern_build_start(body):
+    global _pattern_thread
+    with _pattern_lock:
+        if _pattern_thread and _pattern_thread.is_alive():
             return {"error": "a build is already running"}
-        _ensure_airshow()
+        _ensure_patterns()
         now = datetime.now(timezone.utc)
         t_from = parse_time((body or {}).get("from"), datetime(2000, 1, 1, tzinfo=timezone.utc))
         t_to = parse_time((body or {}).get("to"), now)
         if (body or {}).get("clear"):
-            execute("TRUNCATE airshow_flights", ())
-        _airshow_cancel.clear()
-        execute("UPDATE airshow_build SET status='running', scanned=0, total=0, found=0, "
+            execute("TRUNCATE flight_patterns", ())
+        _pattern_cancel.clear()
+        execute("UPDATE pattern_build SET status='running', scanned=0, total=0, found=0, "
                 "message=NULL, started_at=now(), updated_at=now() WHERE id=1", ())
-        _airshow_thread = threading.Thread(target=_airshow_worker, args=(t_from, t_to),
-                                           name="airshow-build", daemon=True)
-        _airshow_thread.start()
-    return airshow_build_status({})
+        _pattern_thread = threading.Thread(target=_pattern_worker, args=(t_from, t_to),
+                                           name="pattern-build", daemon=True)
+        _pattern_thread.start()
+    return pattern_build_status({})
 
 
-def airshow_build_stop(body):
-    _airshow_cancel.set()
+def pattern_build_stop(body):
+    _pattern_cancel.set()
     return {"ok": True}
 
 
@@ -1355,9 +1367,15 @@ def airshow_get(q):
             "all": airshow_types.all_types()}
 
 
+def patterns_get(q):
+    """Catalogue of detectable flight patterns, for the History pattern picker."""
+    return {"patterns": patterns.CATALOG}
+
+
 ROUTES = {"/api/search": search, "/api/options": options,
           "/api/trace": trace, "/api/traces": traces, "/api/live": live,
-          "/api/airshow": airshow_get, "/api/airshow/build-status": airshow_build_status,
+          "/api/airshow": airshow_get, "/api/patterns": patterns_get,
+          "/api/patterns/build-status": pattern_build_status,
           "/api/alerts/rules": alerts_rules_get, "/api/alerts/config": alerts_config_get,
           "/api/alerts/log": alerts_log_get, "/api/import/status": import_status,
           "/api/users": users_get}
@@ -1365,7 +1383,7 @@ POST_ROUTES = {"/api/alerts/rules": alerts_rule_save, "/api/alerts/rules/delete"
                "/api/alerts/config": alerts_config_save, "/api/alerts/test": alerts_test,
                "/api/import/start": import_start, "/api/import/stop": import_stop,
                "/api/import/clear-history": import_clear_history,
-               "/api/airshow/build": airshow_build_start, "/api/airshow/build-stop": airshow_build_stop,
+               "/api/patterns/build": pattern_build_start, "/api/patterns/build-stop": pattern_build_stop,
                "/api/users/block": users_block, "/api/settings/global": settings_global_save}
 CONTENT = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
            ".css": "text/css", ".json": "application/json", ".ico": "image/x-icon",
