@@ -107,7 +107,7 @@ OIDC_USER_AGENT = os.environ.get("OIDC_USER_AGENT", "Mozilla/5.0 (compatible; ta
 SESSION_COOKIE = "tar1090_session"
 TX_COOKIE      = "tar1090_oidc_tx"
 # Anything under these is admin-only; viewers get 403 (and the UI hides it too).
-ADMIN_PREFIXES = ("/api/alerts", "/api/import", "/api/patterns/build", "/api/airshow/custom",
+ADMIN_PREFIXES = ("/api/alerts", "/api/import", "/api/patterns/build", "/api/airshow/",
                   "/api/users", "/api/settings/global")
 # settings.html is reachable by viewers (their Preferences tab); its admin sub-tabs are hidden in
 # the UI and the admin APIs above stay server-gated.
@@ -1470,6 +1470,34 @@ def airshow_custom_save(body):
     return {"ok": True, "config": cfg}
 
 
+def airshow_scan(q):
+    """Find likely air-show aircraft already in the (global) aircraft DB -- by air-show type match,
+    and/or the worldwide military / 'interesting' flags -- so the admin can pin specific ones to the
+    watchlist. Registry-agnostic: it uses the aircraft your receiver has actually seen, anywhere."""
+    eff = _airshow_custom()
+    use_types = (q.get("types", ["1"])[0] != "0")
+    use_mil = (q.get("military", ["1"])[0] != "0")
+    use_int = (q.get("interesting", ["0"])[0] == "1")
+    conds, params = [], []
+    if use_types and eff["type_set"]:
+        conds.append("upper(icao_type) = ANY(%s)")
+        params.append(sorted(eff["type_set"]))
+    if use_mil:
+        conds.append("military")
+    if use_int:
+        conds.append("interesting")
+    if not conds:
+        return {"aircraft": [], "count": 0}
+    rows = query("SELECT icao_hex, registration, icao_type, type_desc, operator, military, interesting, "
+                 "last_seen FROM aircraft WHERE (" + " OR ".join(conds) + ") "
+                 "ORDER BY last_seen DESC NULLS LAST LIMIT 500", params)
+    for r in rows:
+        r["last_seen"] = ms(r.get("last_seen"))
+        r["military"] = bool(r["military"])
+        r["interesting"] = bool(r["interesting"])
+    return {"aircraft": rows, "count": len(rows)}
+
+
 def patterns_get(q):
     """Catalogue of detectable flight patterns, for the History pattern picker."""
     return {"patterns": patterns.CATALOG}
@@ -1478,6 +1506,7 @@ def patterns_get(q):
 ROUTES = {"/api/search": search, "/api/options": options,
           "/api/trace": trace, "/api/traces": traces, "/api/live": live,
           "/api/airshow": airshow_get, "/api/airshow/custom": airshow_custom_get,
+          "/api/airshow/scan": airshow_scan,
           "/api/patterns": patterns_get, "/api/patterns/build-status": pattern_build_status,
           "/api/alerts/rules": alerts_rules_get, "/api/alerts/config": alerts_config_get,
           "/api/alerts/log": alerts_log_get, "/api/import/status": import_status,
