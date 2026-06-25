@@ -38,6 +38,7 @@ from psycopg.types.json import Jsonb
 # sibling helper (alerting MQTT); importable because we add our own dir to sys.path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tar1090_mqtt as mq        # noqa: E402
+import airshow_types             # noqa: E402
 try:
     import tar1090_heatmap_import as hm        # noqa: E402  (the Settings "Historical import" job)
 except Exception as _e:          # pragma: no cover -- import feature just disabled if missing
@@ -1200,8 +1201,16 @@ def _resume_import_on_start():
 
 
 # --- HTTP -------------------------------------------------------------------
+def airshow_get(q):
+    """Curated air-show aircraft type database -- served to the Live filter and the Alerts editor."""
+    return {"categories": [{"key": k, "label": v["label"], "desc": v.get("desc", ""), "types": v["types"]}
+                           for k, v in airshow_types.AIRSHOW_TYPES.items()],
+            "all": airshow_types.all_types()}
+
+
 ROUTES = {"/api/search": search, "/api/options": options,
           "/api/trace": trace, "/api/traces": traces, "/api/live": live,
+          "/api/airshow": airshow_get,
           "/api/alerts/rules": alerts_rules_get, "/api/alerts/config": alerts_config_get,
           "/api/alerts/log": alerts_log_get, "/api/import/status": import_status,
           "/api/users": users_get}

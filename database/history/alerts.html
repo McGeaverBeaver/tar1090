@@ -59,6 +59,8 @@
   #ederr { color: #ff8a8a; min-height: 16px; margin: 6px 0; }
   .edactions { display: flex; gap: 8px; margin-top: 10px; }
   .help { color: #7e8794; font-size: 11px; }
+  .aschk { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  .aschk label { width: auto; color: #cdd5e0; display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
   @media (max-width: 820px){ #wrap { flex-direction: column; } #left { width: 100%; max-height: 45vh; border-right: 0; border-bottom: 1px solid #2c313a; } }
 </style>
 </head>
@@ -70,6 +72,7 @@
   <div id="left">
     <div class="bar">
       <button id="new">+ New rule</button>
+      <button id="airshowpreset" class="ghost" title="Create a ready-made rule that fires on air-show aircraft (all curated types) and anything maneuvering">✈ Air show</button>
       <span class="sp"></span>
       <button id="notify" class="ghost mini">Enable notifications</button>
       <button id="mute" class="ghost mini">Mute</button>
@@ -96,6 +99,15 @@
       <div class="f"><label>Squawk</label><input type="text" id="c_squawk" placeholder="7700  or  emergency"></div>
       <div class="f"><label>Altitude ft</label><input type="number" id="c_altmin" placeholder="min" style="width:90px"> – <input type="number" id="c_altmax" placeholder="max" style="width:90px"></div>
       <div class="f"><label>Military only</label><input type="checkbox" id="c_mil"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Air show (optional) — match common air-show aircraft, or aerobatic maneuvering</legend>
+      <div class="f"><label>Aircraft types</label><div id="as_cats" class="aschk"><span class="help">loading…</span></div></div>
+      <div class="f"><label>Maneuvering</label><input type="checkbox" id="as_man"> <span class="help">wide altitude swings with reversals (loops / wingovers)</span></div>
+      <div class="f" id="as_manopts" style="display:none"><label>Thresholds</label>
+        over <input type="number" id="as_win" value="120" min="20" style="width:64px"> s ·
+        swing ≥ <input type="number" id="as_span" value="1000" min="100" style="width:78px"> ft ·
+        ≥ <input type="number" id="as_rev" value="2" min="0" style="width:50px"> reversals</div>
     </fieldset>
     <fieldset>
       <legend>Time window (optional)</legend>
@@ -143,6 +155,23 @@ async function post(path, body){
 }
 
 let rules = [], editingId = null, zone = null;
+let airshowCats = [];          // [{key,label,desc,types}] from /api/airshow
+
+// ---- air-show aircraft categories ----
+async function loadAirshow(){
+  try { airshowCats = (await (await fetch('api/airshow')).json()).categories || []; }
+  catch(e){ airshowCats = []; }
+  const box = $('as_cats'); box.innerHTML = '';
+  if (!airshowCats.length){ box.innerHTML = '<span class="help">unavailable</span>'; return; }
+  for (const c of airshowCats){
+    const lab = document.createElement('label');
+    lab.title = (c.desc || '') + (c.types ? ' — e.g. ' + c.types.slice(0,6).join(', ') : '');
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.dataset.key = c.key;
+    lab.appendChild(cb); lab.appendChild(document.createTextNode(' ' + c.label));
+    box.appendChild(lab);
+  }
+}
+$('as_man').addEventListener('change', () => { $('as_manopts').style.display = $('as_man').checked ? '' : 'none'; });
 
 // ---- rule list ----
 async function loadRules(){
@@ -159,6 +188,8 @@ function summary(r){
   if (c.squawk) p.push('squawk ' + c.squawk);
   if (c.military) p.push('military');
   if (c.alt_min != null || c.alt_max != null) p.push('alt ' + (c.alt_min ?? '') + '–' + (c.alt_max ?? '') + 'ft');
+  if (c.airshow && c.airshow.length) p.push('✈ ' + c.airshow.join('+'));
+  if (c.maneuver) p.push('maneuvering ≥' + (c.maneuver.alt_span_min_ft ?? 1000) + 'ft/' + (c.maneuver.window_sec ?? 120) + 's');
   if (!p.length) p.push('any aircraft');
   p.push(r.zone ? (r.zone.type === 'circle' ? ('zone ◯ ' + Math.round(r.zone.radius_m/1000) + 'km') : 'zone ▰ polygon') : 'anywhere');
   if (r.time_window){ const w = r.time_window; let t = (w.start ? w.start + '–' + w.end : 'window');
@@ -195,6 +226,13 @@ function openEditor(r){
   $('c_reg').value = c.registration || ''; $('c_op').value = c.operator || '';
   $('c_squawk').value = c.squawk || ''; $('c_altmin').value = c.alt_min ?? ''; $('c_altmax').value = c.alt_max ?? '';
   $('c_mil').checked = !!c.military;
+  const cats = c.airshow || [];
+  document.querySelectorAll('#as_cats input').forEach(x => x.checked = cats.includes(x.dataset.key));
+  const man = c.maneuver || null;
+  $('as_man').checked = !!man; $('as_manopts').style.display = man ? '' : 'none';
+  $('as_win').value  = (man && man.window_sec) ?? 120;
+  $('as_span').value = (man && man.alt_span_min_ft) ?? 1000;
+  $('as_rev').value  = (man && man.reversals_min) ?? 2;
   const w = (r && r.time_window) || null;
   $('w_enable').checked = !!w;
   document.querySelectorAll('.wday').forEach(x => x.checked = !!(w && w.days && w.days.includes(+x.value)));
@@ -219,6 +257,12 @@ function collectConditions(){
   if (t('c_altmin') !== '') c.alt_min = +t('c_altmin');
   if (t('c_altmax') !== '') c.alt_max = +t('c_altmax');
   if ($('c_mil').checked) c.military = true;
+  const cats = [...document.querySelectorAll('#as_cats input:checked')].map(x => x.dataset.key);
+  if (cats.length) c.airshow = cats;
+  if ($('as_man').checked) c.maneuver = {
+    window_sec: +$('as_win').value || 120,
+    alt_span_min_ft: +$('as_span').value || 1000,
+    reversals_min: +$('as_rev').value || 0 };
   return c;
 }
 function collectWindow(){
@@ -239,6 +283,12 @@ async function saveRule(){
   if (r.ok){ closeEditor(); loadRules(); } else $('ederr').textContent = 'Error: ' + (r.error || 'save failed');
 }
 $('new').onclick = () => openEditor(null);
+$('airshowpreset').onclick = () => {
+  openEditor({ name: 'Air show', enabled: true, cooldown_sec: 1800, zone: null, time_window: null,
+    conditions: { airshow: airshowCats.map(c => c.key),
+                  maneuver: { window_sec: 120, alt_span_min_ft: 1000, reversals_min: 2 } } });
+  $('ed_title').textContent = 'New rule · air show';   // it's a fresh rule (no id), saves as new
+};
 $('cancel').onclick = closeEditor;
 $('save').onclick = saveRule;
 $('del').onclick = () => { if (editingId && confirm('Delete this rule?')) post('api/alerts/rules/delete', {id:editingId}).then(()=>{ closeEditor(); loadRules(); }); };
@@ -397,7 +447,7 @@ function handleDeepLink(){
 }
 
 updateNotifyBtn();
-loadRules().then(handleDeepLink);
+loadAirshow().then(() => loadRules().then(handleDeepLink));
 pollLog();
 setInterval(pollLog, 5000);
 </script>

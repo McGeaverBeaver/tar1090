@@ -19,17 +19,21 @@ import os
 import time
 import urllib.parse
 import urllib.request
+from collections import deque
 from datetime import datetime, timezone
 
 import psycopg
 
 import tar1090_mqtt as mq
+import airshow_types
 
 log = logging.getLogger("tar1090-alerter")
 
 DB_DSN        = os.environ.get("TAR1090_DB_DSN", "dbname=tar1090")
 INTERVAL      = float(os.environ.get("ALERT_INTERVAL", "5"))
 HOLD_SEC      = int(os.environ.get("ALERT_HOLD_SEC", "60"))         # how long the HA sensor stays ON
+MAN_HISTORY_SEC = int(os.environ.get("ALERT_MANEUVER_HISTORY_SEC", "300"))  # altitude history kept per a/c
+MAN_DEADBAND_FT = int(os.environ.get("ALERT_MANEUVER_DEADBAND_FT", "75"))   # ignore wiggles below this
 FETCH_PHOTO   = os.environ.get("ALERT_FETCH_PHOTO", "true").strip().lower() != "false"
 AIRCRAFT_URL  = os.environ.get("ALERT_AIRCRAFT_URL") or os.environ.get("AIRCRAFT_URL")
 AIRCRAFT_JSON = os.environ.get("ALERT_AIRCRAFT_JSON")
@@ -137,6 +141,59 @@ def join_metadata(planes):
             p["military"] = m["military"]
 
 
+# --- aerobatic maneuvering detection ----------------------------------------
+class AltTracker:
+    """Rolling per-aircraft altitude history, so we can spot aerobatic vertical
+    maneuvering (wide altitude swings with repeated direction reversals -- loops,
+    wingovers, Cuban-eights) as opposed to a single steady climb or descent."""
+
+    def __init__(self, keep_sec=MAN_HISTORY_SEC):
+        self.keep = keep_sec
+        self.hist = {}                      # hex -> deque[(t_epoch, alt_ft)]
+
+    def update(self, planes, now):
+        for p in planes:
+            if p["alt"] is None:
+                continue
+            dq = self.hist.get(p["hex"])
+            if dq is None:
+                dq = deque()
+                self.hist[p["hex"]] = dq
+            dq.append((now, p["alt"]))
+            cutoff = now - self.keep
+            while dq and dq[0][0] < cutoff:
+                dq.popleft()
+        for h in list(self.hist):           # forget aircraft gone for a whole window
+            dq = self.hist[h]
+            if not dq or now - dq[-1][0] > self.keep:
+                del self.hist[h]
+
+    def metrics(self, hexid, window_sec, deadband=MAN_DEADBAND_FT):
+        """(altitude span ft, number of vertical direction reversals) over the
+        last `window_sec` seconds. Reversals use a deadband so GPS/baro noise
+        doesn't read as maneuvering."""
+        dq = self.hist.get(hexid)
+        if not dq or len(dq) < 3:
+            return (0, 0)
+        now = dq[-1][0]
+        alts = [a for (t, a) in dq if t >= now - window_sec]
+        if len(alts) < 3:
+            return (0, 0)
+        span = max(alts) - min(alts)
+        reversals, direction, ref = 0, 0, alts[0]
+        for a in alts[1:]:
+            if a - ref > deadband:
+                d = 1
+            elif ref - a > deadband:
+                d = -1
+            else:
+                continue
+            if direction and d != direction:
+                reversals += 1
+            direction, ref = d, a
+        return (span, reversals)
+
+
 # --- matching ---------------------------------------------------------------
 def _txt_match(pattern, value):
     if not pattern:
@@ -185,7 +242,7 @@ def _squawk_match(pattern, value):
     return False
 
 
-def matches_conditions(cond, p):
+def matches_conditions(cond, p, tracker=None):
     if not cond:
         return True
     if not _txt_match(cond.get("callsign"), p["callsign"]):
@@ -207,6 +264,22 @@ def matches_conditions(cond, p):
         if amin is not None and p["alt"] < amin:
             return False
         if amax is not None and p["alt"] > amax:
+            return False
+    # air-show aircraft categories (match the curated ICAO-type lists)
+    cats = cond.get("airshow")
+    if cats:
+        toks = airshow_types.types_for(cats)
+        if not toks or not _type_match(",".join(toks), p["icao_type"]):
+            return False
+    # aerobatic maneuvering: wide altitude swings with direction reversals
+    man = cond.get("maneuver")
+    if man:
+        if tracker is None:
+            return False
+        span, rev = tracker.metrics(p["hex"], float(man.get("window_sec") or 120))
+        if span < float(man.get("alt_span_min_ft") or 1000):
+            return False
+        if rev < int(man.get("reversals_min") or 0):
             return False
     return True
 
@@ -411,6 +484,7 @@ def main():
                         format="%(asctime)s %(levelname)s %(message)s")
     log.info("tar1090-alerter starting (interval=%ss)", INTERVAL)
     mqtt_mgr = Mqtt()
+    tracker = AltTracker()
     cooldowns = {}        # (rule_id, hex) -> last fired epoch
 
     while True:
@@ -437,9 +511,10 @@ def main():
                 join_metadata(planes)
                 now_local = datetime.now()
                 now = time.time()
+                tracker.update(planes, now)        # feed altitude history for maneuver detection
                 for p in planes:
                     for rule in rules:
-                        if not matches_conditions(rule["conditions"], p):
+                        if not matches_conditions(rule["conditions"], p, tracker):
                             continue
                         if not in_zone(rule["zone"], p):
                             continue

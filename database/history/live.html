@@ -175,6 +175,7 @@
     <button class="tgl" id="t-rings" title="Show your receiver location + range rings">◎ Rings</button>
     <button class="tgl" id="t-recenter" title="Zoom to fit every aircraft">⤢ Fit</button>
     <button class="tgl" id="t-filter" title="Filter by altitude / military / type">⏷ Filter</button>
+    <button class="tgl" id="t-airshow" title="Show only likely air-show aircraft: aerobatic / warbird / jet-demo types, or anything maneuvering with big altitude swings">✈ Air show</button>
   </div>
   <span id="count">—</span>
   <span id="updated"></span>
@@ -378,8 +379,44 @@ function passFilters(a){
     if (fAltMin != null && alt < fAltMin) return false;
     if (fAltMax != null && alt > fAltMax) return false;
   }
+  if (airshowMode && !isAirshowCandidate(a)) return false;
   return true;
 }
+
+// ---- "Air show" detection (client side) ----------------------------------------------------
+// A candidate is either a known air-show aircraft TYPE (the curated /api/airshow list) or any
+// aircraft currently MANEUVERING -- wide altitude swings with repeated direction reversals
+// (loops / wingovers), tracked from the live feed. Mirrors the alert engine's maneuver detector.
+let airshowMode = false;
+const airshowTypes = new Set();              // ICAO type tokens from /api/airshow
+const altHistC = new Map();                  // hex -> [[t_ms, alt_ft], ...]
+const MAN_WIN_MS = 120000, MAN_KEEP_MS = 180000, MAN_SPAN_FT = 1000, MAN_REVERSALS = 2, MAN_DEAD = 75;
+fetch('api/airshow').then(r=>r.json()).then(j=> (j.all||[]).forEach(t=> airshowTypes.add(String(t).toUpperCase()))).catch(()=>{});
+function trackAlt(acs){
+  const now = Date.now();
+  for (const a of acs){
+    const alt = a.alt === 'ground' ? 0 : a.alt;
+    if (alt == null || a.hex == null) continue;
+    let h = altHistC.get(a.hex); if (!h){ h = []; altHistC.set(a.hex, h); }
+    h.push([now, alt]);
+    while (h.length && now - h[0][0] > MAN_KEEP_MS) h.shift();
+  }
+  for (const [hex, h] of altHistC){ if (!h.length || now - h[h.length-1][0] > MAN_KEEP_MS) altHistC.delete(hex); }
+}
+function maneuvering(hex){
+  const h = altHistC.get(hex); if (!h || h.length < 3) return false;
+  const now = h[h.length-1][0];
+  const alts = h.filter(p => p[0] >= now - MAN_WIN_MS).map(p => p[1]);
+  if (alts.length < 3) return false;
+  if (Math.max(...alts) - Math.min(...alts) < MAN_SPAN_FT) return false;
+  let rev = 0, dir = 0, ref = alts[0];
+  for (let i=1;i<alts.length;i++){ const a = alts[i];
+    let d; if (a-ref > MAN_DEAD) d = 1; else if (ref-a > MAN_DEAD) d = -1; else continue;
+    if (dir && d !== dir) rev++; dir = d; ref = a; }
+  return rev >= MAN_REVERSALS;
+}
+function isAirshowType(t){ return !!t && airshowTypes.has(String(t).toUpperCase()); }
+function isAirshowCandidate(a){ return isAirshowType(a.t) || maneuvering(a.hex); }
 
 // Deep link: ?icao=<hex> / ?reg=<registration> / ?callsign=<cs>. Select that aircraft once the
 // live feed loads; if it isn't currently flying, fall back to its History (trail replay).
@@ -439,6 +476,7 @@ let lastJ = null;   // last feed payload, so the altitude tuner can re-filter in
 function render(j){
   lastJ = j;
   const acs = j.aircraft || [];
+  trackAlt(acs);   // feed altitude history for the air-show maneuver detector (all aircraft, pre-filter)
   if (j.site && !siteLoc){ siteLoc = j.site; $('list-tbl').classList.add('has-dist'); drawRings(); }
   const seen = new Set();
   lastData = new Map();
@@ -653,6 +691,8 @@ $('t-rings').onclick      = e => { showRings = !showRings; e.currentTarget.class
   if (showRings && siteLoc) map.setView([siteLoc.lat, siteLoc.lon], map.getZoom()); };
 $('t-recenter').onclick  = () => fitAll();
 $('t-filter').onclick     = e => { const on = $('filterbar').classList.toggle('on'); e.currentTarget.classList.toggle('on', on); };
+$('t-airshow').onclick    = e => { airshowMode = !airshowMode; e.currentTarget.classList.toggle('on', airshowMode);
+  if (lastJ) render(lastJ); else poll(); };
 function readFilters(){
   fAltMin = $('f-altmin').value !== '' ? +$('f-altmin').value : null;
   fAltMax = $('f-altmax').value !== '' ? +$('f-altmax').value : null;
