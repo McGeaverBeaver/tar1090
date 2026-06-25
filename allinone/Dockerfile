@@ -31,6 +31,7 @@ COPY database/tar1090-logger.py      /usr/local/share/tar1090/tar1090-logger.py
 COPY database/tar1090-history-api.py /usr/local/share/tar1090/tar1090-history-api.py
 COPY database/tar1090-alerter.py     /usr/local/share/tar1090/tar1090-alerter.py
 COPY database/tar1090_mqtt.py        /usr/local/share/tar1090/tar1090_mqtt.py
+COPY database/airshow_types.py       /usr/local/share/tar1090/airshow_types.py
 COPY database/tar1090_heatmap_import.py /usr/local/share/tar1090/tar1090_heatmap_import.py
 COPY database/backfill_heatmap.py       /usr/local/share/tar1090/backfill_heatmap.py
 COPY database/backfill_globe_history.py /usr/local/share/tar1090/backfill_globe_history.py
