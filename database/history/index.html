@@ -279,33 +279,19 @@ function inView(id){
   return false;
 }
 
-// ---- "Air show" filter: known air-show aircraft TYPE, or a trail that MANEUVERED ------------
-// (wide altitude swings with repeated direction reversals -- loops/wingovers). Same idea as the
-// Live page; here the altitude history is the flight's own cached trail.
+// ---- "Air show" view -----------------------------------------------------------------------
+// Backed by the server-side backfill (Settings -> Build air-show history): when on, the search is
+// re-run with airshow=1 so the API returns only flagged flights (known air-show aircraft type, or
+// a trail that maneuvered aerobatically) across ALL history -- fast, not capped by what the browser
+// has loaded. Each flight carries an airshow_reason ('type' | 'maneuver' | 'both') for its badge.
 let airshowMode = false;
-const airshowTypes = new Set();   // ICAO type tokens from /api/airshow
-fetch('api/airshow').then(r=>r.json()).then(j=> (j.all||[]).forEach(t=> airshowTypes.add(String(t).toUpperCase()))).catch(()=>{});
-function isAirshowType(t){ return !!t && airshowTypes.has(String(t).toUpperCase()); }
-function histManeuvering(id){
-  const pts = ptsFor(id); if (!pts || pts.length < 4) return false;
-  const alts = pts.map(p => p[3]).filter(a => a!=null && a!=='ground').map(Number);
-  if (alts.length < 4) return false;
-  if (Math.max(...alts) - Math.min(...alts) < 1500) return false;   // needs a real altitude range
-  let rev = 0, dir = 0, ref = alts[0];
-  for (let i=1;i<alts.length;i++){ const a = alts[i];
-    let d; if (a-ref > 100) d = 1; else if (ref-a > 100) d = -1; else continue;
-    if (dir && d !== dir) rev++; dir = d; ref = a; }
-  return rev >= 4;     // many up/down reversals -> aerobatic, not a normal climb-cruise-descent
-}
-function isAirshowFlight(f){ return !!f && (isAirshowType(f.icao_type) || histManeuvering(f.id)); }
-function airshowBadge(f){     // small chip in the list showing WHY a flight qualified
-  if (!airshowMode || !f) return '';
-  const ty = isAirshowType(f.icao_type), mn = histManeuvering(f.id);
-  if (!ty && !mn) return '';
-  const lbl = ty && mn ? 'T+M' : ty ? 'T' : 'M';
-  const title = ty && mn ? 'air-show aircraft type + maneuvering trail'
-              : ty ? 'known air-show aircraft type'
-              : 'maneuvering trail — big altitude swings (loops/wingovers)';
+function airshowBadge(f){
+  if (!airshowMode || !f || !f.airshow_reason) return '';
+  const r = f.airshow_reason;
+  const lbl = r === 'both' ? 'T+M' : r === 'maneuver' ? 'M' : 'T';
+  const title = r === 'both' ? 'air-show aircraft type + aerobatic maneuvering trail'
+              : r === 'maneuver' ? 'aerobatic maneuvering trail (confined, steep, repeated reversals)'
+              : 'known air-show aircraft type';
   return `<span class="asb" title="${title}">✈${lbl}</span>`;
 }
 
@@ -564,6 +550,7 @@ async function doSearch(){
   for (const k of ['q','callsign','registration','type','operator','mil']) if ($(k).value) p.set(k, $(k).value);
   if ($('from').value) p.set('from', toMs($('from').value));
   if ($('to').value)   p.set('to',   toMs($('to').value));
+  if (airshowMode) p.set('airshow', '1');   // only flights flagged by the backfill
   p.set('limit', pageSize);
   searchMsg = 'Searching…'; setStatus();
   try {
@@ -589,7 +576,7 @@ function render(){
   byId = new Map(flights.map(f=>[f.id, f]));
   // show only flights inside the current map view (selected flights stay regardless, so a focused
   // flight never vanishes when you pan); the map keeps drawing everything -- zoom is the filter.
-  const visible = flights.filter(f => (selected.has(f.id) || inView(f.id)) && (!airshowMode || isAirshowFlight(f)));
+  const visible = flights.filter(f => selected.has(f.id) || inView(f.id));
   const tb = $('rows'), keep = $('list-body').scrollTop; tb.innerHTML='';
   for (const f of visible){
     const tr = document.createElement('tr');
@@ -607,7 +594,8 @@ function render(){
     tb.appendChild(tr);
   }
   $('list-body').scrollTop = keep;
-  $('rescount').textContent = !total ? ''
+  $('rescount').textContent = !total
+    ? (airshowMode ? '· none built yet — run “Build air-show history” in Settings' : '')
     : airshowMode ? `· ${visible.length} air-show flight${visible.length===1?'':'s'}`
     : (visible.length < total ? `· ${visible.length} of ${total.toLocaleString()}` : `· ${total.toLocaleString()}`);
   // reflect the active sort column in the header
@@ -732,7 +720,6 @@ async function drawMany(ids, isAll){
   for (const id of capped){
     const tp = fl[id]; if (!tp || tp.length < 2) continue;
     const f = byId.get(id);
-    if (airshowMode && !isAirshowFlight(f)) continue;   // air-show view: only candidate trails
     const col = (f && f.military) ? '#ff4d4d' : hue((f && f.icao_hex) || String(id));
     const focus = ()=> { selected.clear(); selected.add(id); markRows(); renderMap(); };
     if (iconMode){
@@ -802,8 +789,8 @@ $('clear').onclick = ()=>{
 $('multi').onclick = ()=>{ multiMode = !multiMode; $('multi').classList.toggle('on', multiMode); };
 $('t-airshow').onclick = ()=>{
   airshowMode = !airshowMode; $('t-airshow').classList.toggle('on', airshowMode);
-  render();      // refilter the list (type matches instantly; maneuvering uses cached trails)
-  renderMap();   // redraw the map to just the candidate trails
+  selected.clear();
+  doSearch();    // re-query: server returns only the backfilled air-show flights for this range
 };
 
 // Bell: turn the current selection into alert rules, then hand off to the Alerts tab to refine.

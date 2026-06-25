@@ -39,6 +39,7 @@ from psycopg.types.json import Jsonb
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tar1090_mqtt as mq        # noqa: E402
 import airshow_types             # noqa: E402
+import maneuver                  # noqa: E402
 try:
     import tar1090_heatmap_import as hm        # noqa: E402  (the Settings "Historical import" job)
 except Exception as _e:          # pragma: no cover -- import feature just disabled if missing
@@ -105,7 +106,7 @@ OIDC_USER_AGENT = os.environ.get("OIDC_USER_AGENT", "Mozilla/5.0 (compatible; ta
 SESSION_COOKIE = "tar1090_session"
 TX_COOKIE      = "tar1090_oidc_tx"
 # Anything under these is admin-only; viewers get 403 (and the UI hides it too).
-ADMIN_PREFIXES = ("/api/alerts", "/api/import", "/api/users", "/api/settings/global")
+ADMIN_PREFIXES = ("/api/alerts", "/api/import", "/api/airshow/build", "/api/users", "/api/settings/global")
 # settings.html is reachable by viewers (their Preferences tab); its admin sub-tabs are hidden in
 # the UI and the admin APIs above stay server-gated.
 ADMIN_PAGES    = ("/alerts.html",)
@@ -296,6 +297,12 @@ def search(q):
     elif mil == "civ":
         where.append("NOT military")
 
+    # air-show view: only flights flagged by the backfill (Settings -> Build air-show history)
+    want_airshow = (q.get("airshow", [""])[0] or "").strip() in ("1", "true", "yes")
+    if want_airshow:
+        _ensure_airshow()
+        where.append("EXISTS (SELECT 1 FROM airshow_flights af WHERE af.flight_id = v_flights.id)")
+
     try:
         limit = min(max(1, int(q.get("limit", [500])[0])), MAX_RESULTS)
     except ValueError:
@@ -308,11 +315,13 @@ def search(q):
     where_sql = " AND ".join(where)
     total = query("SELECT count(*) AS n FROM v_flights WHERE " + where_sql, list(params))[0]["n"]
 
+    airshow_sel = (", (SELECT af.reason FROM airshow_flights af WHERE af.flight_id = v_flights.id) "
+                   "AS airshow_reason" if want_airshow else "")
     sql = ("SELECT id, icao_hex, callsign, registration, icao_type, operator, military, "
            "start_time, end_time, max_alt, "
            "EXTRACT(EPOCH FROM (end_time - start_time))::int AS duration_s, "
-           "(end_time >= now() - make_interval(secs => %s)) AS active "
-           "FROM v_flights WHERE " + where_sql +
+           "(end_time >= now() - make_interval(secs => %s)) AS active" + airshow_sel +
+           " FROM v_flights WHERE " + where_sql +
            " ORDER BY start_time DESC LIMIT %s OFFSET %s")
 
     rows = query(sql, [ACTIVE_WINDOW_SEC] + list(params) + [limit, offset])
@@ -1200,6 +1209,144 @@ def _resume_import_on_start():
         _archive_and_idle(status)
 
 
+# --- air-show backfill ------------------------------------------------------
+# A one-time (re-runnable) scan of the existing flight index that flags which past flights look
+# like air-show activity -- a known air-show aircraft type, or a trail that maneuvered aerobatically
+# (shared maneuver detector). Results live in airshow_flights so the History "Air show" view can
+# show all of history instantly (server-side) instead of detecting per-page in the browser.
+AIRSHOW_DDL = """
+CREATE TABLE IF NOT EXISTS airshow_flights (
+  flight_id bigint PRIMARY KEY REFERENCES flights(id) ON DELETE CASCADE,
+  reason text NOT NULL,                            -- 'type' | 'maneuver' | 'both'
+  peak_fpm int, rev_window int, box_km real, span_ft int,
+  built_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS airshow_build (
+  id int PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  status text NOT NULL DEFAULT 'idle',             -- idle | running
+  scanned int NOT NULL DEFAULT 0, total int NOT NULL DEFAULT 0, found int NOT NULL DEFAULT 0,
+  message text, started_at timestamptz, updated_at timestamptz NOT NULL DEFAULT now());
+INSERT INTO airshow_build (id, status) VALUES (1, 'idle') ON CONFLICT DO NOTHING;
+"""
+_airshow_ready = False
+_airshow_lock = threading.Lock()
+_airshow_thread = None
+_airshow_cancel = threading.Event()
+
+
+def _ensure_airshow():
+    global _airshow_ready
+    if not _airshow_ready:
+        execute(AIRSHOW_DDL, ())
+        _airshow_ready = True
+
+
+def _flight_track(hexid, start_dt, end_dt):
+    """A flight's trail as (t_sec, alt_ft, lat, lon) -- trace files first, heatmap as fallback."""
+    pts, _ = _trace_file_points(hexid, start_dt, end_dt)
+    if not pts:
+        pts = _heatmap_points(hexid, start_dt.timestamp(), end_dt.timestamp())
+    return [(p[0] / 1000.0, p[3], p[1], p[2]) for p in pts if p[3] is not None]
+
+
+def _airshow_worker(t_from, t_to):
+    wconn = None
+    try:
+        wconn = psycopg.connect(DB_DSN, autocommit=True)
+        cur = wconn.execute("SELECT f.id, f.icao_hex, a.icao_type, f.start_time, f.end_time "
+                            "FROM flights f JOIN aircraft a USING (icao_hex) "
+                            "WHERE f.start_time <= %s AND f.end_time >= %s "
+                            "ORDER BY f.start_time DESC", (t_to, t_from))
+        cols = [d.name for d in cur.description]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        total = len(rows)
+        wconn.execute("UPDATE airshow_build SET total=%s, scanned=0, found=0, message=NULL, "
+                      "updated_at=now() WHERE id=1", (total,))
+        types = set(t.upper() for t in airshow_types.all_types())
+        found, last = 0, [0.0]
+        outcome = "done"
+        for i, r in enumerate(rows):
+            if _airshow_cancel.is_set():
+                outcome = "cancelled"
+                break
+            is_type = (r["icao_type"] or "").upper() in types
+            m, man = None, False
+            track = _flight_track(r["icao_hex"], r["start_time"], r["end_time"])
+            if track:
+                m = maneuver.metrics(track)
+                man = maneuver.is_air_show(m)
+            if is_type or man:
+                reason = "both" if (is_type and man) else ("type" if is_type else "maneuver")
+                wconn.execute(
+                    "INSERT INTO airshow_flights (flight_id, reason, peak_fpm, rev_window, box_km, span_ft) "
+                    "VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (flight_id) DO UPDATE SET "
+                    "reason=EXCLUDED.reason, peak_fpm=EXCLUDED.peak_fpm, rev_window=EXCLUDED.rev_window, "
+                    "box_km=EXCLUDED.box_km, span_ft=EXCLUDED.span_ft, built_at=now()",
+                    (r["id"], reason, (m or {}).get("peak_fpm"), (m or {}).get("rev_window"),
+                     (m or {}).get("box_km"), (m or {}).get("span")))
+                found += 1
+            now = time.monotonic()
+            if now - last[0] > 1.0 or i == total - 1:
+                last[0] = now
+                wconn.execute("UPDATE airshow_build SET scanned=%s, found=%s, updated_at=now() "
+                              "WHERE id=1", (i + 1, found))
+        msg = ("stopped" if outcome == "cancelled"
+               else f"flagged {found} air-show flight(s) from {total} scanned")
+        wconn.execute("UPDATE airshow_build SET status='idle', found=%s, message=%s, updated_at=now() "
+                      "WHERE id=1", (found, msg))
+    except Exception as e:                               # noqa: BLE001
+        log.exception("air-show build failed")
+        try:
+            (wconn or db()).execute("UPDATE airshow_build SET status='idle', message=%s, "
+                                    "updated_at=now() WHERE id=1", (str(e),))
+        except psycopg.Error:
+            pass
+    finally:
+        if wconn is not None:
+            try:
+                wconn.close()
+            except psycopg.Error:
+                pass
+
+
+def airshow_build_status(q):
+    _ensure_airshow()
+    rows = query("SELECT status, scanned, total, found, message, started_at, updated_at "
+                 "FROM airshow_build WHERE id=1", ())
+    r = dict(rows[0]) if rows else {"status": "idle"}
+    r["running"] = bool(_airshow_thread and _airshow_thread.is_alive())
+    if not r["running"]:
+        r["status"] = "idle"
+    r["started_at"] = ms(r.get("started_at"))
+    r["updated_at"] = ms(r.get("updated_at"))
+    r["flagged_total"] = query("SELECT count(*) AS n FROM airshow_flights", ())[0]["n"]
+    return r
+
+
+def airshow_build_start(body):
+    global _airshow_thread
+    with _airshow_lock:
+        if _airshow_thread and _airshow_thread.is_alive():
+            return {"error": "a build is already running"}
+        _ensure_airshow()
+        now = datetime.now(timezone.utc)
+        t_from = parse_time((body or {}).get("from"), datetime(2000, 1, 1, tzinfo=timezone.utc))
+        t_to = parse_time((body or {}).get("to"), now)
+        if (body or {}).get("clear"):
+            execute("TRUNCATE airshow_flights", ())
+        _airshow_cancel.clear()
+        execute("UPDATE airshow_build SET status='running', scanned=0, total=0, found=0, "
+                "message=NULL, started_at=now(), updated_at=now() WHERE id=1", ())
+        _airshow_thread = threading.Thread(target=_airshow_worker, args=(t_from, t_to),
+                                           name="airshow-build", daemon=True)
+        _airshow_thread.start()
+    return airshow_build_status({})
+
+
+def airshow_build_stop(body):
+    _airshow_cancel.set()
+    return {"ok": True}
+
+
 # --- HTTP -------------------------------------------------------------------
 def airshow_get(q):
     """Curated air-show aircraft type database -- served to the Live filter and the Alerts editor."""
@@ -1210,7 +1357,7 @@ def airshow_get(q):
 
 ROUTES = {"/api/search": search, "/api/options": options,
           "/api/trace": trace, "/api/traces": traces, "/api/live": live,
-          "/api/airshow": airshow_get,
+          "/api/airshow": airshow_get, "/api/airshow/build-status": airshow_build_status,
           "/api/alerts/rules": alerts_rules_get, "/api/alerts/config": alerts_config_get,
           "/api/alerts/log": alerts_log_get, "/api/import/status": import_status,
           "/api/users": users_get}
@@ -1218,6 +1365,7 @@ POST_ROUTES = {"/api/alerts/rules": alerts_rule_save, "/api/alerts/rules/delete"
                "/api/alerts/config": alerts_config_save, "/api/alerts/test": alerts_test,
                "/api/import/start": import_start, "/api/import/stop": import_stop,
                "/api/import/clear-history": import_clear_history,
+               "/api/airshow/build": airshow_build_start, "/api/airshow/build-stop": airshow_build_stop,
                "/api/users/block": users_block, "/api/settings/global": settings_global_save}
 CONTENT = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
            ".css": "text/css", ".json": "application/json", ".ico": "image/x-icon",

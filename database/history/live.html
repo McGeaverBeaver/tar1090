@@ -389,31 +389,47 @@ function passFilters(a){
 // (loops / wingovers), tracked from the live feed. Mirrors the alert engine's maneuver detector.
 let airshowMode = false;
 const airshowTypes = new Set();              // ICAO type tokens from /api/airshow
-const altHistC = new Map();                  // hex -> [[t_ms, alt_ft], ...]
-const MAN_WIN_MS = 120000, MAN_KEEP_MS = 180000, MAN_SPAN_FT = 1000, MAN_REVERSALS = 2, MAN_DEAD = 75;
+const altHistC = new Map();                  // hex -> [[t_ms, alt_ft, lat, lon], ...]
+// Match the server's maneuver detector: confined box + steep vertical rate + many reversals in a
+// short window -- so flight-school "up and down" (wide area, gentle climbs) does NOT qualify.
+const MAN_WIN_MS = 120000, MAN_KEEP_MS = 240000, MAN_DEAD = 200,
+      MAN_SPAN_FT = 700, MAN_REVERSALS = 3, MAN_PEAK_FPM = 2000, MAN_BOX_KM = 12;
 fetch('api/airshow').then(r=>r.json()).then(j=> (j.all||[]).forEach(t=> airshowTypes.add(String(t).toUpperCase()))).catch(()=>{});
 function trackAlt(acs){
   const now = Date.now();
   for (const a of acs){
     const alt = a.alt === 'ground' ? 0 : a.alt;
-    if (alt == null || a.hex == null) continue;
+    if (alt == null || a.hex == null || a.lat == null) continue;
     let h = altHistC.get(a.hex); if (!h){ h = []; altHistC.set(a.hex, h); }
-    h.push([now, alt]);
+    h.push([now, alt, a.lat, a.lon]);
     while (h.length && now - h[0][0] > MAN_KEEP_MS) h.shift();
   }
   for (const [hex, h] of altHistC){ if (!h.length || now - h[h.length-1][0] > MAN_KEEP_MS) altHistC.delete(hex); }
 }
+function haversineKm(a, b){ const R = 6371, r = Math.PI/180;
+  const dp = (b[0]-a[0])*r, dl = (b[1]-a[1])*r, p1 = a[0]*r, p2 = b[0]*r;
+  const h = Math.sin(dp/2)**2 + Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
+  return 2*R*Math.asin(Math.sqrt(h)); }
 function maneuvering(hex){
-  const h = altHistC.get(hex); if (!h || h.length < 3) return false;
-  const now = h[h.length-1][0];
-  const alts = h.filter(p => p[0] >= now - MAN_WIN_MS).map(p => p[1]);
-  if (alts.length < 3) return false;
+  const h = altHistC.get(hex); if (!h || h.length < 6) return false;
+  const pts = h.slice().sort((x,y)=> x[0]-y[0]);
+  const alts = pts.map(p => p[1]);
   if (Math.max(...alts) - Math.min(...alts) < MAN_SPAN_FT) return false;
-  let rev = 0, dir = 0, ref = alts[0];
-  for (let i=1;i<alts.length;i++){ const a = alts[i];
-    let d; if (a-ref > MAN_DEAD) d = 1; else if (ref-a > MAN_DEAD) d = -1; else continue;
-    if (dir && d !== dir) rev++; dir = d; ref = a; }
-  return rev >= MAN_REVERSALS;
+  let peak = 0;                                            // steepest sustained vertical rate (fpm)
+  for (let i=1;i<pts.length;i++){ const dt = (pts[i][0]-pts[i-1][0])/1000; if (dt<=0 || dt>60) continue;
+    const fpm = Math.abs(pts[i][1]-pts[i-1][1])/(dt/60); if (fpm > peak) peak = fpm; }
+  if (peak < MAN_PEAK_FPM) return false;
+  const rt = []; let dir = 0, ref = alts[0];               // reversal times (deadband)
+  for (let i=1;i<pts.length;i++){ const a = pts[i][1]; let d;
+    if (a-ref > MAN_DEAD) d = 1; else if (ref-a > MAN_DEAD) d = -1; else continue;
+    if (dir && d !== dir) rt.push(pts[i][0]); dir = d; ref = a; }
+  let rev = 0, best = null, j = 0;                         // densest MAN_WIN_MS of reversals
+  for (let i=0;i<rt.length;i++){ while (rt[i]-rt[j] > MAN_WIN_MS) j++; if (i-j+1 > rev){ rev = i-j+1; best = [rt[j], rt[i]]; } }
+  if (rev < MAN_REVERSALS) return false;
+  const win = best ? pts.filter(p => p[0] >= best[0]-MAN_WIN_MS && p[0] <= best[1]+MAN_WIN_MS) : pts;
+  const lats = win.map(p=>p[2]), lons = win.map(p=>p[3]);
+  const box = haversineKm([Math.min(...lats), Math.min(...lons)], [Math.max(...lats), Math.max(...lons)]);
+  return box > 0 && box <= MAN_BOX_KM;                     // confined display box (excludes circuits)
 }
 function isAirshowType(t){ return !!t && airshowTypes.has(String(t).toUpperCase()); }
 function isAirshowCandidate(a){ return isAirshowType(a.t) || maneuvering(a.hex); }

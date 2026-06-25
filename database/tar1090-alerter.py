@@ -26,6 +26,7 @@ import psycopg
 
 import tar1090_mqtt as mq
 import airshow_types
+import maneuver
 
 log = logging.getLogger("tar1090-alerter")
 
@@ -143,13 +144,13 @@ def join_metadata(planes):
 
 # --- aerobatic maneuvering detection ----------------------------------------
 class AltTracker:
-    """Rolling per-aircraft altitude history, so we can spot aerobatic vertical
-    maneuvering (wide altitude swings with repeated direction reversals -- loops,
-    wingovers, Cuban-eights) as opposed to a single steady climb or descent."""
+    """Rolling per-aircraft position+altitude history, so the shared maneuver detector can spot
+    aerobatic flying (confined box, steep vertical rates, repeated reversals) live, the same way
+    the air-show backfill judges archived trails."""
 
     def __init__(self, keep_sec=MAN_HISTORY_SEC):
         self.keep = keep_sec
-        self.hist = {}                      # hex -> deque[(t_epoch, alt_ft)]
+        self.hist = {}                      # hex -> deque[(t_epoch, alt_ft, lat, lon)]
 
     def update(self, planes, now):
         for p in planes:
@@ -159,7 +160,7 @@ class AltTracker:
             if dq is None:
                 dq = deque()
                 self.hist[p["hex"]] = dq
-            dq.append((now, p["alt"]))
+            dq.append((now, p["alt"], p["lat"], p["lon"]))
             cutoff = now - self.keep
             while dq and dq[0][0] < cutoff:
                 dq.popleft()
@@ -168,30 +169,13 @@ class AltTracker:
             if not dq or now - dq[-1][0] > self.keep:
                 del self.hist[h]
 
-    def metrics(self, hexid, window_sec, deadband=MAN_DEADBAND_FT):
-        """(altitude span ft, number of vertical direction reversals) over the
-        last `window_sec` seconds. Reversals use a deadband so GPS/baro noise
-        doesn't read as maneuvering."""
+    def points(self, hexid, window_sec):
+        """The (t, alt, lat, lon) samples kept for an aircraft over the last window_sec seconds."""
         dq = self.hist.get(hexid)
-        if not dq or len(dq) < 3:
-            return (0, 0)
+        if not dq:
+            return []
         now = dq[-1][0]
-        alts = [a for (t, a) in dq if t >= now - window_sec]
-        if len(alts) < 3:
-            return (0, 0)
-        span = max(alts) - min(alts)
-        reversals, direction, ref = 0, 0, alts[0]
-        for a in alts[1:]:
-            if a - ref > deadband:
-                d = 1
-            elif ref - a > deadband:
-                d = -1
-            else:
-                continue
-            if direction and d != direction:
-                reversals += 1
-            direction, ref = d, a
-        return (span, reversals)
+        return [s for s in dq if s[0] >= now - window_sec]
 
 
 # --- matching ---------------------------------------------------------------
@@ -271,15 +255,15 @@ def matches_conditions(cond, p, tracker=None):
         toks = airshow_types.types_for(cats)
         if not toks or not _type_match(",".join(toks), p["icao_type"]):
             return False
-    # aerobatic maneuvering: wide altitude swings with direction reversals
+    # aerobatic maneuvering: confined box + steep vertical rates + repeated reversals
     man = cond.get("maneuver")
     if man:
         if tracker is None:
             return False
-        span, rev = tracker.metrics(p["hex"], float(man.get("window_sec") or 120))
-        if span < float(man.get("alt_span_min_ft") or 1000):
-            return False
-        if rev < int(man.get("reversals_min") or 0):
+        pts = tracker.points(p["hex"], float(man.get("window_sec") or 180))
+        m = maneuver.metrics([(t, al, la, lo) for (t, al, la, lo) in pts])
+        if not maneuver.is_air_show(m, min_span=man.get("alt_span_min_ft"),
+                                    min_reversals=man.get("reversals_min")):
             return False
     return True
 
