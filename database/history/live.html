@@ -389,12 +389,16 @@ function passFilters(a){
 // (loops / wingovers), tracked from the live feed. Mirrors the alert engine's maneuver detector.
 let airshowMode = false;
 const airshowTypes = new Set();              // ICAO type tokens from /api/airshow
+const nonAerobatic = new Set();              // types that maneuver but aren't air-show (trainers, helis)
 const altHistC = new Map();                  // hex -> [[t_ms, alt_ft, lat, lon], ...]
 // Match the server's maneuver detector: confined box + steep vertical rate + many reversals in a
 // short window -- so flight-school "up and down" (wide area, gentle climbs) does NOT qualify.
 const MAN_WIN_MS = 120000, MAN_KEEP_MS = 240000, MAN_DEAD = 200,
       MAN_SPAN_FT = 700, MAN_REVERSALS = 3, MAN_PEAK_FPM = 2000, MAN_BOX_KM = 12;
-fetch('api/airshow').then(r=>r.json()).then(j=> (j.all||[]).forEach(t=> airshowTypes.add(String(t).toUpperCase()))).catch(()=>{});
+fetch('api/airshow').then(r=>r.json()).then(j=>{
+  (j.all||[]).forEach(t=> airshowTypes.add(String(t).toUpperCase()));
+  (j.non_aerobatic||[]).forEach(t=> nonAerobatic.add(String(t).toUpperCase()));
+}).catch(()=>{});
 function trackAlt(acs){
   const now = Date.now();
   for (const a of acs){
@@ -432,7 +436,9 @@ function maneuvering(hex){
   return box > 0 && box <= MAN_BOX_KM;                     // confined display box (excludes circuits)
 }
 function isAirshowType(t){ return !!t && airshowTypes.has(String(t).toUpperCase()); }
-function isAirshowCandidate(a){ return isAirshowType(a.t) || maneuvering(a.hex); }
+function maneuverPlausible(t){ return !nonAerobatic.has(String(t||'').toUpperCase()); }  // not a trainer/heli
+// air-show candidate = a known air-show type, OR maneuvering AND a plausibly aerobatic type
+function isAirshowCandidate(a){ return isAirshowType(a.t) || (maneuverPlausible(a.t) && maneuvering(a.hex)); }
 
 // Deep link: ?icao=<hex> / ?reg=<registration> / ?callsign=<cs>. Select that aircraft once the
 // live feed loads; if it isn't currently flying, fall back to its History (trail replay).

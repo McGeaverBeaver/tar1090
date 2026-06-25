@@ -1256,10 +1256,14 @@ def _flight_track(hexid, start_dt, end_dt):
 
 
 def _classify_flight(icao_type, track):
-    """{pattern: detail} for one flight: geometric patterns + air-show-by-type."""
+    """{pattern: detail} for one flight: geometric patterns + air-show-by-type, with a type gate so
+    a non-aerobatic aircraft (e.g. a Cessna 172 doing steep practice turns) isn't called an air show."""
     found = dict(patterns.classify(track)) if track else {}
-    if (icao_type or "").upper() in _AIRSHOW_TYPESET:
-        found["airshow"] = "both" if found.get("airshow") else "type"   # type match (with/without maneuver)
+    ty = (icao_type or "").upper()
+    if "airshow" in found and not airshow_types.maneuver_plausible(ty):
+        del found["airshow"]                                            # maneuvering, but not an aerobatic type
+    if ty in _AIRSHOW_TYPESET:
+        found["airshow"] = "both" if found.get("airshow") else "type"   # known air-show type (with/without maneuver)
     return found
 
 
@@ -1364,7 +1368,8 @@ def airshow_get(q):
     """Curated air-show aircraft type database -- served to the Live filter and the Alerts editor."""
     return {"categories": [{"key": k, "label": v["label"], "desc": v.get("desc", ""), "types": v["types"]}
                            for k, v in airshow_types.AIRSHOW_TYPES.items()],
-            "all": airshow_types.all_types()}
+            "all": airshow_types.all_types(),
+            "non_aerobatic": sorted(airshow_types.NON_AEROBATIC)}
 
 
 def patterns_get(q):

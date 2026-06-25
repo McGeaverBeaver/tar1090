@@ -255,10 +255,13 @@ def matches_conditions(cond, p, tracker=None):
         toks = airshow_types.types_for(cats)
         if not toks or not _type_match(",".join(toks), p["icao_type"]):
             return False
-    # aerobatic maneuvering: confined box + steep vertical rates + repeated reversals
+    # aerobatic maneuvering: confined box + steep vertical rates + repeated reversals, and the
+    # aircraft must be a plausible air-show type (not a trainer/tourer/heli just doing steep work)
     man = cond.get("maneuver")
     if man:
         if tracker is None:
+            return False
+        if not airshow_types.maneuver_plausible(p["icao_type"]):
             return False
         pts = tracker.points(p["hex"], float(man.get("window_sec") or 180))
         m = maneuver.metrics([(t, al, la, lo) for (t, al, la, lo) in pts])
