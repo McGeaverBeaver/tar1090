@@ -81,6 +81,7 @@
       this.view = 'chase';
       this.fpv = { yaw: 0, pitch: 18, fov: 58 };
       this._span = 264; this._follow = null; this._snapCam = true; this._followIdx = 0;
+      this.playing = false; this.speed = 1; this._speeds = [0.5, 1, 2, 4]; this._baseRate = 1; this._groundToken = 0;
       this._wire();
     }
     _wire() {
@@ -88,6 +89,7 @@
       const pl = $('gv-play'); if (pl) pl.onclick = () => this.playing ? this.pause() : this.play();
       const cl = $('gv-close'); if (cl) cl.onclick = () => this.close();
       const md = $('gv-mode'); if (md) md.onclick = () => this.cycleView();
+      const sp = $('gv-speed'); if (sp) sp.onclick = () => this.cycleSpeed();
       window.addEventListener('resize', () => this._resize());
     }
 
@@ -96,9 +98,10 @@
       opts = opts || {}; this.live = !!opts.live;
       if (observer) this.observer = { lat: observer.lat, lon: observer.lon };
       this._open = true; $('groundview').classList.add('on');
-      const sc = $('gv-scrub'), pl = $('gv-play');
+      const sc = $('gv-scrub'), pl = $('gv-play'), sp = $('gv-speed');
       if (sc) sc.style.display = this.live ? 'none' : '';
       if (pl) pl.style.display = this.live ? 'none' : '';
+      if (sp) { sp.style.display = this.live ? 'none' : ''; sp.textContent = this.speed + '×'; }
       if (!this._ensure()) { this._fallback(); return; }
       this.setTracks(tracks); this._loadGround(); this.projectAll(); this.setView(this.view); this.setTime(this.tmax);
       this._resize(); this._start();
@@ -114,6 +117,8 @@
       let lo = Infinity, hi = -Infinity;
       for (const t of this.tracks) for (const p of t.points) { if (p[0] < lo) lo = p[0]; if (p[0] > hi) hi = p[0]; }
       this.tmin = lo; this.tmax = hi;
+      const spanSec = (isFinite(lo) && isFinite(hi)) ? (hi - lo) / 1000 : 0;
+      this._baseRate = Math.max(0.2, spanSec / 45);          // play the whole track in ~45 s at 1× (smooth + watchable)
       const sc = $('gv-scrub'); if (sc && isFinite(lo)) { sc.min = lo; sc.max = hi; sc.step = Math.max(1, (hi-lo)/800); }
       if (isFinite(hi)) this.t = hi;
     }
@@ -306,25 +311,29 @@
       const f = Math.max(0, Math.min(1, (t-a[0])/(b[0]-a[0])));
       return { lat:a[1]+(b[1]-a[1])*f, lon:a[2]+(b[2]-a[2])*f, alt:(a[3]!=null&&b[3]!=null)?a[3]+(b[3]-a[3])*f:a[3], prev:a };
     }
-    setTime(t) {
+    setTime(t, fast) {
       this.t = t; const sc = $('gv-scrub'); if (sc && !this.live) sc.value = t;
       if (!this.three || !this.observer) return;
       const T = this.three.T;
-      // sun + sky + light
-      const sun = sunPosition(t, this.observer.lat, this.observer.lon), sky = skyColours(sun.el);
-      const g = this.three.skyCanvas.getContext('2d'), grd = g.createLinearGradient(0, this.three.skyCanvas.height, 0, 0);
-      grd.addColorStop(0, rgb(sky.hor)); grd.addColorStop(1, rgb(sky.top));
-      g.fillStyle = grd; g.fillRect(0, 0, 8, 256); this.three.skyTex.needsUpdate = true;
-      this._updateEnv(sky);
-      this.three.fog = this.three.scene.fog; this.three.scene.fog.color = new T.Color(rgb(sky.hor));
-      this.three.sun.intensity = 0.15 + 1.05 * Math.max(0, sky.light);
-      this.three.hemi.intensity = 0.25 + 0.5 * sky.light;
-      const su = enu(this.observer, this.observer.lat + Math.cos(sun.az*D2R)*0.1, this.observer.lon + Math.sin(sun.az*D2R)*0.1, 0);
-      const sd = new T.Vector3(Math.sin(sun.az*D2R)*Math.cos(sun.el*D2R), Math.sin(sun.el*D2R), -Math.cos(sun.az*D2R)*Math.cos(sun.el*D2R));
-      this.three.sun.position.copy(sd.clone().multiplyScalar(200000));
-      this.three.sunBall.position.copy(sd.clone().multiplyScalar(360000));
-      this.three.sunBall.visible = sun.el > -2;
-      // aircraft
+      const now = (global.performance && performance.now) ? performance.now() : Date.now();
+      // during smooth playback (fast) throttle the slow work — sky repaint, env, readout, map markers — to ~8 Hz;
+      // any deliberate setTime (scrub / live tick / fit) refreshes everything.
+      const heavy = !fast || (now - (this._hvT || 0)) > 120; if (heavy) this._hvT = now;
+      if (heavy) {                                            // time of day: sky, sun, light, reflections
+        const sun = sunPosition(t, this.observer.lat, this.observer.lon), sky = skyColours(sun.el);
+        const g = this.three.skyCanvas.getContext('2d'), grd = g.createLinearGradient(0, this.three.skyCanvas.height, 0, 0);
+        grd.addColorStop(0, rgb(sky.hor)); grd.addColorStop(1, rgb(sky.top));
+        g.fillStyle = grd; g.fillRect(0, 0, 8, 256); this.three.skyTex.needsUpdate = true;
+        this._updateEnv(sky);
+        this.three.scene.fog.color = new T.Color(rgb(sky.hor));
+        this.three.sun.intensity = 0.15 + 1.05 * Math.max(0, sky.light);
+        this.three.hemi.intensity = 0.25 + 0.5 * sky.light;
+        const sd = new T.Vector3(Math.sin(sun.az*D2R)*Math.cos(sun.el*D2R), Math.sin(sun.el*D2R), -Math.cos(sun.az*D2R)*Math.cos(sun.el*D2R));
+        this.three.sun.position.copy(sd.clone().multiplyScalar(200000));
+        this.three.sunBall.position.copy(sd.clone().multiplyScalar(360000));
+        this.three.sunBall.visible = sun.el > -2; this._sun = sun;
+      }
+      // aircraft transforms — every frame, so motion stays smooth at the display refresh rate
       const positions = []; let readout = '';
       for (const tr of this.tracks) {
         const m = this.three.meshes[tr.id]; if (!m) continue;
@@ -339,10 +348,13 @@
         if (!readout) { const el = Math.atan2(e.up, Math.max(e.d,1))*R2D, dist = Math.hypot(e.d, e.up);
           readout = `bearing <b>${compass(e.az)}</b> · elevation <b>${el.toFixed(0)}°</b> · range <b>${dist>=1000?(dist/1000).toFixed(1)+' km':Math.round(dist)+' m'}</b> · alt <b>${r.alt!=null?Math.round(r.alt).toLocaleString()+' ft':'—'}</b>`; }
       }
-      const ro = $('gv-readout');
-      if (ro) { const sunTxt = sun.el > 0 ? `☀ ${sun.el.toFixed(0)}°` : sun.el > -6 ? '🌆 dusk' : '🌙 night';
-        ro.innerHTML = (readout || 'no aircraft up at this moment') + ` &nbsp;·&nbsp; ${sunTxt}` + (this.live ? '' : ` &nbsp;·&nbsp; ${new Date(t).toLocaleTimeString()}`); }
-      this.onTime(t, positions);
+      if (heavy) {                                            // readout text + map markers (throttled with the slow work)
+        const sun = this._sun || sunPosition(t, this.observer.lat, this.observer.lon);
+        const ro = $('gv-readout');
+        if (ro) { const sunTxt = sun.el > 0 ? `☀ ${sun.el.toFixed(0)}°` : sun.el > -6 ? '🌆 dusk' : '🌙 night';
+          ro.innerHTML = (readout || 'no aircraft up at this moment') + ` &nbsp;·&nbsp; ${sunTxt}` + (this.live ? '' : ` &nbsp;·&nbsp; ${new Date(t).toLocaleTimeString()}`); }
+        this.onTime(t, positions);
+      }
     }
     _updateEnv(sky) {                                        // reflect the current sky off PBR surfaces (throttled by light level)
       const th = this.three; if (!th || !th.pmrem) return;
@@ -359,30 +371,53 @@
       this.three.scene.fog.far = sizeM * 0.8;
       const dLat = halfKm/111, dLon = halfKm/(111*Math.cos(this.observer.lat*D2R));
       const bbox = [this.observer.lon-dLon, this.observer.lat-dLat, this.observer.lon+dLon, this.observer.lat+dLat].join(',');
-      const url = `${ESRI}?bbox=${bbox}&bboxSR=4326&imageSR=4326&size=2048,2048&format=jpg&transparent=false&f=image`;
+      const mk = px => `${ESRI}?bbox=${bbox}&bboxSR=4326&imageSR=4326&size=${px},${px}&format=jpg&transparent=false&f=image`;
       const loader = new this.three.T.TextureLoader(); loader.setCrossOrigin('anonymous');
-      loader.load(url, tex => { if (!this.three) return; const T = this.three.T;
-        if (T.sRGBEncoding != null) tex.encoding = T.sRGBEncoding;
+      const token = ++this._groundToken;                     // ignore stale loads when the observer is dragged around
+      const apply = tex => {
+        if (!this.three || token !== this._groundToken) { if (tex && tex.dispose) tex.dispose(); return; }
+        const T = this.three.T; if (T.sRGBEncoding != null) tex.encoding = T.sRGBEncoding;
         try { tex.anisotropy = this.three.renderer.capabilities.getMaxAnisotropy(); } catch (e) {}
-        this.three.groundMat.map = tex; this.three.groundMat.color.set(0xffffff);
-        this.three.groundMat.roughness = 0.92; this.three.groundMat.needsUpdate = true; }, undefined, () => {});
+        const old = this.three.groundMat.map; this.three.groundMat.map = tex; this.three.groundMat.color.set(0xffffff);
+        this.three.groundMat.roughness = 0.92; this.three.groundMat.needsUpdate = true;
+        if (old && old !== tex) old.dispose();
+      };
+      // show a quick low-res tile first so the ground appears fast, then sharpen it in the background
+      loader.load(mk(1024), tex => { apply(tex); if (this.three && token === this._groundToken) loader.load(mk(2048), apply, undefined, () => {}); }, undefined, () => {});
     }
     _resize() {
       if (!this.three || !this._open) return;
       const c = $('gv-canvas'), w = c.clientWidth || c.getBoundingClientRect().width, h = c.clientHeight || 300;
       this.three.renderer.setSize(w, h, false); this.three.camera.aspect = w / Math.max(1, h); this.three.camera.updateProjectionMatrix();
     }
-    _start() { if (this._raf) return; const loop = () => { if (!this._open) return; this._raf = requestAnimationFrame(loop);
-      if (this.view === 'orbit') this.three.controls.update();        // stand sets the camera from pointer drags
-      else if (this._isFollow()) this._followCam();                   // chase/cockpit/wing track the aircraft
-      this.three.renderer.render(this.three.scene, this.three.camera); }; this._raf = requestAnimationFrame(loop); }
+    _start() {
+      if (this._raf) return;
+      let last = (global.performance && performance.now) ? performance.now() : Date.now();
+      const loop = (ts) => {
+        if (!this._open) return; this._raf = requestAnimationFrame(loop);
+        const now = ts || ((global.performance && performance.now) ? performance.now() : Date.now());
+        const dt = Math.min(0.05, Math.max(0, (now - last) / 1000)); last = now;   // seconds since last frame, clamped over stalls
+        if (this.playing && !this.live) {                              // advance the clock by real elapsed time, then interpolate
+          this.t += dt * 1000 * this._baseRate * this.speed;
+          if (this.t >= this.tmax) { this.t = this.tmax; this.pause(); }
+          this.setTime(this.t, true);                                  // 'true' = smooth-playback update (throttles the slow work)
+        }
+        if (this.view === 'orbit') this.three.controls.update();       // stand sets the camera from pointer drags
+        else if (this._isFollow()) this._followCam();                  // chase/cockpit/wing track the aircraft
+        this.three.renderer.render(this.three.scene, this.three.camera);
+      };
+      this._raf = requestAnimationFrame(loop);
+    }
     _stop() { if (this._raf) { cancelAnimationFrame(this._raf); this._raf = 0; } }
     play() {
       if (this.live) return; this.playing = true; const pl = $('gv-play'); if (pl) pl.textContent = '❚❚';
-      const span = this.tmax - this.tmin || 1; if (this.t >= this.tmax) this.t = this.tmin;
-      this.timer = setInterval(() => { this.t += span/240; if (this.t >= this.tmax) { this.t = this.tmax; this.pause(); } this.setTime(this.t); }, 55);
+      if (this.t >= this.tmax) this.t = this.tmin;                     // restart from the beginning if parked at the end
     }
-    pause() { this.playing = false; if (this.timer) { clearInterval(this.timer); this.timer = null; } const pl = $('gv-play'); if (pl) pl.textContent = '▶'; }
+    pause() { this.playing = false; const pl = $('gv-play'); if (pl) pl.textContent = '▶'; }
+    cycleSpeed() {
+      const i = (this._speeds.indexOf(this.speed) + 1) % this._speeds.length;
+      this.speed = this._speeds[i]; const sp = $('gv-speed'); if (sp) sp.textContent = this.speed + '×';
+    }
     _fallback() {
       const c = $('gv-canvas'); if (!c || !c.getContext) return;
       const ctx = c.getContext('2d'); if (!ctx) return;

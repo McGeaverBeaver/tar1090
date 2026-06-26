@@ -86,6 +86,8 @@
   #gv-canvas { display: block; width: 100%; height: 300px; background: #0a0e16; }
   #gv-ctrls { display: flex; align-items: center; gap: 8px; padding: 7px 12px 2px; }
   #gv-ctrls #gv-play { background: #2d6cdf; color: #fff; border: 0; border-radius: 999px; padding: 4px 12px; cursor: pointer; }
+  #gv-ctrls #gv-speed { background: #2a2f38; color: #cdd5e0; border: 1px solid #3a4150; border-radius: 999px; padding: 4px 10px; cursor: pointer; font-variant-numeric: tabular-nums; }
+  #gv-ctrls #gv-speed:hover { color: #fff; background: #353b46; }
   #gv-ctrls #gv-scrub { flex: 1; }
   #gv-readout { font: 11px/1.5 ui-monospace, monospace; color: #cbd3df; padding: 4px 12px; display: flex; gap: 16px; flex-wrap: wrap; }
   #gv-readout b { color: #fff; font-weight: 600; }
@@ -251,7 +253,7 @@
     <div id="gv-hd"><span>3D view — observer at <b id="gv-from">your receiver</b></span>
       <span class="sp"></span><span class="m mode" id="gv-mode" title="Switch camera — Chase / Cockpit / Wing follow the plane · Stand / Orbit are free">🎥 Chase</span><span class="m" id="gv-close" title="Close">✕</span></div>
     <canvas id="gv-canvas"></canvas>
-    <div id="gv-ctrls"><button id="gv-play" style="display:none">▶</button><input id="gv-scrub" type="range" min="0" max="0" value="0" style="display:none"></div>
+    <div id="gv-ctrls"><button id="gv-play" style="display:none">▶</button><button id="gv-speed" title="Playback speed — tap to change" style="display:none">1×</button><input id="gv-scrub" type="range" min="0" max="0" value="0" style="display:none"></div>
     <div id="gv-readout"></div>
     <div id="gv-hint">Live 3D — the aircraft now in the list. Tap 🎥 to switch camera: <b>Chase</b>, <b>Cockpit</b> and <b>Wing</b> follow the plane · <b>Stand</b> looks up from the ground · <b>Orbit</b> is a free fly-around. Drag the green dot to move where you're standing.</div>
   </div>
@@ -261,7 +263,7 @@
 <script src="acicons.js"></script>
 <script src="https://unpkg.com/three@0.147.0/build/three.min.js"></script>
 <script src="https://unpkg.com/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
-<script src="groundview.js?v=3d5"></script>
+<script src="groundview.js?v=3d6"></script>
 <script>
 const $ = id => document.getElementById(id);
 const map = L.map('map', { worldCopyJump:true, zoomControl:false }).setView([40, -74], 7);
