@@ -172,16 +172,33 @@
       const sun = new T.DirectionalLight(0xffffff, 1.0); scene.add(sun);
       const sunBall = new T.Mesh(new T.SphereGeometry(4000, 24, 16),
         new T.MeshBasicMaterial({ color: 0xfff3c0, fog: false, toneMapped: false })); scene.add(sunBall);
+      // soft glow around the sun (golden hour) + a night starfield
+      const glow = new T.Sprite(new T.SpriteMaterial({ map: this._radialTex(T, '255,236,186'), transparent: true, opacity: 0, depthWrite: false, depthTest: false, blending: T.AdditiveBlending, fog: false, toneMapped: false }));
+      glow.scale.set(150000, 150000, 1); scene.add(glow);
+      const sv = []; for (let i = 0; i < 1500; i++) { const u = Math.random()*2-1, th = Math.random()*Math.PI*2, ss = Math.sqrt(1-u*u);
+        sv.push(388000*ss*Math.cos(th), Math.abs(388000*u)*0.92 + 1500, 388000*ss*Math.sin(th)); }
+      const starGeo = new T.BufferGeometry(); starGeo.setAttribute('position', new T.Float32BufferAttribute(sv, 3));
+      const stars = new T.Points(starGeo, new T.PointsMaterial({ color: 0xfdfdff, size: 2, sizeAttenuation: false, transparent: true, opacity: 0, depthWrite: false, fog: false, toneMapped: false })); scene.add(stars);
       // ground
       const groundMat = new T.MeshStandardMaterial({ color: 0x2a3340, roughness: 1, metalness: 0 });
       const ground = new T.Mesh(new T.PlaneGeometry(1, 1), groundMat);
       ground.rotation.x = -Math.PI / 2; scene.add(ground);
       const fleet = new T.Group(); scene.add(fleet);
       scene.fog = new T.Fog(0x9fb4d8, 2000, 60000);
+      // shared assets for the per-plane ground shadows
+      this._shadowTex = this._radialTex(T, '0,0,0'); this._shadowTex.userData.shared = true;
+      this._shadowGeo = new T.PlaneGeometry(1, 1); this._shadowGeo.userData.shared = true;
       // image-based lighting: reflect the sky off the aircraft + ground for a modern PBR look (refreshed in setTime)
       let pmrem = null; try { pmrem = new T.PMREMGenerator(renderer); pmrem.compileEquirectangularShader(); } catch (e) { pmrem = null; }
-      this.three = { T, renderer, scene, camera, controls, sky, skyCanvas, skyTex, hemi, sun, sunBall, ground, groundMat, fleet, pmrem, envRT: null, raf: 0, meshes: {} };
+      this.three = { T, renderer, scene, camera, controls, sky, skyCanvas, skyTex, hemi, sun, sunBall, glow, stars, ground, groundMat, fleet, pmrem, envRT: null, raf: 0, meshes: {} };
       return true;
+    }
+    _radialTex(T, rgbStr) {
+      const c = document.createElement('canvas'); c.width = c.height = 128;
+      const g = c.getContext('2d'), grd = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+      grd.addColorStop(0, `rgba(${rgbStr},1)`); grd.addColorStop(0.35, `rgba(${rgbStr},0.55)`); grd.addColorStop(1, `rgba(${rgbStr},0)`);
+      g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
+      return new T.CanvasTexture(c);
     }
     _planeMesh(color, spanM) {
       // Object3D.lookAt() aims the local +Z at the target, so the nose points +Z (tail at -Z).
@@ -213,23 +230,30 @@
     projectAll() {
       if (!this.three || !this.observer) return;
       const T = this.three.T, fleet = this.three.fleet;
-      // dispose the previous fleet's GPU resources (this runs every live tick)
-      fleet.traverse(o => { if (o.geometry) o.geometry.dispose();
-        if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); } });
+      // dispose the previous fleet's GPU resources (skip shared shadow geo/texture)
+      fleet.traverse(o => {
+        if (o.geometry && !(o.geometry.userData && o.geometry.userData.shared)) o.geometry.dispose();
+        if (o.material) { const mm = o.material; if (mm.map && !(mm.map.userData && mm.map.userData.shared)) mm.map.dispose(); mm.dispose(); }
+      });
       while (fleet.children.length) fleet.remove(fleet.children[0]);
       this.three.meshes = {};
       const EXAG = 22, span = 12 * EXAG; this._span = span;  // exaggerate ~12 m wingspan so the model is visible
       for (const tr of this.tracks) {
         const col = tr.color || '#6cc1ff';
-        // trail (decimated)
-        const stepN = Math.max(1, Math.floor(tr.points.length / 400));
-        const verts = [];
-        for (let i = 0; i < tr.points.length; i += stepN) { const p = tr.points[i]; if (p[1] == null) continue; const e = enu(this.observer, p[1], p[2], p[3]); verts.push(e.x, e.y, e.z); }
-        const lineGeo = new T.BufferGeometry(); lineGeo.setAttribute('position', new T.Float32BufferAttribute(verts, 3));
-        const line = new T.Line(lineGeo, new T.LineBasicMaterial({ color: new T.Color(col), transparent: true, opacity: 0.7, toneMapped: false }));
+        // trail, coloured by altitude (decimated)
+        const stepN = Math.max(1, Math.floor(tr.points.length / 400)), verts = [], cols = [];
+        for (let i = 0; i < tr.points.length; i += stepN) { const p = tr.points[i]; if (p[1] == null) continue;
+          const e = enu(this.observer, p[1], p[2], p[3]); verts.push(e.x, e.y, e.z);
+          const cc = new T.Color(this.altColor(p[3])); cols.push(cc.r, cc.g, cc.b); }
+        const lineGeo = new T.BufferGeometry();
+        lineGeo.setAttribute('position', new T.Float32BufferAttribute(verts, 3));
+        lineGeo.setAttribute('color', new T.Float32BufferAttribute(cols, 3));
+        const line = new T.Line(lineGeo, new T.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.6, toneMapped: false }));
         fleet.add(line);
         const plane = this._planeMesh(col, span); fleet.add(plane);
-        this.three.meshes[tr.id] = { plane, track: tr };
+        const shadow = new T.Mesh(this._shadowGeo, new T.MeshBasicMaterial({ map: this._shadowTex, color: 0x000000, transparent: true, opacity: 0.34, depthWrite: false, fog: false, toneMapped: false }));
+        shadow.rotation.x = -Math.PI / 2; shadow.position.y = 1.5; fleet.add(shadow);
+        this.three.meshes[tr.id] = { plane, shadow, track: tr };
       }
     }
     _centroid() {
@@ -332,18 +356,23 @@
         this.three.sun.position.copy(sd.clone().multiplyScalar(200000));
         this.three.sunBall.position.copy(sd.clone().multiplyScalar(360000));
         this.three.sunBall.visible = sun.el > -2; this._sun = sun;
+        this.three.glow.position.copy(sd.clone().multiplyScalar(330000));
+        this.three.glow.material.opacity = Math.max(0, Math.min(0.55, (sun.el + 6) / 24));
+        this.three.stars.material.opacity = Math.max(0, Math.min(1, (-4 - sun.el) / 8));
       }
       // aircraft transforms — every frame, so motion stays smooth at the display refresh rate
       const positions = []; let readout = '';
       for (const tr of this.tracks) {
         const m = this.three.meshes[tr.id]; if (!m) continue;
         const r = this._sampleRaw(tr, t);
-        const vis = !!r; m.plane.visible = vis;
+        const vis = !!r; m.plane.visible = vis; if (m.shadow) m.shadow.visible = vis;
         if (!vis) continue;
         const e = enu(this.observer, r.lat, r.lon, r.alt);
         m.plane.position.set(e.x, e.y, e.z);
         const e2 = r.prev ? enu(this.observer, r.prev[1], r.prev[2], r.prev[3]) : null;
         if (e2 && (e.x!==e2.x || e.z!==e2.z || e.y!==e2.y)) m.plane.lookAt(e.x + (e.x-e2.x), e.y + (e.y-e2.y), e.z + (e.z-e2.z));
+        if (m.shadow) { const sz = (this._span || 264) * (1 + e.up / 1500); m.shadow.position.set(e.x, 1.5, e.z); m.shadow.scale.set(sz, sz, 1);
+          m.shadow.material.opacity = Math.max(0.04, 0.38 - e.up * 0.00012); }
         positions.push({ id: tr.id, color: tr.color, label: tr.label, lat: r.lat, lon: r.lon, alt: r.alt });
         if (!readout) { const el = Math.atan2(e.up, Math.max(e.d,1))*R2D, dist = Math.hypot(e.d, e.up);
           readout = `bearing <b>${compass(e.az)}</b> · elevation <b>${el.toFixed(0)}°</b> · range <b>${dist>=1000?(dist/1000).toFixed(1)+' km':Math.round(dist)+' m'}</b> · alt <b>${r.alt!=null?Math.round(r.alt).toLocaleString()+' ft':'—'}</b>`; }
