@@ -228,7 +228,7 @@
   <button id="showall" class="toggle" title="Load every flight for the time period (ignores the Max limit). The list still narrows to the map view as you zoom.">Show all</button>
   <button id="viewbtn" title="Switch the map between altitude-coloured trails and directional aircraft icons">〰 Altitude trails</button>
   <button id="multi" class="toggle ghost" title="Multi-select: when on, each tap adds/removes a flight">Multi</button>
-  <button id="ground" class="toggle ghost" title="Watch the selected flight(s) as they'd look from the ground — select several (Multi) to see a formation">👁 Ground view</button>
+  <button id="ground" class="toggle ghost" title="Open the 3D view — fly along with the selected flight(s); select several (Multi) for a formation">🧊 3D</button>
   <div id="colmenu-wrap">
     <button id="colbtn" title="Show / hide columns">Columns ▾</button>
     <div id="colmenu"></div>
@@ -270,7 +270,7 @@
   </div>
 
   <div id="groundview">
-    <div id="gv-hd"><span>Ground view — looking up from <b id="gv-from">the crowd line</b></span>
+    <div id="gv-hd"><span>3D view — observer at <b id="gv-from">the crowd line</b></span>
       <span class="sp"></span><span class="m mode" id="gv-mode" title="Switch camera — Chase / Cockpit / Wing follow the plane · Stand / Orbit are free">🎥 Chase</span><span class="m" id="gv-close" title="Close">✕</span></div>
     <canvas id="gv-canvas"></canvas>
     <div id="gv-ctrls"><button id="gv-play">▶</button><input id="gv-scrub" type="range" min="0" max="0" value="0"></div>
@@ -283,7 +283,7 @@
 <script src="acicons.js"></script>
 <script src="https://unpkg.com/three@0.147.0/build/three.min.js"></script>
 <script src="https://unpkg.com/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
-<script src="groundview.js?v=3d4"></script>
+<script src="groundview.js?v=3d5"></script>
 <script>
 const $ = id => document.getElementById(id);
 const pad = n => String(n).padStart(2, '0');
@@ -878,7 +878,7 @@ function gvOnClose(){
 }
 function gvOpen(){
   const tracks = gvTracks();
-  if (!tracks.length){ setStatus('select one or more flights (use Multi for a formation), then open the ground view'); return; }
+  if (!tracks.length){ setStatus('select one or more flights (use Multi for a formation), then open the 3D view'); return; }
   const c = gvCentroid(tracks);
   if (!observer || (c && haversineM(observer.lat, observer.lon, c.lat, c.lon) > 50000)){ observer = c; $('gv-from').textContent = 'the crowd line'; }
   gvPlaceObs(); gvLayer.addTo(map);

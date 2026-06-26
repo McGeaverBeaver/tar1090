@@ -127,6 +127,9 @@
       let renderer;
       try { renderer = new T.WebGLRenderer({ canvas, antialias: true }); } catch (e) { return false; }
       renderer.setPixelRatio(Math.min(2, global.devicePixelRatio || 1));
+      // modern colour pipeline: sRGB output + filmic tone mapping so lighting reads rich, not flat
+      if (T.sRGBEncoding != null) renderer.outputEncoding = T.sRGBEncoding;
+      if (T.ACESFilmicToneMapping != null) { renderer.toneMapping = T.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.15; }
       const scene = new T.Scene();
       const camera = new T.PerspectiveCamera(58, 1, 1, 600000);
       camera.position.set(0, 2, 0.1);
@@ -155,37 +158,52 @@
         this.fpv.fov = clamp(this.fpv.fov + Math.sign(e.deltaY) * 3, 20, 85); camera.fov = this.fpv.fov; camera.updateProjectionMatrix(); }, { passive: false });
       // sky dome
       const skyCanvas = document.createElement('canvas'); skyCanvas.width = 8; skyCanvas.height = 256;
-      const skyTex = new T.CanvasTexture(skyCanvas);
-      const sky = new T.Mesh(new T.SphereGeometry(400000, 24, 12),
-        new T.MeshBasicMaterial({ map: skyTex, side: T.BackSide, depthWrite: false, fog: false }));
+      const skyTex = new T.CanvasTexture(skyCanvas); if (T.sRGBEncoding != null) skyTex.encoding = T.sRGBEncoding;
+      const sky = new T.Mesh(new T.SphereGeometry(400000, 32, 16),
+        new T.MeshBasicMaterial({ map: skyTex, side: T.BackSide, depthWrite: false, fog: false, toneMapped: false }));
       scene.add(sky);
       // lights
       const hemi = new T.HemisphereLight(0xbfd4ff, 0x202830, 0.7); scene.add(hemi);
       const sun = new T.DirectionalLight(0xffffff, 1.0); scene.add(sun);
-      const sunBall = new T.Mesh(new T.SphereGeometry(4000, 16, 12),
-        new T.MeshBasicMaterial({ color: 0xfff3c0, fog: false })); scene.add(sunBall);
+      const sunBall = new T.Mesh(new T.SphereGeometry(4000, 24, 16),
+        new T.MeshBasicMaterial({ color: 0xfff3c0, fog: false, toneMapped: false })); scene.add(sunBall);
       // ground
       const groundMat = new T.MeshStandardMaterial({ color: 0x2a3340, roughness: 1, metalness: 0 });
       const ground = new T.Mesh(new T.PlaneGeometry(1, 1), groundMat);
       ground.rotation.x = -Math.PI / 2; scene.add(ground);
-      // a faint reference grid on top of the ground
-      const grid = new T.GridHelper(20000, 40, 0x4a5a72, 0x2c3748); grid.position.y = 0.5;
-      grid.material.transparent = true; grid.material.opacity = 0.25; scene.add(grid);
       const fleet = new T.Group(); scene.add(fleet);
       scene.fog = new T.Fog(0x9fb4d8, 2000, 60000);
-      this.three = { T, renderer, scene, camera, controls, sky, skyCanvas, skyTex, hemi, sun, sunBall, ground, groundMat, grid, fleet, raf: 0, meshes: {} };
+      // image-based lighting: reflect the sky off the aircraft + ground for a modern PBR look (refreshed in setTime)
+      let pmrem = null; try { pmrem = new T.PMREMGenerator(renderer); pmrem.compileEquirectangularShader(); } catch (e) { pmrem = null; }
+      this.three = { T, renderer, scene, camera, controls, sky, skyCanvas, skyTex, hemi, sun, sunBall, ground, groundMat, fleet, pmrem, envRT: null, raf: 0, meshes: {} };
       return true;
     }
     _planeMesh(color, spanM) {
       // Object3D.lookAt() aims the local +Z at the target, so the nose points +Z (tail at -Z).
-      const T = this.three.T, g = new T.Group();
-      const mat = new T.MeshStandardMaterial({ color: new T.Color(color), roughness: 0.55, metalness: 0.15 });
-      const body = new T.Mesh(new T.CylinderGeometry(spanM*0.02, spanM*0.05, spanM*0.95, 10), mat);
-      body.rotation.x = Math.PI / 2;                         // pointy end (+Z) is the nose
-      const wing = new T.Mesh(new T.BoxGeometry(spanM, spanM*0.04, spanM*0.16), mat); wing.position.z = -spanM*0.02;
-      const tail = new T.Mesh(new T.BoxGeometry(spanM*0.4, spanM*0.04, spanM*0.1), mat); tail.position.z = -spanM*0.42;
-      const fin = new T.Mesh(new T.BoxGeometry(spanM*0.04, spanM*0.22, spanM*0.12), mat); fin.position.set(0, spanM*0.09, -spanM*0.42);
-      g.add(body, wing, tail, fin); return g;
+      const T = this.three.T, g = new T.Group(), s = spanM;
+      const mat = new T.MeshStandardMaterial({ color: new T.Color(color), roughness: 0.4, metalness: 0.3, envMapIntensity: 1.1 });
+      // smooth fuselage (capsule) + cone nose, both aligned to +Z
+      const fuse = new T.Mesh(new T.CapsuleGeometry(s*0.030, s*0.60, 6, 18), mat); fuse.rotation.x = Math.PI/2;
+      const nose = new T.Mesh(new T.ConeGeometry(s*0.030, s*0.16, 18), mat); nose.rotation.x = Math.PI/2; nose.position.z = s*0.38;
+      g.add(fuse, nose);
+      // swept, tapered wing trapezoid (right side) mirrored to the left — reused for wings + tailplane
+      const wing = (half, cR, cT, sweep, th, zoff) => {
+        const sh = new T.Shape();
+        sh.moveTo(0, cR*0.5); sh.lineTo(half, -sweep + cT*0.5); sh.lineTo(half, -sweep - cT*0.5); sh.lineTo(0, -cR*0.5); sh.closePath();
+        const geo = new T.ExtrudeGeometry(sh, { depth: th, bevelEnabled: false });
+        geo.translate(0, 0, -th/2); geo.rotateX(Math.PI/2);            // lie flat: thin in Y, shape +y -> model +z
+        const r = new T.Mesh(geo, mat), l = new T.Mesh(geo, mat); l.scale.x = -1;
+        r.position.z = zoff; l.position.z = zoff; return [r, l];
+      };
+      g.add(...wing(s*0.5,  s*0.17, s*0.05,  s*0.12, s*0.018, -s*0.02));   // main wings
+      g.add(...wing(s*0.19, s*0.09, s*0.035, s*0.05, s*0.014, -s*0.40));   // tailplane
+      // swept vertical fin in the Y-Z plane, thin in X
+      const fs = new T.Shape();
+      fs.moveTo(s*0.08, 0); fs.lineTo(-s*0.08, 0); fs.lineTo(-s*0.08 - s*0.05, s*0.20); fs.lineTo(-s*0.05, s*0.20); fs.closePath();
+      const fgeo = new T.ExtrudeGeometry(fs, { depth: s*0.014, bevelEnabled: false });
+      fgeo.translate(0, 0, -s*0.007); fgeo.rotateY(-Math.PI/2);
+      const fin = new T.Mesh(fgeo, mat); fin.position.z = -s*0.36;
+      g.add(fin); return g;
     }
     projectAll() {
       if (!this.three || !this.observer) return;
@@ -203,23 +221,11 @@
         const verts = [];
         for (let i = 0; i < tr.points.length; i += stepN) { const p = tr.points[i]; if (p[1] == null) continue; const e = enu(this.observer, p[1], p[2], p[3]); verts.push(e.x, e.y, e.z); }
         const lineGeo = new T.BufferGeometry(); lineGeo.setAttribute('position', new T.Float32BufferAttribute(verts, 3));
-        const line = new T.Line(lineGeo, new T.LineBasicMaterial({ color: new T.Color(col), transparent: true, opacity: 0.7 }));
+        const line = new T.Line(lineGeo, new T.LineBasicMaterial({ color: new T.Color(col), transparent: true, opacity: 0.7, toneMapped: false }));
         fleet.add(line);
         const plane = this._planeMesh(col, span); fleet.add(plane);
-        const label = this._sprite(tr.label || '', col); if (label) fleet.add(label);
-        this.three.meshes[tr.id] = { plane, label, track: tr };
+        this.three.meshes[tr.id] = { plane, track: tr };
       }
-    }
-    _sprite(text, color) {
-      if (!text) return null;
-      const T = this.three.T, c = document.createElement('canvas'), pad = 8;
-      const ctx = c.getContext('2d'); ctx.font = 'bold 40px system-ui';
-      c.width = ctx.measureText(text).width + pad*2; c.height = 54;
-      const g = ctx; g.font = 'bold 40px system-ui'; g.fillStyle = 'rgba(8,10,14,.65)';
-      g.fillRect(0, 0, c.width, c.height); g.fillStyle = color; g.textBaseline = 'middle'; g.fillText(text, pad, c.height/2);
-      const tex = new T.CanvasTexture(c);
-      const sp = new T.Sprite(new T.SpriteMaterial({ map: tex, depthTest: false, depthWrite: false }));
-      sp.scale.set(c.width/c.height * 1400, 1400, 1); sp.userData.aspect = c.width/c.height; return sp;
     }
     _centroid() {
       let n = 0, cx = 0, cy = 0, cz = 0;
@@ -309,6 +315,7 @@
       const g = this.three.skyCanvas.getContext('2d'), grd = g.createLinearGradient(0, this.three.skyCanvas.height, 0, 0);
       grd.addColorStop(0, rgb(sky.hor)); grd.addColorStop(1, rgb(sky.top));
       g.fillStyle = grd; g.fillRect(0, 0, 8, 256); this.three.skyTex.needsUpdate = true;
+      this._updateEnv(sky);
       this.three.fog = this.three.scene.fog; this.three.scene.fog.color = new T.Color(rgb(sky.hor));
       this.three.sun.intensity = 0.15 + 1.05 * Math.max(0, sky.light);
       this.three.hemi.intensity = 0.25 + 0.5 * sky.light;
@@ -322,13 +329,12 @@
       for (const tr of this.tracks) {
         const m = this.three.meshes[tr.id]; if (!m) continue;
         const r = this._sampleRaw(tr, t);
-        const vis = !!r; m.plane.visible = vis; if (m.label) m.label.visible = vis;
+        const vis = !!r; m.plane.visible = vis;
         if (!vis) continue;
         const e = enu(this.observer, r.lat, r.lon, r.alt);
         m.plane.position.set(e.x, e.y, e.z);
         const e2 = r.prev ? enu(this.observer, r.prev[1], r.prev[2], r.prev[3]) : null;
         if (e2 && (e.x!==e2.x || e.z!==e2.z || e.y!==e2.y)) m.plane.lookAt(e.x + (e.x-e2.x), e.y + (e.y-e2.y), e.z + (e.z-e2.z));
-        if (m.label) { m.label.position.set(e.x, e.y + 12*22*0.7, e.z); const s = Math.max(300, e.d*0.03); m.label.scale.set(s*m.label.userData.aspect, s, 1); }
         positions.push({ id: tr.id, color: tr.color, label: tr.label, lat: r.lat, lon: r.lon, alt: r.alt });
         if (!readout) { const el = Math.atan2(e.up, Math.max(e.d,1))*R2D, dist = Math.hypot(e.d, e.up);
           readout = `bearing <b>${compass(e.az)}</b> · elevation <b>${el.toFixed(0)}°</b> · range <b>${dist>=1000?(dist/1000).toFixed(1)+' km':Math.round(dist)+' m'}</b> · alt <b>${r.alt!=null?Math.round(r.alt).toLocaleString()+' ft':'—'}</b>`; }
@@ -338,6 +344,13 @@
         ro.innerHTML = (readout || 'no aircraft up at this moment') + ` &nbsp;·&nbsp; ${sunTxt}` + (this.live ? '' : ` &nbsp;·&nbsp; ${new Date(t).toLocaleTimeString()}`); }
       this.onTime(t, positions);
     }
+    _updateEnv(sky) {                                        // reflect the current sky off PBR surfaces (throttled by light level)
+      const th = this.three; if (!th || !th.pmrem) return;
+      const bucket = sky.night ? -1 : Math.round(Math.max(0, sky.light) * 6);
+      if (bucket === this._envLevel) return; this._envLevel = bucket;
+      try { const rt = th.pmrem.fromEquirectangular(th.skyTex);
+        if (th.envRT) th.envRT.dispose(); th.envRT = rt; th.scene.environment = rt.texture; } catch (e) {}
+    }
     _loadGround() {
       if (!this.three || !this.observer) return;
       let maxKm = 3; for (const tr of this.tracks) for (const p of tr.points) { if (p[1]==null) continue; maxKm = Math.max(maxKm, haversineM(this.observer.lat,this.observer.lon,p[1],p[2])/1000); }
@@ -346,9 +359,13 @@
       this.three.scene.fog.far = sizeM * 0.8;
       const dLat = halfKm/111, dLon = halfKm/(111*Math.cos(this.observer.lat*D2R));
       const bbox = [this.observer.lon-dLon, this.observer.lat-dLat, this.observer.lon+dLon, this.observer.lat+dLat].join(',');
-      const url = `${ESRI}?bbox=${bbox}&bboxSR=4326&imageSR=4326&size=1024,1024&format=jpg&transparent=false&f=image`;
+      const url = `${ESRI}?bbox=${bbox}&bboxSR=4326&imageSR=4326&size=2048,2048&format=jpg&transparent=false&f=image`;
       const loader = new this.three.T.TextureLoader(); loader.setCrossOrigin('anonymous');
-      loader.load(url, tex => { if (!this.three) return; this.three.groundMat.map = tex; this.three.groundMat.color.set(0xffffff); this.three.groundMat.needsUpdate = true; }, undefined, () => {});
+      loader.load(url, tex => { if (!this.three) return; const T = this.three.T;
+        if (T.sRGBEncoding != null) tex.encoding = T.sRGBEncoding;
+        try { tex.anisotropy = this.three.renderer.capabilities.getMaxAnisotropy(); } catch (e) {}
+        this.three.groundMat.map = tex; this.three.groundMat.color.set(0xffffff);
+        this.three.groundMat.roughness = 0.92; this.three.groundMat.needsUpdate = true; }, undefined, () => {});
     }
     _resize() {
       if (!this.three || !this._open) return;

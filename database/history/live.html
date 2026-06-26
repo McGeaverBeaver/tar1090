@@ -197,7 +197,7 @@
     <button class="tgl" id="t-recenter" title="Zoom to fit every aircraft">⤢ Fit</button>
     <button class="tgl" id="t-filter" title="Filter by altitude / military / type">⏷ Filter</button>
     <button class="tgl" id="t-airshow" title="Show only likely air-show aircraft: aerobatic / warbird / jet-demo types, or anything maneuvering with big altitude swings">✈ Air show</button>
-    <button class="tgl" id="t-ground" title="Watch the aircraft now in the list as they'd look from the ground (your receiver site)">👁 Ground</button>
+    <button class="tgl" id="t-ground" title="Open the 3D view — the aircraft now in the list, from your receiver site">🧊 3D</button>
   </div>
   <span id="count">—</span>
   <span id="updated"></span>
@@ -248,7 +248,7 @@
   <div id="status">Connecting to the live feed…</div>
 
   <div id="groundview">
-    <div id="gv-hd"><span>Ground view — looking up from <b id="gv-from">your receiver</b></span>
+    <div id="gv-hd"><span>3D view — observer at <b id="gv-from">your receiver</b></span>
       <span class="sp"></span><span class="m mode" id="gv-mode" title="Switch camera — Chase / Cockpit / Wing follow the plane · Stand / Orbit are free">🎥 Chase</span><span class="m" id="gv-close" title="Close">✕</span></div>
     <canvas id="gv-canvas"></canvas>
     <div id="gv-ctrls"><button id="gv-play" style="display:none">▶</button><input id="gv-scrub" type="range" min="0" max="0" value="0" style="display:none"></div>
@@ -261,7 +261,7 @@
 <script src="acicons.js"></script>
 <script src="https://unpkg.com/three@0.147.0/build/three.min.js"></script>
 <script src="https://unpkg.com/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
-<script src="groundview.js?v=3d4"></script>
+<script src="groundview.js?v=3d5"></script>
 <script>
 const $ = id => document.getElementById(id);
 const map = L.map('map', { worldCopyJump:true, zoomControl:false }).setView([40, -74], 7);
