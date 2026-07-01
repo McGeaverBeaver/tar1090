@@ -224,8 +224,14 @@
       fs.moveTo(s*0.08, 0); fs.lineTo(-s*0.08, 0); fs.lineTo(-s*0.08 - s*0.05, s*0.20); fs.lineTo(-s*0.05, s*0.20); fs.closePath();
       const fgeo = new T.ExtrudeGeometry(fs, { depth: s*0.014, bevelEnabled: false });
       fgeo.translate(0, 0, -s*0.007); fgeo.rotateY(-Math.PI/2);
-      const fin = new T.Mesh(fgeo, mat); fin.position.z = -s*0.36;
-      g.add(fin); return g;
+      const fin = new T.Mesh(fgeo, mat); fin.position.z = -s*0.36; g.add(fin);
+      // engine nacelles under the wings + a tinted canopy, so it reads as a real airframe
+      const eMat = new T.MeshStandardMaterial({ color: 0x33373f, roughness: 0.45, metalness: 0.55, envMapIntensity: 1.1 });
+      for (const sx of [1, -1]) { const n = new T.Mesh(new T.CylinderGeometry(s*0.036, s*0.03, s*0.17, 14), eMat);
+        n.rotation.x = Math.PI/2; n.position.set(sx*s*0.2, -s*0.05, s*0.02); g.add(n); }
+      const cMat = new T.MeshStandardMaterial({ color: 0x0b0f18, roughness: 0.12, metalness: 0.2, envMapIntensity: 1.5 });
+      const canopy = new T.Mesh(new T.SphereGeometry(s*0.03, 12, 10), cMat); canopy.scale.set(1, 0.62, 2.1); canopy.position.set(0, s*0.028, s*0.22); g.add(canopy);
+      return g;
     }
     projectAll() {
       if (!this.three || !this.observer) return;
@@ -335,6 +341,31 @@
       const f = Math.max(0, Math.min(1, (t-a[0])/(b[0]-a[0])));
       return { lat:a[1]+(b[1]-a[1])*f, lon:a[2]+(b[2]-a[2])*f, alt:(a[3]!=null&&b[3]!=null)?a[3]+(b[3]-a[3])*f:a[3], prev:a };
     }
+    // Catmull-Rom through the surrounding fixes -> a smooth, natural curve (not straight segments
+    // with a snap at every data point). Position + altitude are splined; heading & bank come from it.
+    _smooth(track, t) {
+      const p = track.points, n = p.length; if (!n) return null;
+      if (t < p[0][0] - 4000 || t > p[n-1][0] + 4000) return null;
+      let i = 0; while (i < n-1 && p[i+1][0] <= t) i++;
+      const a = p[i], b = p[Math.min(n-1, i+1)], p0 = p[Math.max(0, i-1)], p3 = p[Math.min(n-1, i+2)];
+      const f = b[0] === a[0] ? 0 : Math.max(0, Math.min(1, (t-a[0])/(b[0]-a[0])));
+      const cr = (v0,v1,v2,v3) => { const f2=f*f, f3=f2*f;
+        return 0.5*((2*v1) + (-v0+v2)*f + (2*v0-5*v1+4*v2-v3)*f2 + (-v0+3*v1-3*v2+v3)*f3); };
+      const alt = (a[3]!=null && b[3]!=null)
+        ? (p0[3]!=null && p3[3]!=null ? cr(p0[3],a[3],b[3],p3[3]) : a[3]+(b[3]-a[3])*f)
+        : (a[3]!=null ? a[3] : b[3]);
+      return { lat: cr(p0[1],a[1],b[1],p3[1]), lon: cr(p0[2],a[2],b[2],p3[2]), alt };
+    }
+    // full state at time t: smoothed position + fore/aft samples for heading + a coordinated-turn bank
+    _state(track, t) {
+      const dt = 1200, mid = this._smooth(track, t); if (!mid) return null;
+      const a = this._smooth(track, t - dt) || mid, b = this._smooth(track, t + dt) || mid;
+      const hA = bearing(a.lat, a.lon, mid.lat, mid.lon), hB = bearing(mid.lat, mid.lon, b.lat, b.lon);
+      const dH = ((hB - hA + 540) % 360) - 180;                 // signed heading change over ~dt
+      const spd = haversineM(a.lat, a.lon, b.lat, b.lon) / (2 * dt/1000);
+      const bank = Math.max(-1.02, Math.min(1.02, Math.atan(spd * (dH*D2R)/(dt/1000) / 9.81)));
+      return { lat: mid.lat, lon: mid.lon, alt: mid.alt, a, b, bank };
+    }
     setTime(t, fast) {
       this.t = t; const sc = $('gv-scrub'); if (sc && !this.live) sc.value = t;
       if (!this.three || !this.observer) return;
@@ -364,13 +395,15 @@
       const positions = []; let readout = '';
       for (const tr of this.tracks) {
         const m = this.three.meshes[tr.id]; if (!m) continue;
-        const r = this._sampleRaw(tr, t);
+        const r = this._state(tr, t);
         const vis = !!r; m.plane.visible = vis; if (m.shadow) m.shadow.visible = vis;
         if (!vis) continue;
         const e = enu(this.observer, r.lat, r.lon, r.alt);
         m.plane.position.set(e.x, e.y, e.z);
-        const e2 = r.prev ? enu(this.observer, r.prev[1], r.prev[2], r.prev[3]) : null;
-        if (e2 && (e.x!==e2.x || e.z!==e2.z || e.y!==e2.y)) m.plane.lookAt(e.x + (e.x-e2.x), e.y + (e.y-e2.y), e.z + (e.z-e2.z));
+        // smooth 3D heading (climb included) from the spline's fore/aft samples, plus a banking roll
+        const ea = enu(this.observer, r.a.lat, r.a.lon, r.a.alt), eb = enu(this.observer, r.b.lat, r.b.lon, r.b.alt);
+        const dx = eb.x - ea.x, dy = eb.y - ea.y, dz = eb.z - ea.z;
+        if (dx || dy || dz) { m.plane.up.set(0, 1, 0); m.plane.lookAt(e.x + dx, e.y + dy, e.z + dz); m.plane.rotateZ(-r.bank); }
         if (m.shadow) { const sz = (this._span || 264) * (1 + e.up / 1500); m.shadow.position.set(e.x, 1.5, e.z); m.shadow.scale.set(sz, sz, 1);
           m.shadow.material.opacity = Math.max(0.04, 0.38 - e.up * 0.00012); }
         positions.push({ id: tr.id, color: tr.color, label: tr.label, lat: r.lat, lon: r.lon, alt: r.alt });
