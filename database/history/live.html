@@ -263,7 +263,7 @@
 <script src="acicons.js"></script>
 <script src="https://unpkg.com/three@0.147.0/build/three.min.js"></script>
 <script src="https://unpkg.com/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
-<script src="groundview.js?v=3d8"></script>
+<script src="groundview.js?v=3d9"></script>
 <script>
 const $ = id => document.getElementById(id);
 const map = L.map('map', { worldCopyJump:true, zoomControl:false }).setView([40, -74], 7);
@@ -753,6 +753,7 @@ function gvLiveTracks(){
     const hist = altHistC.get(hex); if (!hist || hist.length < 2) continue;
     out.push({ id: hex, label: (a.flight || a.r || hex).trim(),
                color: (a.military || isMil(a.squawk)) ? '#ff5d5d' : gvHue(hex),
+               type: a.t, category: a.category, military: !!(a.military || isMil(a.squawk)),
                points: hist.map(p => [p[0], p[2], p[3], p[1]]) });   // [t,alt,lat,lon] -> [t,lat,lon,alt]
     if (out.length >= 14) break;
   }

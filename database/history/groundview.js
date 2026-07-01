@@ -67,6 +67,13 @@
     orbit:   { icon: '🛰️', name: 'Orbit',   fov: 58 },
   };
 
+  // rough aircraft-kind classifier (by ICAO type / ADS-B category / military flag) so we can draw a
+  // fitting silhouette. Deliberately small + editable; unknown -> airliner.
+  const S = str => new Set(str.trim().split(/\s+/));
+  const KIND_HELI = S('EC20 EC25 EC30 EC35 EC45 EC55 EC30 H125 H135 H145 H500 H60 AS50 AS55 AS65 AS32 A109 A119 A139 A169 B06 B407 B412 B429 B430 B505 R22 R44 R66 S76 S92 S61 S64 MI8 MI17 MI24 UH1 EH10 NH90 CH47 H47 B47G B47 GAZL EXPL LYNX PUMA SUPUMA');
+  const KIND_JET  = S('F16 F18 F15 F22 F35 F14 F4 F5 A10 AV8B HARR EUFI TYPH RAFL RFAL GRIP JAS39 J39 MG29 MG31 MG25 SU25 SU27 SU30 SU57 M2000 MIR2 F117 T38 T50 L39 L59 HAWK GNAT VAMP HUNT JPRO A4 MB33');
+  const KIND_GA   = S('C150 C152 C162 C170 C172 C72R C175 C177 C180 C182 C82R C185 C188 C206 C207 C210 P28A P28B P28R P28S P28T PA28 PA38 PA18 PA22 PA24 PA25 PA32 P32R PA46 SR20 SR22 S22T DA40 DA42 DA20 DV20 M20P M20T M20J AA1 AA5 BE33 BE35 BE36 BE23 BE24 BE19 RV3 RV4 RV6 RV7 RV8 RV9 RV10 RV14 GLAS GLST TOBA TB10 TB20 TB21 DR40 CH7 CH70 KITF PC7 PC9 PC12 PC21 TBM7 TBM8 TBM9 T6 AT6 SNJ HRVD P51 SPIT HURI CORS T28 YK52 YK55 YK18 C208 DHC2 DHC6 BE58 BE76');
+
   class GroundView {
     constructor(o) {
       o = o || {};
@@ -200,37 +207,77 @@
       g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
       return new T.CanvasTexture(c);
     }
-    _planeMesh(color, spanM) {
+    _kind(tr) {
+      const cat = (tr.category || '').toUpperCase(), t = (tr.type || '').toUpperCase();
+      if (cat === 'A7' || KIND_HELI.has(t)) return 'heli';
+      if (KIND_JET.has(t)) return 'jet';
+      if (KIND_GA.has(t) || (cat === 'A1' && !KIND_JET.has(t))) return 'ga';
+      return 'airliner';
+    }
+    _planeMesh(color, spanM, kind) {
       // Object3D.lookAt() aims the local +Z at the target, so the nose points +Z (tail at -Z).
-      const T = this.three.T, g = new T.Group(), s = spanM;
+      const T = this.three.T, g = new T.Group(), s = spanM, spin = [];
       const mat = new T.MeshStandardMaterial({ color: new T.Color(color), roughness: 0.4, metalness: 0.3, envMapIntensity: 1.1 });
-      // smooth fuselage (capsule) + cone nose, both aligned to +Z
-      const fuse = new T.Mesh(new T.CapsuleGeometry(s*0.030, s*0.60, 6, 18), mat); fuse.rotation.x = Math.PI/2;
-      const nose = new T.Mesh(new T.ConeGeometry(s*0.030, s*0.16, 18), mat); nose.rotation.x = Math.PI/2; nose.position.z = s*0.38;
-      g.add(fuse, nose);
-      // swept, tapered wing trapezoid (right side) mirrored to the left — reused for wings + tailplane
-      const wing = (half, cR, cT, sweep, th, zoff) => {
+      const dark = new T.MeshStandardMaterial({ color: 0x2f333b, roughness: 0.5, metalness: 0.55, envMapIntensity: 1.1 });
+      const glass = new T.MeshStandardMaterial({ color: 0x0b0f18, roughness: 0.12, metalness: 0.2, envMapIntensity: 1.5 });
+      const discMat = () => new T.MeshBasicMaterial({ color: 0x9aa3b2, transparent: true, opacity: 0.14, side: T.DoubleSide, depthWrite: false, toneMapped: false });
+      // swept trapezoid wing (right side + mirror) — reused for wings, tailplanes, fins
+      const wing = (half, cR, cT, sweep, th, zoff, yoff) => {
         const sh = new T.Shape();
         sh.moveTo(0, cR*0.5); sh.lineTo(half, -sweep + cT*0.5); sh.lineTo(half, -sweep - cT*0.5); sh.lineTo(0, -cR*0.5); sh.closePath();
         const geo = new T.ExtrudeGeometry(sh, { depth: th, bevelEnabled: false });
-        geo.translate(0, 0, -th/2); geo.rotateX(Math.PI/2);            // lie flat: thin in Y, shape +y -> model +z
+        geo.translate(0, 0, -th/2); geo.rotateX(Math.PI/2);
         const r = new T.Mesh(geo, mat), l = new T.Mesh(geo, mat); l.scale.x = -1;
-        r.position.z = zoff; l.position.z = zoff; return [r, l];
+        r.position.set(0, yoff||0, zoff); l.position.set(0, yoff||0, zoff); return [r, l];
       };
-      g.add(...wing(s*0.5,  s*0.17, s*0.05,  s*0.12, s*0.018, -s*0.02));   // main wings
-      g.add(...wing(s*0.19, s*0.09, s*0.035, s*0.05, s*0.014, -s*0.40));   // tailplane
-      // swept vertical fin in the Y-Z plane, thin in X
-      const fs = new T.Shape();
-      fs.moveTo(s*0.08, 0); fs.lineTo(-s*0.08, 0); fs.lineTo(-s*0.08 - s*0.05, s*0.20); fs.lineTo(-s*0.05, s*0.20); fs.closePath();
-      const fgeo = new T.ExtrudeGeometry(fs, { depth: s*0.014, bevelEnabled: false });
-      fgeo.translate(0, 0, -s*0.007); fgeo.rotateY(-Math.PI/2);
-      const fin = new T.Mesh(fgeo, mat); fin.position.z = -s*0.36; g.add(fin);
-      // engine nacelles under the wings + a tinted canopy, so it reads as a real airframe
-      const eMat = new T.MeshStandardMaterial({ color: 0x33373f, roughness: 0.45, metalness: 0.55, envMapIntensity: 1.1 });
-      for (const sx of [1, -1]) { const n = new T.Mesh(new T.CylinderGeometry(s*0.036, s*0.03, s*0.17, 14), eMat);
-        n.rotation.x = Math.PI/2; n.position.set(sx*s*0.2, -s*0.05, s*0.02); g.add(n); }
-      const cMat = new T.MeshStandardMaterial({ color: 0x0b0f18, roughness: 0.12, metalness: 0.2, envMapIntensity: 1.5 });
-      const canopy = new T.Mesh(new T.SphereGeometry(s*0.03, 12, 10), cMat); canopy.scale.set(1, 0.62, 2.1); canopy.position.set(0, s*0.028, s*0.22); g.add(canopy);
+      const finMesh = (h, z) => {
+        const fs = new T.Shape(); fs.moveTo(s*0.08, 0); fs.lineTo(-s*0.08, 0); fs.lineTo(-s*0.08 - s*0.05, h); fs.lineTo(-s*0.05, h); fs.closePath();
+        const fg = new T.ExtrudeGeometry(fs, { depth: s*0.014, bevelEnabled: false }); fg.translate(0, 0, -s*0.007); fg.rotateY(-Math.PI/2);
+        const m = new T.Mesh(fg, mat); m.position.z = z; return m;
+      };
+      const blades = (grp, len, wide, n, ax) => { for (let b = 0; b < n; b++) { const bl = new T.Mesh(new T.BoxGeometry(len, s*0.008, wide), dark); bl.rotation[ax] = b * Math.PI / n; grp.add(bl); } };
+
+      if (kind === 'heli') {
+        const pod = new T.Mesh(new T.SphereGeometry(s*0.12, 16, 12), mat); pod.scale.set(0.8, 0.92, 1.5); g.add(pod);
+        const boom = new T.Mesh(new T.CylinderGeometry(s*0.022, s*0.012, s*0.5, 10), mat); boom.rotation.x = Math.PI/2; boom.position.z = -s*0.36; g.add(boom);
+        g.add(finMesh(s*0.11, -s*0.58));
+        const rotor = new T.Group(); rotor.position.y = s*0.15;
+        const rd = new T.Mesh(new T.CircleGeometry(s*0.62, 30), discMat()); rd.rotation.x = -Math.PI/2; rd.material.opacity = 0.1; rotor.add(rd);
+        blades(rotor, s*1.24, s*0.03, 2, 'y'); rotor.add(new T.Mesh(new T.CylinderGeometry(s*0.012, s*0.012, s*0.07, 8), dark));
+        g.add(rotor); spin.push({ obj: rotor, axis: 'y', rate: 26 });
+        const tail = new T.Group(); tail.position.set(s*0.02, s*0.03, -s*0.585);
+        const td = new T.Mesh(new T.CircleGeometry(s*0.14, 16), discMat()); td.rotation.y = Math.PI/2; tail.add(td);
+        blades(tail, s*0.006, s*0.28, 2, 'x'); g.add(tail); spin.push({ obj: tail, axis: 'x', rate: 60 });
+        for (const sx of [1, -1]) { const sk = new T.Mesh(new T.CylinderGeometry(s*0.008, s*0.008, s*0.34, 8), dark); sk.rotation.x = Math.PI/2; sk.position.set(sx*s*0.09, -s*0.13, s*0.02); g.add(sk); }
+      } else if (kind === 'ga') {
+        const fuse = new T.Mesh(new T.CapsuleGeometry(s*0.05, s*0.42, 6, 16), mat); fuse.rotation.x = Math.PI/2; g.add(fuse);
+        const nose = new T.Mesh(new T.ConeGeometry(s*0.05, s*0.10, 16), mat); nose.rotation.x = Math.PI/2; nose.position.z = s*0.28; g.add(nose);
+        g.add(...wing(s*0.56, s*0.14, s*0.11, s*0.015, s*0.02, s*0.03, s*0.07));   // high straight wing
+        g.add(...wing(s*0.18, s*0.09, s*0.06, s*0.03, s*0.014, -s*0.32));
+        g.add(finMesh(s*0.15, -s*0.28));
+        const prop = new T.Group(); prop.position.z = s*0.34;
+        prop.add(new T.Mesh(new T.SphereGeometry(s*0.022, 8, 6), dark));
+        const pd = new T.Mesh(new T.CircleGeometry(s*0.17, 20), discMat()); pd.material.opacity = 0.16; prop.add(pd);
+        blades(prop, s*0.32, s*0.006, 2, 'z'); g.add(prop); spin.push({ obj: prop, axis: 'z', rate: 45 });
+        const canopy = new T.Mesh(new T.SphereGeometry(s*0.05, 12, 10), glass); canopy.scale.set(1, 0.72, 1.5); canopy.position.set(0, s*0.045, s*0.05); g.add(canopy);
+      } else if (kind === 'jet') {
+        const fuse = new T.Mesh(new T.CapsuleGeometry(s*0.026, s*0.72, 6, 16), mat); fuse.rotation.x = Math.PI/2; g.add(fuse);
+        const nose = new T.Mesh(new T.ConeGeometry(s*0.026, s*0.26, 16), mat); nose.rotation.x = Math.PI/2; nose.position.z = s*0.49; g.add(nose);
+        g.add(...wing(s*0.34, s*0.30, s*0.02, s*0.27, s*0.016, -s*0.06));           // delta wing
+        g.add(...wing(s*0.15, s*0.10, s*0.03, s*0.08, s*0.012, -s*0.44));
+        g.add(finMesh(s*0.17, -s*0.42));
+        const canopy = new T.Mesh(new T.SphereGeometry(s*0.026, 12, 10), glass); canopy.scale.set(1, 0.85, 2.6); canopy.position.set(0, s*0.02, s*0.30); g.add(canopy);
+        const ex = new T.Mesh(new T.CylinderGeometry(s*0.022, s*0.03, s*0.07, 14), dark); ex.rotation.x = Math.PI/2; ex.position.z = -s*0.52; g.add(ex);
+      } else {                                                                        // airliner (default)
+        const fuse = new T.Mesh(new T.CapsuleGeometry(s*0.030, s*0.60, 6, 18), mat); fuse.rotation.x = Math.PI/2; g.add(fuse);
+        const nose = new T.Mesh(new T.ConeGeometry(s*0.030, s*0.16, 18), mat); nose.rotation.x = Math.PI/2; nose.position.z = s*0.38; g.add(nose);
+        g.add(...wing(s*0.5,  s*0.17, s*0.05,  s*0.12, s*0.018, -s*0.02));
+        g.add(...wing(s*0.19, s*0.09, s*0.035, s*0.05, s*0.014, -s*0.40));
+        g.add(finMesh(s*0.20, -s*0.36));
+        for (const sx of [1, -1]) { const n = new T.Mesh(new T.CylinderGeometry(s*0.036, s*0.03, s*0.17, 14), dark); n.rotation.x = Math.PI/2; n.position.set(sx*s*0.2, -s*0.05, s*0.02); g.add(n); }
+        const canopy = new T.Mesh(new T.SphereGeometry(s*0.03, 12, 10), glass); canopy.scale.set(1, 0.62, 2.1); canopy.position.set(0, s*0.028, s*0.22); g.add(canopy);
+      }
+      g.userData.spin = spin;
       return g;
     }
     projectAll() {
@@ -256,7 +303,7 @@
         lineGeo.setAttribute('color', new T.Float32BufferAttribute(cols, 3));
         const line = new T.Line(lineGeo, new T.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.6, toneMapped: false }));
         fleet.add(line);
-        const plane = this._planeMesh(col, span); fleet.add(plane);
+        const plane = this._planeMesh(col, span, this._kind(tr)); fleet.add(plane);
         const shadow = new T.Mesh(this._shadowGeo, new T.MeshBasicMaterial({ map: this._shadowTex, color: 0x000000, transparent: true, opacity: 0.34, depthWrite: false, fog: false, toneMapped: false }));
         shadow.rotation.x = -Math.PI / 2; shadow.position.y = 1.5; fleet.add(shadow);
         this.three.meshes[tr.id] = { plane, shadow, track: tr };
@@ -464,6 +511,9 @@
           if (this.t >= this.tmax) { this.t = this.tmax; this.pause(); }
           this.setTime(this.t, true);                                  // 'true' = smooth-playback update (throttles the slow work)
         }
+        for (const id in this.three.meshes) { const m = this.three.meshes[id];   // spin propellers / rotors
+          if (!m.plane.visible) continue; const sp = m.plane.userData.spin; if (!sp) continue;
+          for (const s2 of sp) s2.obj.rotation[s2.axis] += s2.rate * dt; }
         if (this.view === 'orbit') this.three.controls.update();       // stand sets the camera from pointer drags
         else if (this._isFollow()) this._followCam();                  // chase/cockpit/wing track the aircraft
         this.three.renderer.render(this.three.scene, this.three.camera);

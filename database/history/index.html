@@ -285,7 +285,7 @@
 <script src="acicons.js"></script>
 <script src="https://unpkg.com/three@0.147.0/build/three.min.js"></script>
 <script src="https://unpkg.com/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
-<script src="groundview.js?v=3d8"></script>
+<script src="groundview.js?v=3d9"></script>
 <script>
 const $ = id => document.getElementById(id);
 const pad = n => String(n).padStart(2, '0');
@@ -852,7 +852,8 @@ function gvTracks(){                   // selected flights, else everything load
     const p = ptsFor(id); if (!p || p.length < 2) continue;
     const f = byId.get(id) || {};
     out.push({ id, points: p, label: (f.callsign || f.registration || f.icao_type || f.icao_hex || '').trim(),
-               color: f.military ? '#ff5d5d' : hue(f.icao_hex || String(id)) });
+               color: f.military ? '#ff5d5d' : hue(f.icao_hex || String(id)),
+               type: f.icao_type, military: f.military });
   }
   return out;
 }
