@@ -97,6 +97,12 @@
       const cl = $('gv-close'); if (cl) cl.onclick = () => this.close();
       const md = $('gv-mode'); if (md) md.onclick = () => this.cycleView();
       const sp = $('gv-speed'); if (sp) sp.onclick = () => this.cycleSpeed();
+      const fs = $('gv-fs'); if (fs) fs.onclick = () => {
+        const el = $('groundview');
+        if (document.fullscreenElement) document.exitFullscreen();
+        else if (el.requestFullscreen) el.requestFullscreen();
+      };
+      document.addEventListener('fullscreenchange', () => setTimeout(() => this._resize(), 60));
       window.addEventListener('resize', () => this._resize());
     }
 
@@ -186,10 +192,19 @@
         sv.push(388000*ss*Math.cos(th), Math.abs(388000*u)*0.92 + 1500, 388000*ss*Math.sin(th)); }
       const starGeo = new T.BufferGeometry(); starGeo.setAttribute('position', new T.Float32BufferAttribute(sv, 3));
       const stars = new T.Points(starGeo, new T.PointsMaterial({ color: 0xfdfdff, size: 2, sizeAttenuation: false, transparent: true, opacity: 0, depthWrite: false, fog: false, toneMapped: false })); scene.add(stars);
-      // ground
-      const groundMat = new T.MeshStandardMaterial({ color: 0x2a3340, roughness: 1, metalness: 0 });
+      // ground — edges fade into the haze (radial alpha) so it reads as atmosphere, not a floating square
+      const fadeC = document.createElement('canvas'); fadeC.width = fadeC.height = 256;
+      const fg = fadeC.getContext('2d'), fgrd = fg.createRadialGradient(128, 128, 0, 128, 128, 128);
+      fgrd.addColorStop(0, '#fff'); fgrd.addColorStop(0.66, '#fff'); fgrd.addColorStop(1, '#000');
+      fg.fillStyle = fgrd; fg.fillRect(0, 0, 256, 256);
+      const groundFade = new T.CanvasTexture(fadeC); groundFade.userData.shared = true;
+      const groundMat = new T.MeshStandardMaterial({ color: 0x2a3340, roughness: 1, metalness: 0,
+        transparent: true, alphaMap: groundFade });
       const ground = new T.Mesh(new T.PlaneGeometry(1, 1), groundMat);
-      ground.rotation.x = -Math.PI / 2; scene.add(ground);
+      ground.rotation.x = -Math.PI / 2; ground.renderOrder = -1; scene.add(ground);
+      // drifting billboard clouds (populated to fit the area in _loadGround)
+      const cloudMat = new T.SpriteMaterial({ map: this._cloudTex(T), transparent: true, opacity: 0.4, depthWrite: false });
+      const clouds = new T.Group(); scene.add(clouds);
       const fleet = new T.Group(); scene.add(fleet);
       scene.fog = new T.Fog(0x9fb4d8, 2000, 60000);
       // shared assets for the per-plane ground shadows
@@ -197,7 +212,7 @@
       this._shadowGeo = new T.PlaneGeometry(1, 1); this._shadowGeo.userData.shared = true;
       // image-based lighting: reflect the sky off the aircraft + ground for a modern PBR look (refreshed in setTime)
       let pmrem = null; try { pmrem = new T.PMREMGenerator(renderer); pmrem.compileEquirectangularShader(); } catch (e) { pmrem = null; }
-      this.three = { T, renderer, scene, camera, controls, sky, skyCanvas, skyTex, hemi, sun, sunBall, glow, stars, ground, groundMat, fleet, pmrem, envRT: null, raf: 0, meshes: {} };
+      this.three = { T, renderer, scene, camera, controls, sky, skyCanvas, skyTex, hemi, sun, sunBall, glow, stars, ground, groundMat, clouds, cloudMat, fleet, pmrem, envRT: null, raf: 0, meshes: {} };
       return true;
     }
     _radialTex(T, rgbStr) {
@@ -206,6 +221,30 @@
       grd.addColorStop(0, `rgba(${rgbStr},1)`); grd.addColorStop(0.35, `rgba(${rgbStr},0.55)`); grd.addColorStop(1, `rgba(${rgbStr},0)`);
       g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
       return new T.CanvasTexture(c);
+    }
+    _cloudTex(T) {                                           // puffy cumulus billboard (a few soft blobs)
+      const c = document.createElement('canvas'); c.width = 256; c.height = 128;
+      const g = c.getContext('2d');
+      for (let i = 0; i < 9; i++) {
+        const x = 44 + Math.random() * 168, y = 48 + Math.random() * 36, r = 22 + Math.random() * 28;
+        const gr = g.createRadialGradient(x, y, 0, x, y, r);
+        gr.addColorStop(0, 'rgba(255,255,255,0.8)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+        g.fillStyle = gr; g.fillRect(0, 0, 256, 128);
+      }
+      const t = new T.CanvasTexture(c); t.userData.shared = true; return t;
+    }
+    _makeClouds(halfM) {                                     // scatter a drifting cloud layer over the area
+      const th = this.three; if (!th) return;
+      while (th.clouds.children.length) th.clouds.remove(th.clouds.children[0]);   // sprites share cloudMat
+      for (let i = 0; i < 12; i++) {
+        const sp = new th.T.Sprite(th.cloudMat);
+        const a = Math.random() * Math.PI * 2, rr = Math.sqrt(Math.random()) * halfM * 0.85;
+        sp.position.set(Math.cos(a) * rr, 1300 + Math.random() * 1500, Math.sin(a) * rr);
+        const sx = 1800 + Math.random() * 2800; sp.scale.set(sx, sx * 0.42, 1);
+        sp.userData.v = 4 + Math.random() * 7;               // gentle eastward drift, m/s
+        th.clouds.add(sp);
+      }
+      th.clouds.userData.half = halfM;
     }
     _kind(tr) {
       const cat = (tr.category || '').toUpperCase(), t = (tr.type || '').toUpperCase();
@@ -277,6 +316,13 @@
         for (const sx of [1, -1]) { const n = new T.Mesh(new T.CylinderGeometry(s*0.036, s*0.03, s*0.17, 14), dark); n.rotation.x = Math.PI/2; n.position.set(sx*s*0.2, -s*0.05, s*0.02); g.add(n); }
         const canopy = new T.Mesh(new T.SphereGeometry(s*0.03, 12, 10), glass); canopy.scale.set(1, 0.62, 2.1); canopy.position.set(0, s*0.028, s*0.22); g.add(canopy);
       }
+      // red anti-collision strobe on top — double-flash pulsed in the render loop, like the real thing
+      const strobeMat = new T.MeshBasicMaterial({ color: 0xff4444, transparent: true, opacity: 0.25, toneMapped: false });
+      const strobe = new T.Mesh(new T.SphereGeometry(s*0.014, 8, 6), strobeMat);
+      strobe.position.set(0, { heli: s*0.18, ga: s*0.17, jet: s*0.19, airliner: s*0.22 }[kind] || s*0.2,
+                             { heli: 0,      ga: -s*0.3, jet: -s*0.43, airliner: -s*0.4 }[kind] || -s*0.4);
+      g.add(strobe);
+      g.userData.strobe = strobeMat;
       g.userData.spin = spin;
       return g;
     }
@@ -293,21 +339,36 @@
       const EXAG = 14, span = 12 * EXAG; this._span = span;  // exaggerate ~12 m wingspan so the model is visible
       for (const tr of this.tracks) {
         const col = tr.color || '#6cc1ff';
-        // trail, coloured by altitude (decimated)
-        const stepN = Math.max(1, Math.floor(tr.points.length / 400)), verts = [], cols = [];
+        // trail: a flat altitude-coloured ribbon (smoke-trail look), not a 1-px GL line
+        const stepN = Math.max(1, Math.floor(tr.points.length / 400)), pts3 = [], cols3 = [];
         for (let i = 0; i < tr.points.length; i += stepN) { const p = tr.points[i]; if (p[1] == null) continue;
-          const e = enu(this.observer, p[1], p[2], p[3]); verts.push(e.x, e.y, e.z);
-          const cc = new T.Color(this.altColor(p[3])); cols.push(cc.r, cc.g, cc.b); }
-        const lineGeo = new T.BufferGeometry();
-        lineGeo.setAttribute('position', new T.Float32BufferAttribute(verts, 3));
-        lineGeo.setAttribute('color', new T.Float32BufferAttribute(cols, 3));
-        const line = new T.Line(lineGeo, new T.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.6, toneMapped: false }));
-        fleet.add(line);
+          pts3.push(enu(this.observer, p[1], p[2], p[3]));
+          cols3.push(new T.Color(this.altColor(p[3]))); }
+        const ribbon = this._ribbon(T, pts3, cols3, span * 0.16);
+        if (ribbon) fleet.add(ribbon);
         const plane = this._planeMesh(col, span, this._kind(tr)); fleet.add(plane);
         const shadow = new T.Mesh(this._shadowGeo, new T.MeshBasicMaterial({ map: this._shadowTex, color: 0x000000, transparent: true, opacity: 0.34, depthWrite: false, fog: false, toneMapped: false }));
         shadow.rotation.x = -Math.PI / 2; shadow.position.y = 1.5; fleet.add(shadow);
         this.three.meshes[tr.id] = { plane, shadow, track: tr };
       }
+    }
+    _ribbon(T, pts, cols, width) {                           // horizontal triangle-strip ribbon through the fixes
+      const n = pts.length; if (n < 2) return null;
+      const pos = new Float32Array(n * 6), col = new Float32Array(n * 6), idx = [];
+      for (let i = 0; i < n; i++) {
+        const p = pts[i], q = pts[Math.min(n - 1, i + 1)], o = pts[Math.max(0, i - 1)];
+        let dx = q.x - o.x, dz = q.z - o.z; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
+        const px = -dz * width / 2, pz = dx * width / 2;     // horizontal perpendicular to travel
+        pos.set([p.x - px, p.y, p.z - pz, p.x + px, p.y, p.z + pz], i * 6);
+        const c = cols[i]; col.set([c.r, c.g, c.b, c.r, c.g, c.b], i * 6);
+        if (i < n - 1) idx.push(2*i, 2*i+1, 2*i+2, 2*i+1, 2*i+3, 2*i+2);
+      }
+      const g = new T.BufferGeometry();
+      g.setAttribute('position', new T.BufferAttribute(pos, 3));
+      g.setAttribute('color', new T.BufferAttribute(col, 3));
+      g.setIndex(idx);
+      return new T.Mesh(g, new T.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.45,
+        side: T.DoubleSide, depthWrite: false, toneMapped: false }));
     }
     _centroid() {
       let n = 0, cx = 0, cy = 0, cz = 0;
@@ -380,14 +441,6 @@
       cam.up.set(0, 1, 0); cam.position.copy(fc.pos); cam.lookAt(fc.tgt);
       if (Math.abs(cam.fov - fc.fov) > 0.02) { cam.fov = fc.fov; cam.updateProjectionMatrix(); }
     }
-    _sampleRaw(track, t) {
-      const p = track.points; if (!p.length) return null;
-      if (t < p[0][0] - 4000 || t > p[p.length-1][0] + 4000) return null;
-      let i = 0; while (i < p.length-1 && p[i+1][0] <= t) i++;
-      const a = p[i], b = p[Math.min(p.length-1, i+1)]; if (b[0] === a[0]) return { lat:a[1], lon:a[2], alt:a[3], prev:a };
-      const f = Math.max(0, Math.min(1, (t-a[0])/(b[0]-a[0])));
-      return { lat:a[1]+(b[1]-a[1])*f, lon:a[2]+(b[2]-a[2])*f, alt:(a[3]!=null&&b[3]!=null)?a[3]+(b[3]-a[3])*f:a[3], prev:a };
-    }
     // Catmull-Rom through the surrounding fixes -> a smooth, natural curve (not straight segments
     // with a snap at every data point). Position + altitude are splined; heading & bank come from it.
     _smooth(track, t) {
@@ -411,7 +464,7 @@
       const dH = ((hB - hA + 540) % 360) - 180;                 // signed heading change over ~dt
       const spd = haversineM(a.lat, a.lon, b.lat, b.lon) / (2 * dt/1000);
       const bank = Math.max(-1.02, Math.min(1.02, Math.atan(spd * (dH*D2R)/(dt/1000) / 9.81)));
-      return { lat: mid.lat, lon: mid.lon, alt: mid.alt, a, b, bank };
+      return { lat: mid.lat, lon: mid.lon, alt: mid.alt, a, b, bank, spd };
     }
     setTime(t, fast) {
       this.t = t; const sc = $('gv-scrub'); if (sc && !this.live) sc.value = t;
@@ -437,6 +490,9 @@
         this.three.glow.position.copy(sd.clone().multiplyScalar(330000));
         this.three.glow.material.opacity = Math.max(0, Math.min(0.55, (sun.el + 6) / 24));
         this.three.stars.material.opacity = Math.max(0, Math.min(1, (-4 - sun.el) / 8));
+        this._sd = sd; this._light = sky.light;              // for sun-cast shadows + cloud tint below
+        this.three.cloudMat.color.setScalar(0.35 + 0.65 * Math.max(0, sky.light));
+        this.three.cloudMat.opacity = 0.12 + 0.3 * Math.max(0, sky.light);
       }
       // aircraft transforms — every frame, so motion stays smooth at the display refresh rate
       const positions = []; let readout = '';
@@ -446,19 +502,27 @@
         const vis = !!r; m.plane.visible = vis; if (m.shadow) m.shadow.visible = vis;
         if (!vis) continue;
         const e = enu(this.observer, r.lat, r.lon, r.alt);
+        // low-pass the bank so spline noise doesn't twitch the wings
+        m._bank = (m._bank == null) ? r.bank : m._bank + (r.bank - m._bank) * 0.2;
         // keep the (possibly banked) exaggerated model from poking through the ground when it's low
-        const clear = this._span * (0.16 + 0.5 * Math.abs(Math.sin(r.bank)));
+        const clear = this._span * (0.16 + 0.5 * Math.abs(Math.sin(m._bank)));
         const py = Math.max(e.y, clear);
         m.plane.position.set(e.x, py, e.z);
         // smooth 3D heading (climb included) from the spline's fore/aft samples, plus a banking roll
         const ea = enu(this.observer, r.a.lat, r.a.lon, r.a.alt), eb = enu(this.observer, r.b.lat, r.b.lon, r.b.alt);
         const dx = eb.x - ea.x, dy = eb.y - ea.y, dz = eb.z - ea.z;
-        if (dx || dy || dz) { m.plane.up.set(0, 1, 0); m.plane.lookAt(e.x + dx, py + dy, e.z + dz); m.plane.rotateZ(-r.bank); }
-        if (m.shadow) { const sz = (this._span || 264) * (1 + e.up / 1500); m.shadow.position.set(e.x, 1.5, e.z); m.shadow.scale.set(sz, sz, 1);
-          m.shadow.material.opacity = Math.max(0.04, 0.38 - e.up * 0.00012); }
+        if (dx || dy || dz) { m.plane.up.set(0, 1, 0); m.plane.lookAt(e.x + dx, py + dy, e.z + dz); m.plane.rotateZ(-m._bank); }
+        if (m.shadow) {                                      // cast along the actual sun direction, faded by daylight
+          const sd = this._sd; let sx = e.x, sz2 = e.z;
+          if (sd && sd.y > 0.08) { const k2 = Math.min(e.up / sd.y, 12000); sx = e.x - sd.x * k2; sz2 = e.z - sd.z * k2; }
+          const sz = (this._span || 264) * (1 + e.up / 1500);
+          m.shadow.position.set(sx, 1.5, sz2); m.shadow.scale.set(sz, sz, 1);
+          m.shadow.material.opacity = Math.max(0.03, 0.38 - e.up * 0.00012) * Math.max(0.25, this._light == null ? 1 : this._light);
+        }
         positions.push({ id: tr.id, color: tr.color, label: tr.label, lat: r.lat, lon: r.lon, alt: r.alt });
         if (!readout) { const el = Math.atan2(e.up, Math.max(e.d,1))*R2D, dist = Math.hypot(e.d, e.up);
-          readout = `bearing <b>${compass(e.az)}</b> · elevation <b>${el.toFixed(0)}°</b> · range <b>${dist>=1000?(dist/1000).toFixed(1)+' km':Math.round(dist)+' m'}</b> · alt <b>${r.alt!=null?Math.round(r.alt).toLocaleString()+' ft':'—'}</b>`; }
+          const kt = isFinite(r.spd) ? ` · speed <b>${Math.round(r.spd * 1.94384)} kt</b>` : '';
+          readout = `bearing <b>${compass(e.az)}</b> · elevation <b>${el.toFixed(0)}°</b>${kt} · range <b>${dist>=1000?(dist/1000).toFixed(1)+' km':Math.round(dist)+' m'}</b> · alt <b>${r.alt!=null?Math.round(r.alt).toLocaleString()+' ft':'—'}</b>`; }
       }
       if (heavy) {                                            // readout text + map markers (throttled with the slow work)
         const sun = this._sun || sunPosition(t, this.observer.lat, this.observer.lon);
@@ -481,6 +545,7 @@
       const halfKm = Math.min(40, Math.max(4, maxKm * 1.25)), sizeM = halfKm * 2000;
       this.three.ground.geometry.dispose(); this.three.ground.geometry = new this.three.T.PlaneGeometry(sizeM, sizeM);
       this.three.scene.fog.far = sizeM * 0.8;
+      this._makeClouds(sizeM / 2);
       const dLat = halfKm/111, dLon = halfKm/(111*Math.cos(this.observer.lat*D2R));
       const bbox = [this.observer.lon-dLon, this.observer.lat-dLat, this.observer.lon+dLon, this.observer.lat+dLat].join(',');
       const mk = px => `${ESRI}?bbox=${bbox}&bboxSR=4326&imageSR=4326&size=${px},${px}&format=jpg&transparent=false&f=image`;
@@ -514,9 +579,18 @@
           if (this.t >= this.tmax) { this.t = this.tmax; this.pause(); }
           this.setTime(this.t, true);                                  // 'true' = smooth-playback update (throttles the slow work)
         }
-        for (const id in this.three.meshes) { const m = this.three.meshes[id];   // spin propellers / rotors
-          if (!m.plane.visible) continue; const sp = m.plane.userData.spin; if (!sp) continue;
+        const ph = (now / 1000) % 1.1;                                 // real strobes double-flash
+        const strobeOn = ph < 0.06 || (ph > 0.12 && ph < 0.18);
+        for (const id in this.three.meshes) { const m = this.three.meshes[id];   // spin props/rotors, pulse strobes
+          if (!m.plane.visible) continue;
+          const st = m.plane.userData.strobe; if (st) st.opacity = strobeOn ? 1 : 0.18;
+          const sp = m.plane.userData.spin; if (!sp) continue;
           for (const s2 of sp) s2.obj.rotation[s2.axis] += s2.rate * dt; }
+        for (const cl of this.three.clouds.children) {                 // clouds drift gently downwind
+          cl.position.x += cl.userData.v * dt;
+          const half = this.three.clouds.userData.half || 20000;
+          if (cl.position.x > half) cl.position.x = -half;
+        }
         if (this.view === 'orbit') this.three.controls.update();       // stand sets the camera from pointer drags
         else if (this._isFollow()) this._followCam();                  // chase/cockpit/wing track the aircraft
         this.three.renderer.render(this.three.scene, this.three.camera);

@@ -134,6 +134,8 @@
   #gv-hd .m:hover { color: #fff; }
   #gv-hd .m.mode { font-size: 12px; padding: 2px 8px; border: 1px solid #313845; border-radius: 999px; }
   #gv-hd .m.mode:hover { background: #2a2f38; color: #fff; }
+  #groundview:fullscreen { left: 0; bottom: 0; transform: none; width: 100vw; max-width: none; border: 0; border-radius: 0; }
+  #groundview:fullscreen #gv-canvas { height: calc(100vh - 122px); }
   #gv-canvas { display: block; width: 100%; height: 300px; background: #0a0e16; cursor: default; }
   #gv-ctrls { display: flex; align-items: center; gap: 8px; padding: 7px 12px 2px; }
   #gv-ctrls #gv-play { background: #2d6cdf; color: #fff; border: 0; border-radius: 999px; padding: 4px 12px; cursor: pointer; }
@@ -273,7 +275,7 @@
 
   <div id="groundview">
     <div id="gv-hd"><span>3D view — observer at <b id="gv-from">the crowd line</b></span>
-      <span class="sp"></span><span class="m mode" id="gv-mode" title="Switch camera — Chase / Cockpit / Wing follow the plane · Stand / Orbit are free">🎥 Chase</span><span class="m" id="gv-close" title="Close">✕</span></div>
+      <span class="sp"></span><span class="m mode" id="gv-mode" title="Switch camera — Chase / Cockpit / Wing follow the plane · Stand / Orbit are free">🎥 Chase</span><span class="m" id="gv-fs" title="Fullscreen">⛶</span><span class="m" id="gv-close" title="Close">✕</span></div>
     <canvas id="gv-canvas"></canvas>
     <div id="gv-ctrls"><button id="gv-play">▶</button><button id="gv-speed" title="Playback speed — tap to change">1×</button><input id="gv-scrub" type="range" min="0" max="0" value="0"></div>
     <div id="gv-readout"></div>
@@ -285,7 +287,7 @@
 <script src="acicons.js"></script>
 <script src="https://unpkg.com/three@0.147.0/build/three.min.js"></script>
 <script src="https://unpkg.com/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
-<script src="groundview.js?v=3e0"></script>
+<script src="groundview.js?v=3e1"></script>
 <script>
 const $ = id => document.getElementById(id);
 const pad = n => String(n).padStart(2, '0');
