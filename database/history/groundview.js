@@ -290,7 +290,7 @@
       });
       while (fleet.children.length) fleet.remove(fleet.children[0]);
       this.three.meshes = {};
-      const EXAG = 22, span = 12 * EXAG; this._span = span;  // exaggerate ~12 m wingspan so the model is visible
+      const EXAG = 14, span = 12 * EXAG; this._span = span;  // exaggerate ~12 m wingspan so the model is visible
       for (const tr of this.tracks) {
         const col = tr.color || '#6cc1ff';
         // trail, coloured by altitude (decimated)
@@ -446,11 +446,14 @@
         const vis = !!r; m.plane.visible = vis; if (m.shadow) m.shadow.visible = vis;
         if (!vis) continue;
         const e = enu(this.observer, r.lat, r.lon, r.alt);
-        m.plane.position.set(e.x, e.y, e.z);
+        // keep the (possibly banked) exaggerated model from poking through the ground when it's low
+        const clear = this._span * (0.16 + 0.5 * Math.abs(Math.sin(r.bank)));
+        const py = Math.max(e.y, clear);
+        m.plane.position.set(e.x, py, e.z);
         // smooth 3D heading (climb included) from the spline's fore/aft samples, plus a banking roll
         const ea = enu(this.observer, r.a.lat, r.a.lon, r.a.alt), eb = enu(this.observer, r.b.lat, r.b.lon, r.b.alt);
         const dx = eb.x - ea.x, dy = eb.y - ea.y, dz = eb.z - ea.z;
-        if (dx || dy || dz) { m.plane.up.set(0, 1, 0); m.plane.lookAt(e.x + dx, e.y + dy, e.z + dz); m.plane.rotateZ(-r.bank); }
+        if (dx || dy || dz) { m.plane.up.set(0, 1, 0); m.plane.lookAt(e.x + dx, py + dy, e.z + dz); m.plane.rotateZ(-r.bank); }
         if (m.shadow) { const sz = (this._span || 264) * (1 + e.up / 1500); m.shadow.position.set(e.x, 1.5, e.z); m.shadow.scale.set(sz, sz, 1);
           m.shadow.material.opacity = Math.max(0.04, 0.38 - e.up * 0.00012); }
         positions.push({ id: tr.id, color: tr.color, label: tr.label, lat: r.lat, lon: r.lon, alt: r.alt });
