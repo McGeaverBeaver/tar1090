@@ -1,7 +1,7 @@
 // tar1090 reports — minimal service worker (installability + fast static assets).
 // Deliberately conservative: it never intercepts navigations, /api, /oidc or cross-origin
 // requests, so server-side OIDC auth stays fully in control.
-const CACHE = 'tar1090-reports-v12';
+const CACHE = 'tar1090-reports-v13';
 const ASSETS = ['/acicons.js', '/groundview.js', '/auth.js', '/manifest.webmanifest', '/icon.svg', '/icon-maskable.svg'];
 
 self.addEventListener('install', (e) => {

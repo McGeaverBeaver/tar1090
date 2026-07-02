@@ -441,30 +441,52 @@
       cam.up.set(0, 1, 0); cam.position.copy(fc.pos); cam.lookAt(fc.tgt);
       if (Math.abs(cam.fov - fc.fov) > 0.02) { cam.fov = fc.fov; cam.updateProjectionMatrix(); }
     }
-    // Catmull-Rom through the surrounding fixes -> a smooth, natural curve (not straight segments
-    // with a snap at every data point). Position + altitude are splined; heading & bank come from it.
-    _smooth(track, t) {
-      const p = track.points, n = p.length; if (!n) return null;
-      if (t < p[0][0] - 4000 || t > p[n-1][0] + 4000) return null;
-      let i = 0; while (i < n-1 && p[i+1][0] <= t) i++;
-      const a = p[i], b = p[Math.min(n-1, i+1)], p0 = p[Math.max(0, i-1)], p3 = p[Math.min(n-1, i+2)];
-      const f = b[0] === a[0] ? 0 : Math.max(0, Math.min(1, (t-a[0])/(b[0]-a[0])));
-      const cr = (v0,v1,v2,v3) => { const f2=f*f, f3=f2*f;
-        return 0.5*((2*v1) + (-v0+v2)*f + (2*v0-5*v1+4*v2-v3)*f2 + (-v0+3*v1-3*v2+v3)*f3); };
-      const alt = (a[3]!=null && b[3]!=null)
-        ? (p0[3]!=null && p3[3]!=null ? cr(p0[3],a[3],b[3],p3[3]) : a[3]+(b[3]-a[3])*f)
-        : (a[3]!=null ? a[3] : b[3]);
-      return { lat: cr(p0[1],a[1],b[1],p3[1]), lon: cr(p0[2],a[2],b[2],p3[2]), alt };
+    // Cleaned per-track sample arrays: strictly increasing time, no null positions, altitude
+    // gaps filled — so the spline below never sees the raw feed's duplicates/holes.
+    _prep(tr) {
+      if (tr._P) return tr._P;
+      const t = [], la = [], lo = [], al = []; let lastT = -Infinity, lastAl = null;
+      for (const p of tr.points) {
+        if (p[1] == null || p[2] == null || !(p[0] > lastT)) continue;
+        lastT = p[0]; t.push(p[0]); la.push(p[1]); lo.push(p[2]);
+        if (p[3] != null) lastAl = p[3];
+        al.push(lastAl);
+      }
+      for (let i = 0; i < al.length && al[i] == null; i++) al[i] = lastAl == null ? 0 : lastAl;
+      return (tr._P = { t, la, lo, al, n: t.length });
     }
-    // full state at time t: smoothed position + fore/aft samples for heading + a coordinated-turn bank
+    // Time-correct Catmull-Rom (non-uniform Hermite): tangents are scaled by the REAL time gaps
+    // between fixes, so uneven ADS-B spacing (1 s here, 30 s there) no longer causes velocity
+    // kinks or overshoot at every data point — the curve flows at the aircraft's actual pace.
+    _smooth(track, tms) {
+      const P = this._prep(track), n = P.n; if (!n) return null;
+      const t = P.t;
+      if (tms < t[0] - 4000 || tms > t[n-1] + 4000) return null;
+      if (n === 1) return { lat: P.la[0], lon: P.lo[0], alt: P.al[0] };
+      let lo2 = 0, hi = n - 1;                               // binary search: first index with t > tms
+      while (lo2 < hi) { const mid = (lo2 + hi) >> 1; if (t[mid] <= tms) lo2 = mid + 1; else hi = mid; }
+      const i1 = Math.max(0, lo2 - 1), i2 = Math.min(n - 1, i1 + 1);
+      if (i1 === i2) return { lat: P.la[i1], lon: P.lo[i1], alt: P.al[i1] };
+      const i0 = Math.max(0, i1 - 1), i3 = Math.min(n - 1, i2 + 1);
+      const t0 = t[i0], t1 = t[i1], t2 = t[i2], t3 = t[i3], dt = t2 - t1;
+      const u = Math.max(0, Math.min(1, (tms - t1) / dt)), u2 = u*u, u3 = u2*u;
+      const h00 = 2*u3 - 3*u2 + 1, h10 = u3 - 2*u2 + u, h01 = -2*u3 + 3*u2, h11 = u3 - u2;
+      const H = (v0, v1, v2, v3) => {
+        const m1 = (i0 === i1 ? (v2 - v1) / dt : (v2 - v0) / (t2 - t0)) * dt;
+        const m2 = (i3 === i2 ? (v2 - v1) / dt : (v3 - v1) / (t3 - t1)) * dt;
+        return h00*v1 + h10*m1 + h01*v2 + h11*m2;
+      };
+      return { lat: H(P.la[i0], P.la[i1], P.la[i2], P.la[i3]),
+               lon: H(P.lo[i0], P.lo[i1], P.lo[i2], P.lo[i3]),
+               alt: H(P.al[i0], P.al[i1], P.al[i2], P.al[i3]) };
+    }
+    // smoothed target at time t (+ speed over a short fore/aft window, for the readout);
+    // heading and bank are flown by the simulator in _simStep, not derived here
     _state(track, t) {
       const dt = 1200, mid = this._smooth(track, t); if (!mid) return null;
       const a = this._smooth(track, t - dt) || mid, b = this._smooth(track, t + dt) || mid;
-      const hA = bearing(a.lat, a.lon, mid.lat, mid.lon), hB = bearing(mid.lat, mid.lon, b.lat, b.lon);
-      const dH = ((hB - hA + 540) % 360) - 180;                 // signed heading change over ~dt
       const spd = haversineM(a.lat, a.lon, b.lat, b.lon) / (2 * dt/1000);
-      const bank = Math.max(-1.02, Math.min(1.02, Math.atan(spd * (dH*D2R)/(dt/1000) / 9.81)));
-      return { lat: mid.lat, lon: mid.lon, alt: mid.alt, a, b, bank, spd };
+      return { lat: mid.lat, lon: mid.lon, alt: mid.alt, spd };
     }
     setTime(t, fast) {
       this.t = t; const sc = $('gv-scrub'); if (sc && !this.live) sc.value = t;
@@ -494,31 +516,16 @@
         this.three.cloudMat.color.setScalar(0.35 + 0.65 * Math.max(0, sky.light));
         this.three.cloudMat.opacity = 0.12 + 0.3 * Math.max(0, sky.light);
       }
-      // aircraft transforms — every frame, so motion stays smooth at the display refresh rate
+      // per-aircraft: sample the time-correct spline into a TARGET; the virtual aircraft in
+      // _simStep() flies toward it every frame (so motion is simulated, not read verbatim)
       const positions = []; let readout = '';
       for (const tr of this.tracks) {
         const m = this.three.meshes[tr.id]; if (!m) continue;
         const r = this._state(tr, t);
-        const vis = !!r; m.plane.visible = vis; if (m.shadow) m.shadow.visible = vis;
-        if (!vis) continue;
+        if (!r) { m._tgt = null; continue; }
         const e = enu(this.observer, r.lat, r.lon, r.alt);
-        // low-pass the bank so spline noise doesn't twitch the wings
-        m._bank = (m._bank == null) ? r.bank : m._bank + (r.bank - m._bank) * 0.2;
-        // keep the (possibly banked) exaggerated model from poking through the ground when it's low
-        const clear = this._span * (0.16 + 0.5 * Math.abs(Math.sin(m._bank)));
-        const py = Math.max(e.y, clear);
-        m.plane.position.set(e.x, py, e.z);
-        // smooth 3D heading (climb included) from the spline's fore/aft samples, plus a banking roll
-        const ea = enu(this.observer, r.a.lat, r.a.lon, r.a.alt), eb = enu(this.observer, r.b.lat, r.b.lon, r.b.alt);
-        const dx = eb.x - ea.x, dy = eb.y - ea.y, dz = eb.z - ea.z;
-        if (dx || dy || dz) { m.plane.up.set(0, 1, 0); m.plane.lookAt(e.x + dx, py + dy, e.z + dz); m.plane.rotateZ(-m._bank); }
-        if (m.shadow) {                                      // cast along the actual sun direction, faded by daylight
-          const sd = this._sd; let sx = e.x, sz2 = e.z;
-          if (sd && sd.y > 0.08) { const k2 = Math.min(e.up / sd.y, 12000); sx = e.x - sd.x * k2; sz2 = e.z - sd.z * k2; }
-          const sz = (this._span || 264) * (1 + e.up / 1500);
-          m.shadow.position.set(sx, 1.5, sz2); m.shadow.scale.set(sz, sz, 1);
-          m.shadow.material.opacity = Math.max(0.03, 0.38 - e.up * 0.00012) * Math.max(0.25, this._light == null ? 1 : this._light);
-        }
+        const tg = m._tgt || (m._tgt = {});
+        tg.x = e.x; tg.y = e.y; tg.z = e.z; tg.alt = r.alt;
         positions.push({ id: tr.id, color: tr.color, label: tr.label, lat: r.lat, lon: r.lon, alt: r.alt });
         if (!readout) { const el = Math.atan2(e.up, Math.max(e.d,1))*R2D, dist = Math.hypot(e.d, e.up);
           const kt = isFinite(r.spd) ? ` · speed <b>${Math.round(r.spd * 1.94384)} kt</b>` : '';
@@ -530,6 +537,65 @@
         if (ro) { const sunTxt = sun.el > 0 ? `☀ ${sun.el.toFixed(0)}°` : sun.el > -6 ? '🌆 dusk' : '🌙 night';
           ro.innerHTML = (readout || 'no aircraft up at this moment') + ` &nbsp;·&nbsp; ${sunTxt}` + (this.live ? '' : ` &nbsp;·&nbsp; ${new Date(t).toLocaleTimeString()}`); }
         this.onTime(t, positions);
+      }
+    }
+    // Virtual-aircraft tracker, run every rendered frame: each plane has its own position and
+    // velocity and FLIES toward the spline target (critically-damped spring + target-velocity
+    // feed-forward). Data gaps are dead-reckoned at the last known velocity, noise is absorbed by
+    // inertia, and bank comes from the lateral acceleration actually flown — a simulation of the
+    // flight between the data points, not a verbatim replay of them.
+    _simStep(dt) {
+      if (!this.three || dt <= 0) return;
+      const K = 25, C = 10;                                  // spring stiffness / damping (~0.3 s response)
+      for (const id in this.three.meshes) {
+        const m = this.three.meshes[id], tg = m._tgt;
+        const vis = !!tg;
+        m.plane.visible = vis; if (m.shadow) m.shadow.visible = vis;
+        if (!vis) { m._sim = null; continue; }
+        let st = m._sim;
+        if (!st) st = m._sim = { px: tg.x, py: tg.y, pz: tg.z, vx: 0, vy: 0, vz: 0,
+                                 tx: tg.x, ty: tg.y, tz: tg.z, tvx: 0, tvy: 0, tvz: 0, age: 0, bank: 0 };
+        // target velocity, measured per target CHANGE (live targets tick ~1 Hz; playback every frame)
+        st.age += dt;
+        if (tg.x !== st.tx || tg.y !== st.ty || tg.z !== st.tz) {
+          const a = Math.min(Math.max(st.age, 0.05), 3);
+          st.tvx = (tg.x - st.tx) / a; st.tvy = (tg.y - st.ty) / a; st.tvz = (tg.z - st.tz) / a;
+          st.tx = tg.x; st.ty = tg.y; st.tz = tg.z; st.age = 0;
+        } else if (st.age > 1.5) {                           // target stopped (paused) -> bleed off speed
+          const d = Math.max(0, 1 - dt * 2); st.tvx *= d; st.tvy *= d; st.tvz *= d;
+        }
+        const ex = tg.x - st.px, ey = tg.y - st.py, ez = tg.z - st.pz;
+        let ax = 0, ay = 0, az = 0;
+        if (ex*ex + ey*ey + ez*ez > 25e6) {                  // >5 km apart (scrub jump) -> teleport
+          st.px = tg.x; st.py = tg.y; st.pz = tg.z; st.vx = st.tvx; st.vy = st.tvy; st.vz = st.tvz;
+        } else {
+          ax = ex*K + (st.tvx - st.vx)*C; ay = ey*K + (st.tvy - st.vy)*C; az = ez*K + (st.tvz - st.vz)*C;
+          st.vx += ax*dt; st.vy += ay*dt; st.vz += az*dt;
+          st.px += st.vx*dt; st.py += st.vy*dt; st.pz += st.vz*dt;
+        }
+        // bank from the lateral acceleration being flown (what actually tilts an aircraft)
+        const sp2 = st.vx*st.vx + st.vz*st.vz;
+        if (sp2 > 4) {
+          const sp = Math.sqrt(sp2), rx = -st.vz/sp, rz = st.vx/sp;    // pilot's-right, horizontal
+          const bt = Math.max(-1.2, Math.min(1.2, Math.atan2(ax*rx + az*rz, 9.81)));
+          st.bank += (bt - st.bank) * Math.min(1, 6*dt);
+        } else st.bank *= Math.max(0, 1 - 3*dt);
+        // pose (with the ground-clearance clamp for the exaggerated model)
+        const clear = this._span * (0.16 + 0.5 * Math.abs(Math.sin(st.bank)));
+        const py = Math.max(st.py, clear);
+        m.plane.position.set(st.px, py, st.pz);
+        if (st.vx || st.vy || st.vz) {
+          m.plane.up.set(0, 1, 0);
+          m.plane.lookAt(st.px + st.vx, py + st.vy, st.pz + st.vz);
+          m.plane.rotateZ(-st.bank);
+        }
+        if (m.shadow) {                                      // sun-cast, faded by daylight
+          const sd = this._sd; let sx = st.px, sz2 = st.pz;
+          if (sd && sd.y > 0.08) { const k2 = Math.min(st.py / sd.y, 12000); sx -= sd.x * k2; sz2 -= sd.z * k2; }
+          const szc = (this._span || 168) * (1 + st.py / 1500);
+          m.shadow.position.set(sx, 1.5, sz2); m.shadow.scale.set(szc, szc, 1);
+          m.shadow.material.opacity = Math.max(0.03, 0.38 - st.py * 0.00012) * Math.max(0.25, this._light == null ? 1 : this._light);
+        }
       }
     }
     _updateEnv(sky) {                                        // reflect the current sky off PBR surfaces (throttled by light level)
@@ -579,6 +645,7 @@
           if (this.t >= this.tmax) { this.t = this.tmax; this.pause(); }
           this.setTime(this.t, true);                                  // 'true' = smooth-playback update (throttles the slow work)
         }
+        this._simStep(dt);                                             // fly the virtual aircraft toward their targets
         const ph = (now / 1000) % 1.1;                                 // real strobes double-flash
         const strobeOn = ph < 0.06 || (ph > 0.12 && ph < 0.18);
         for (const id in this.three.meshes) { const m = this.three.meshes[id];   // spin props/rotors, pulse strobes
