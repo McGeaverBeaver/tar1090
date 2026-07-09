@@ -73,7 +73,6 @@
   #info .v small { color: #8a93a2; font-size: 11px; font-weight: 400; }
   #info .up { color: #4dd08a; } #info .dn { color: #ff7a7a; }
   #info .mil { color: #ff6b6b; }
-  #info .v b { color: #6cc1ff; font-weight: 700; }   /* route: the landing airport */
   #status { position: absolute; left: 304px; bottom: 10px; z-index: 600; background: rgba(20,22,26,.9); border: 1px solid #2c313a;
             border-radius: 8px; padding: 6px 11px; color: #cdd5e0; font-size: 12px; max-width: 50%; }
   /* ground view (observer sky) — shared with the History page */
@@ -269,7 +268,7 @@
 <script src="https://unpkg.com/three@0.147.0/build/three.min.js"></script>
 <script src="https://unpkg.com/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
 <script src="groundview.js?v=3e2"></script>
-<script src="route.js?v=1"></script>
+<script src="route.js?v=2"></script>
 <script>
 const $ = id => document.getElementById(id);
 const map = L.map('map', { worldCopyJump:true, zoomControl:false }).setView([40, -74], 7);
@@ -712,7 +711,7 @@ function renderInfo(a){
     + `<div class="x" title="Deselect">✕</div></div>`
     + (em ? `<div class="emerg-banner">⚠ ${em}</div>` : '')
     + `<div class="grid">`
-    + (rt ? cell('Route', FlightRoute.html(rt), true) : '')
+    + (rt ? cell('Route', FlightRoute.legHTML(rt, { lat: a.lat, lon: a.lon, gs: a.gs }), true) : '')
     + cell('Altitude', fmtAlt(a.alt)) + cell('Ground speed', fmtSpd(a.gs))
     + cell('Track', fmtTrk(a.track)) + cell('Vertical rate', fmtRate(a.baro_rate))
     + cell('Squawk', a.squawk || '—') + cell('Last seen', fmtSeen(a.seen))

@@ -131,9 +131,6 @@
              border: 1px solid #313845; border-radius: 14px; padding: 8px 11px; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
   #acroute.on { display: block; animation: cardIn .28s cubic-bezier(.2,.8,.3,1); }
   #acroute .k { color: #8a93a2; font-size: 10px; text-transform: uppercase; letter-spacing: .4px; margin-bottom: 2px; }
-  #acroute .v { font-size: 13px; color: #e6e6e6; line-height: 1.35; }
-  #acroute .v small { color: #8a93a2; font-weight: 400; }
-  #acroute .v b { color: #6cc1ff; font-weight: 700; }   /* the landing airport */
   @keyframes cardIn { from { opacity: 0; transform: translateY(-6px) scale(.98); } }
   @media (prefers-reduced-motion: reduce){ #acphoto.on, #acroute.on { animation: none; } }
   /* observer "ground view" -- the trajectory as seen from a point on the ground */
@@ -303,7 +300,7 @@
 <script src="https://unpkg.com/three@0.147.0/build/three.min.js"></script>
 <script src="https://unpkg.com/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
 <script src="groundview.js?v=3e2"></script>
-<script src="route.js?v=1"></script>
+<script src="route.js?v=2"></script>
 <script>
 const $ = id => document.getElementById(id);
 const pad = n => String(n).padStart(2, '0');
@@ -646,7 +643,7 @@ async function showRoute(f, at){            // at = a trail point [t,lat,lon,alt
   if (my !== routeReq || !rt) return;       // superseded, or no route known for this callsign
   $('acroute').innerHTML =
     `<div class="k">✈ Route · ${esc(f.callsign.trim())}</div>`
-    + `<div class="v" title="the highlighted airport is where it lands">${FlightRoute.html(rt)}</div>`;
+    + FlightRoute.legHTML(rt, at ? { lat: at[1], lon: at[2] } : {});   // progress at the trail's end
   $('acroute').classList.add('on');
 }
 
