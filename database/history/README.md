@@ -50,7 +50,9 @@ clicking it on the map). Shows a photo (via planespotters) plus altitude, ground
 speed, track, vertical rate, squawk, last-seen, ICAO hex, signal (dBFS), operator
 and position. For scheduled (airline) callsigns a **Route** row shows the filed
 origin → destination — **the highlighted airport is where it's going to land** —
-and the map labels / 3D view gain a `→ MEL`-style destination tag. Close it with **✕**.
+and the map labels / 3D view gain a `→ MEL`-style destination tag. A **Seen on this
+radar** row counts how many flights of this airframe are in your history index
+(with its first-seen date). Close it with **✕**.
 
 **Map** — trails are coloured by altitude using the legend at the bottom-right
 (ground → 40k ft). Click anywhere empty to deselect.

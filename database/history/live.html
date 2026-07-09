@@ -675,6 +675,26 @@ async function loadSelTrail(hex){
   buildLegend();                   // rescale the legend ticks to this flight's altitude range
 }
 
+// How many separate flights this airframe has in OUR history index ("times seen on this radar").
+// Cached per hex for the session; a failed lookup retires after 30 s so it can retry.
+const seenCache = new Map();                    // hex -> {count, first_seen} | null (fetch in flight)
+function seenInfo(hex){
+  if (!hex) return undefined;
+  if (seenCache.has(hex)) return seenCache.get(hex);
+  seenCache.set(hex, null);
+  fetch('api/seen?hex=' + encodeURIComponent(hex)).then(r=>r.json()).then(j=>{
+    seenCache.set(hex, (j && j.count != null) ? j : undefined);
+    if (selectedHex === hex) renderInfo(lastData.get(hex));   // fill the card in as soon as it lands
+  }).catch(()=>{ setTimeout(()=> seenCache.delete(hex), 30000); });
+  return null;
+}
+function fmtSeenCount(sn){
+  if (sn === null) return '…';                  // lookup still in flight
+  if (!sn || sn.count == null) return '—';
+  const since = sn.first_seen ? ` <small>· first seen ${new Date(sn.first_seen).toLocaleDateString()}</small>` : '';
+  return sn.count.toLocaleString() + '×' + since;
+}
+
 function renderInfo(a){
   if (!a){ return; }
   const sub = [a.r, a.t, a.desc].filter(Boolean).join(' · ') || 'unknown aircraft';
@@ -694,6 +714,7 @@ function renderInfo(a){
     + cell('Track', fmtTrk(a.track)) + cell('Vertical rate', fmtRate(a.baro_rate))
     + cell('Squawk', a.squawk || '—') + cell('Last seen', fmtSeen(a.seen))
     + cell('ICAO hex', (a.hex||'—').toUpperCase()) + cell('Signal', a.rssi!=null ? a.rssi+' <small>dBFS</small>' : '—')
+    + cell('Seen on this radar', fmtSeenCount(seenInfo(a.hex)), true)
     + (a.operator ? cell('Operator', a.operator, true) : '')
     + cell('Position', `${a.lat.toFixed(4)}, ${a.lon.toFixed(4)}`, true)
     + `</div>`;

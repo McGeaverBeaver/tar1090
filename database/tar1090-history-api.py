@@ -7,6 +7,8 @@ It does two things the static tar1090 frontend can't:
                    of callsign/registration/type/operator/military in a date range".
   * /api/trace   — read that flight's actual trail on demand from the globe_history
                    trace files readsb already writes (no positions are duplicated).
+  * /api/seen    — how many flights the index has for one airframe (hex), with
+                   first/last-seen — the Live card's "seen on this radar" count.
 It also serves the search page itself (index.html) so everything is same-origin.
 
 Stdlib only (plus psycopg, already used by the logger). Read-only; intended for a
@@ -337,6 +339,23 @@ def search(q):
         r["active"] = bool(r["active"])
     return {"flights": rows, "from": ms(t_from), "to": ms(t_to),
             "count": len(rows), "total": total, "limit": limit, "offset": offset}
+
+
+def seen(q):
+    """How many separate flights this airframe has in OUR index, plus first/last seen.
+    One flights row = one appearance on this receiver, so count(*) IS the sighting count."""
+    hx = (q.get("hex", [""])[0] or "").strip().lower()
+    if not hx or len(hx) > 10:
+        return {"error": "missing hex"}
+    rows = query(
+        "SELECT a.first_seen, a.last_seen, "
+        "(SELECT count(*) FROM flights f WHERE f.icao_hex = a.icao_hex) AS count "
+        "FROM aircraft a WHERE a.icao_hex = %s", [hx])
+    if not rows:
+        return {"hex": hx, "count": 0}
+    r = rows[0]
+    return {"hex": hx, "count": r["count"],
+            "first_seen": ms(r["first_seen"]), "last_seen": ms(r["last_seen"])}
 
 
 def options(q):
@@ -1503,7 +1522,7 @@ def patterns_get(q):
     return {"patterns": patterns.CATALOG}
 
 
-ROUTES = {"/api/search": search, "/api/options": options,
+ROUTES = {"/api/search": search, "/api/options": options, "/api/seen": seen,
           "/api/trace": trace, "/api/traces": traces, "/api/live": live,
           "/api/airshow": airshow_get, "/api/airshow/custom": airshow_custom_get,
           "/api/airshow/scan": airshow_scan,
