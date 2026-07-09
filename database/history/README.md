@@ -48,11 +48,14 @@ collapses with the `—` button.
 **Detail card (right)** — appears when you select an aircraft (from the table or by
 clicking it on the map). Shows a photo (via planespotters) plus altitude, ground
 speed, track, vertical rate, squawk, last-seen, ICAO hex, signal (dBFS), operator
-and position. For scheduled (airline) callsigns a **Route** row shows the filed
-origin → destination — **the highlighted airport is where it's going to land** —
-and the map labels / 3D view gain a `→ MEL`-style destination tag. A **Seen on this
-radar** row counts how many flights of this airframe are in your history index
-(with its first-seen date). Close it with **✕**.
+and position. For scheduled (airline) callsigns the **Route** row draws the flight
+leg boarding-pass style — `SYD ——✈·····○ MEL` — with the aircraft at its true
+along-track position (it crawls as the flight progresses), a radar ping on the
+**destination** airport, and a live **"lands ≈ HH:MM"** estimate from ground speed
+and remaining distance. Map labels and the 3D view gain a `→ MEL`-style destination
+tag. A **Sightings on this radar** row counts how many flights of this airframe are
+in your history index ("147 flights · since Jun 4, 2025" — or **First sighting** for
+a brand-new catch). Close it with **✕**.
 
 **Map** — trails are coloured by altitude using the legend at the bottom-right
 (ground → 40k ft). Click anywhere empty to deselect.
@@ -83,7 +86,8 @@ Search the flight index and replay trails from `globe_history`.
 - Select a **single** flight to get its detailed altitude-coloured trail plus a
   replay scrubber (play it back point by point). On mobile, selecting a flight jumps
   to the map and zooms to fit it. Airline callsigns also get a **route card** under
-  the photo — origin → destination with the landing airport highlighted.
+  the photo — the same drawn flight leg as the Live page, with the plane at wherever
+  it was along the route when its recorded trail ended.
 - **🔔 Alert** (admin) turns the selected flight(s) into alert rules on the Alerts tab.
 
 ---

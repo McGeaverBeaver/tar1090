@@ -73,6 +73,8 @@
   #info .v small { color: #8a93a2; font-size: 11px; font-weight: 400; }
   #info .up { color: #4dd08a; } #info .dn { color: #ff7a7a; }
   #info .mil { color: #ff6b6b; }
+  #info .v .firstcatch { color: #ffd27d; font-weight: 600; }  /* a new airframe — the spotter's catch */
+  #info .x:focus-visible { outline: 2px solid #6cc1ff; outline-offset: 1px; }
   #status { position: absolute; left: 304px; bottom: 10px; z-index: 600; background: rgba(20,22,26,.9); border: 1px solid #2c313a;
             border-radius: 8px; padding: 6px 11px; color: #cdd5e0; font-size: 12px; max-width: 50%; }
   /* ground view (observer sky) — shared with the History page */
@@ -693,11 +695,12 @@ function fmtDay(ms){ return new Date(ms).toLocaleDateString(undefined, { day:'nu
 function fmtSeenCount(sn){
   if (sn === null) return '…';                  // lookup still in flight
   if (!sn || sn.count == null) return '—';
-  if (!sn.count) return 'First sighting';
+  if (!sn.count) return '<span class="firstcatch">First sighting</span>';
   return sn.count.toLocaleString() + (sn.count === 1 ? ' flight' : ' flights')
        + (sn.first_seen ? ` <small>· since ${fmtDay(sn.first_seen)}</small>` : '');
 }
 
+let infoHtml = '';                       // last rendered card, to skip no-op DOM rebuilds
 function renderInfo(a){
   if (!a){ return; }
   const sub = [a.r, a.t, a.desc].filter(Boolean).join(' · ') || 'unknown aircraft';
@@ -706,9 +709,9 @@ function renderInfo(a){
   const em = emerg(a.squawk);
   // filed route for this callsign (origin → destination); tells you where it's going to land
   const rt = (a.flight && window.FlightRoute) ? FlightRoute.get(a.flight, a.lat, a.lon) : null;
-  $('info').innerHTML =
+  const html =
     `<div class="hd"><div><div class="cs">${a.flight || a.r || a.hex}${tag}</div><div class="sub">${sub}</div></div>`
-    + `<div class="x" title="Deselect">✕</div></div>`
+    + `<div class="x" title="Deselect" role="button" tabindex="0" aria-label="Deselect aircraft">✕</div></div>`
     + (em ? `<div class="emerg-banner">⚠ ${em}</div>` : '')
     + `<div class="grid">`
     + (rt ? cell('Route', FlightRoute.legHTML(rt, { lat: a.lat, lon: a.lon, gs: a.gs }), true) : '')
@@ -720,7 +723,12 @@ function renderInfo(a){
     + (a.operator ? cell('Operator', a.operator, true) : '')
     + cell('Position', `${a.lat.toFixed(4)}, ${a.lon.toFixed(4)}`, true)
     + `</div>`;
-  $('info').querySelector('.x').onclick = deselect;
+  if (html === infoHtml) return;         // unchanged tick: leave the DOM (and its animations) alone
+  infoHtml = html;
+  $('info').innerHTML = html;
+  const x = $('info').querySelector('.x');
+  x.onclick = deselect;
+  x.onkeydown = e => { if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); deselect(); } };
 }
 // a route lookup that was in flight when the card rendered fills in as soon as it arrives
 if (window.FlightRoute) FlightRoute.onUpdate(()=>{ if (selectedHex) renderInfo(lastData.get(selectedHex)); });

@@ -642,7 +642,7 @@ async function showRoute(f, at){            // at = a trail point [t,lat,lon,alt
   const rt = await FlightRoute.lookup(f.callsign, at && at[1], at && at[2]);
   if (my !== routeReq || !rt) return;       // superseded, or no route known for this callsign
   $('acroute').innerHTML =
-    `<div class="k">✈ Route · ${esc(f.callsign.trim())}</div>`
+    `<div class="k">Route · ${esc(f.callsign.trim())}</div>`
     + FlightRoute.legHTML(rt, at ? { lat: at[1], lon: at[2] } : {});   // progress at the trail's end
   $('acroute').classList.add('on');
 }

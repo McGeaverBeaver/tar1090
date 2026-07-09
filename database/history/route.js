@@ -149,6 +149,12 @@
 .fr-dot.o { left: 0; transform: translate(-40%,-50%); background: #8fb7e8; }
 .fr-dot.d { right: 0; transform: translate(40%,-50%); background: #10141c;
             border: 1.5px solid #6cc1ff; box-shadow: 0 0 6px rgba(108,193,255,.45); }
+/* radar ping on the landing airport — a 1 s impulse, so the Live card's once-a-second
+   re-render restarts it seamlessly; on the static History card it loops as a beacon */
+.fr-dot.d::after { content: ''; position: absolute; inset: -1.5px; border-radius: 50%;
+                   border: 1.5px solid #6cc1ff; animation: fr-ping 1s cubic-bezier(0,.4,.6,1) infinite; }
+@keyframes fr-ping { 0% { opacity: .55; transform: scale(1); } 100% { opacity: 0; transform: scale(2.7); } }
+@media (prefers-reduced-motion: reduce){ .fr-dot.d::after { animation: none; display: none; } }
 .fr-plane { position: absolute; top: 50%; transform: translate(-50%,-50%); width: 15px; height: 15px;
             color: #eaf3ff; filter: drop-shadow(0 0 5px rgba(108,193,255,.9)); }
 .fr-plane svg { display: block; width: 100%; height: 100%; fill: currentColor; }
@@ -210,7 +216,9 @@
     let mid = '';
     if (ap.length > 2) mid = 'via ' + ap.slice(1, -1).map(code).map(esc).join(' · ');
     else if (p && p.eta) mid = 'lands ≈ ' + new Date(p.eta).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    return `<div class="fr-leg">`
+    const aria = `route ${place(org) || code(org)} to ${place(dst) || code(dst)}`
+      + (pc != null ? `, ${pc}% flown` : '') + (mid ? `, ${mid.replace('≈', 'about')}` : '');
+    return `<div class="fr-leg" role="img" aria-label="${esc(aria)}">`
       + `<div class="fr-row">${warn}<span class="fr-code">${esc(code(org))}</span>${track}`
       + `<span class="fr-code fr-dest" title="destination — where it lands">${esc(code(dst))}</span></div>`
       + `<div class="fr-cities"><span class="fr-o">${esc(place(org))}</span>`
