@@ -115,12 +115,24 @@
   #replay input[type=range] { flex: 1; }
   #replay button { background: #2d6cdf; color: #fff; border: 0; border-radius: 999px; padding: 4px 12px; cursor: pointer; }
   #ptlabel { color: #cbd3df; font-variant-numeric: tabular-nums; min-width: 210px; }
-  #acphoto { position: absolute; top: 10px; right: 10px; z-index: 600; display: none;
+  /* selected-flight card stack: photo on top, route ("lands at") bubble under it */
+  #accard { position: absolute; top: 10px; right: 10px; z-index: 600; display: flex;
+            flex-direction: column; gap: 8px; align-items: flex-end; pointer-events: none; }
+  #accard > div { pointer-events: auto; }
+  #acphoto { display: none;
              background: rgba(20,23,28,.82); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
              border: 1px solid #313845; border-radius: 14px; padding: 4px; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
   #acphoto.on { display: block; }
   #acphoto img { display: block; max-width: 240px; max-height: 158px; border-radius: 11px; }
   #acphoto .cr { font-size: 10px; color: #8a93a2; padding: 2px 6px 0; text-align: right; }
+  #acroute { display: none; max-width: 248px;
+             background: rgba(20,23,28,.82); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+             border: 1px solid #313845; border-radius: 14px; padding: 8px 11px; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
+  #acroute.on { display: block; }
+  #acroute .k { color: #8a93a2; font-size: 10px; text-transform: uppercase; letter-spacing: .4px; margin-bottom: 2px; }
+  #acroute .v { font-size: 13px; color: #e6e6e6; line-height: 1.35; }
+  #acroute .v small { color: #8a93a2; font-weight: 400; }
+  #acroute .v b { color: #6cc1ff; font-weight: 700; }   /* the landing airport */
   /* observer "ground view" -- the trajectory as seen from a point on the ground */
   #groundview { position: absolute; left: 50%; transform: translateX(-50%); bottom: 64px; z-index: 620;
                 width: min(700px, calc(100% - 24px)); display: none; overflow: hidden;
@@ -178,7 +190,7 @@
     #list-hd .m { display: none; }
     #replay { left: 8px; right: 8px; }
     body.mv-map #list { display: none; }
-    body.mv-list #legend, body.mv-list #acphoto, body.mv-list #replay { display: none; }
+    body.mv-list #legend, body.mv-list #accard, body.mv-list #replay { display: none; }
     /* map view = clean map: hide the filter/pager toolbars (they belong to the list) */
     body.mv-map #controls, body.mv-map #pager { display: none; }
   }
@@ -266,7 +278,7 @@
       <div class="lg-ticks" id="lgticks"><span>40k</span><span>30k</span><span>20k</span><span>10k</span><span>0</span></div>
     </div>
   </div>
-  <div id="acphoto"></div>
+  <div id="accard"><div id="acphoto"></div><div id="acroute"></div></div>
   <div id="replay">
     <button id="play">▶</button>
     <input id="slider" type="range" min="0" max="0" value="0">
@@ -288,6 +300,7 @@
 <script src="https://unpkg.com/three@0.147.0/build/three.min.js"></script>
 <script src="https://unpkg.com/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
 <script src="groundview.js?v=3e2"></script>
+<script src="route.js?v=1"></script>
 <script>
 const $ = id => document.getElementById(id);
 const pad = n => String(n).padStart(2, '0');
@@ -618,6 +631,23 @@ async function showPhoto(f){
   img.src = src;
 }
 
+// Flight route card ("lands at …") — callsign -> filed origin → destination via route.js.
+// Shown under the photo when a single flight is focused; scheduled (airline) callsigns only.
+let routeReq = 0;
+function hideRoute(){ routeReq++; const el=$('acroute'); el.classList.remove('on'); el.innerHTML=''; }
+async function showRoute(f, at){            // at = a trail point [t,lat,lon,alt] (optional)
+  hideRoute();
+  if (!f || !f.callsign || !window.FlightRoute || !FlightRoute.enabled) return;
+  const my = ++routeReq;
+  const rt = await FlightRoute.lookup(f.callsign, at && at[1], at && at[2]);
+  if (my !== routeReq || !rt) return;       // superseded, or no route known for this callsign
+  const d = FlightRoute.dest(rt);
+  $('acroute').innerHTML =
+    `<div class="k">✈ ${esc(f.callsign.trim())} — lands at ${esc(FlightRoute.place(d) || FlightRoute.code(d))}</div>`
+    + `<div class="v">${FlightRoute.html(rt)}</div>`;
+  $('acroute').classList.add('on');
+}
+
 async function doSearch(){
   pageSize = +$('pagesize').value || 100;
   const limit = showAll ? 100000 : pageSize;    // "Show all" loads the whole period (server-capped)
@@ -737,7 +767,7 @@ async function renderMap(){
   // keep the URL in sync so a single focused flight is shareable (?icao=<hex>)
   const one = selected.size === 1 ? byId.get([...selected][0]) : null;
   history.replaceState(null, '', one && one.icao_hex ? '?icao=' + encodeURIComponent(one.icao_hex) : location.pathname);
-  stopAnim(); trailLayer.clearLayers(); $('replay').classList.remove('on'); hidePhoto();
+  stopAnim(); trailLayer.clearLayers(); $('replay').classList.remove('on'); hidePhoto(); hideRoute();
   const ids = selected.size ? [...selected] : flights.map(f=>f.id);
   if (!ids.length){ setStatus('no flights'); return; }
   if (selected.size === 1) await drawSingle(byId.get(ids[0]));
@@ -754,6 +784,7 @@ async function drawSingle(f){
   catch(e){ setStatus('trail request failed: ' + e); return; }
   pts = j.points || [];
   traceCache[f.id] = pts;
+  showRoute(f, pts.length ? pts[pts.length-1] : null);   // where was this flight going to land?
   if (!pts.length){ setStatus(`${f.callsign||f.icao_hex}: no trail on disk (aged out, or before globe-history was collected)`); return; }
   // A selected single flight always shows its trail (the icon/trail toggle only governs the
   // multi-flight overview), plus the replay marker. Auto-range the colour to this flight so small
@@ -853,7 +884,10 @@ function gvTracks(){                   // selected flights, else everything load
   for (const id of ids){
     const p = ptsFor(id); if (!p || p.length < 2) continue;
     const f = byId.get(id) || {};
-    out.push({ id, points: p, label: (f.callsign || f.registration || f.icao_type || f.icao_hex || '').trim(),
+    const last = p[p.length-1];
+    const rt = (f.callsign && window.FlightRoute) ? FlightRoute.get(f.callsign, last[1], last[2]) : null;
+    const dst = rt ? FlightRoute.shortLabel(rt) : '';    // '→ MEL' — where it lands
+    out.push({ id, points: p, label: ((f.callsign || f.registration || f.icao_type || f.icao_hex || '').trim() + (dst ? ' ' + dst : '')),
                color: f.military ? '#ff5d5d' : hue(f.icao_hex || String(id)),
                type: f.icao_type, military: f.military });
   }
@@ -946,7 +980,7 @@ $('clear').onclick = ()=>{
   selected.clear(); flights = []; byId.clear(); pts = []; traceCache = {}; altScale = null; refreshLegend(); gv.close();
   ['q','callsign','registration','type','operator'].forEach(k=> $(k).value='');
   $('mil').value = 'any';
-  $('rows').innerHTML=''; trailLayer.clearLayers(); stopAnim(); $('replay').classList.remove('on'); hidePhoto();
+  $('rows').innerHTML=''; trailLayer.clearLayers(); stopAnim(); $('replay').classList.remove('on'); hidePhoto(); hideRoute();
   $('bell').disabled = false; updateBell();
   total = 0; $('rescount').textContent = '';
   searchMsg = 'Cleared.'; setStatus('pick a time range or preset and search');

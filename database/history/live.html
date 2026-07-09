@@ -71,6 +71,7 @@
   #info .v small { color: #8a93a2; font-size: 11px; font-weight: 400; }
   #info .up { color: #4dd08a; } #info .dn { color: #ff7a7a; }
   #info .mil { color: #ff6b6b; }
+  #info .v b { color: #6cc1ff; font-weight: 700; }   /* route: the landing airport */
   #status { position: absolute; left: 304px; bottom: 10px; z-index: 600; background: rgba(20,22,26,.9); border: 1px solid #2c313a;
             border-radius: 8px; padding: 6px 11px; color: #cdd5e0; font-size: 12px; max-width: 50%; }
   /* ground view (observer sky) — shared with the History page */
@@ -266,6 +267,7 @@
 <script src="https://unpkg.com/three@0.147.0/build/three.min.js"></script>
 <script src="https://unpkg.com/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
 <script src="groundview.js?v=3e2"></script>
+<script src="route.js?v=1"></script>
 <script>
 const $ = id => document.getElementById(id);
 const map = L.map('map', { worldCopyJump:true, zoomControl:false }).setView([40, -74], 7);
@@ -523,7 +525,10 @@ function tipOpts(){ return { permanent: showLabels, direction: showLabels ? 'rig
 function tipText(a){
   const alt = a.alt === 'ground' ? ' · grnd'
             : (a.alt != null ? ' · ' + Math.round(cvAlt(a.alt)).toLocaleString() + ' ' + uAlt() : '');
-  return (a.flight || a.r || a.hex || '') + alt;
+  // cached-route destination ('→ MEL') so labels answer "where is it landing?" at a glance
+  const rt = (a.flight && window.FlightRoute) ? FlightRoute.get(a.flight, a.lat, a.lon) : null;
+  const dst = rt ? ' ' + FlightRoute.shortLabel(rt) : '';
+  return (a.flight || a.r || a.hex || '') + dst + alt;
 }
 
 async function poll(){
@@ -676,11 +681,15 @@ function renderInfo(a){
   const tag = a.military ? ' <span class="mil">MIL</span>'
             : isMil(a.squawk) ? ' <span class="mil">⚠</span>' : '';
   const em = emerg(a.squawk);
+  // filed route for this callsign (origin → destination); tells you where it's going to land
+  const rt = (a.flight && window.FlightRoute) ? FlightRoute.get(a.flight, a.lat, a.lon) : null;
   $('info').innerHTML =
     `<div class="hd"><div><div class="cs">${a.flight || a.r || a.hex}${tag}</div><div class="sub">${sub}</div></div>`
     + `<div class="x" title="Deselect">✕</div></div>`
     + (em ? `<div class="emerg-banner">⚠ ${em}</div>` : '')
     + `<div class="grid">`
+    + (rt ? cell('Route · lands at ' + (FlightRoute.place(FlightRoute.dest(rt)) || FlightRoute.code(FlightRoute.dest(rt))),
+                 FlightRoute.html(rt), true) : '')
     + cell('Altitude', fmtAlt(a.alt)) + cell('Ground speed', fmtSpd(a.gs))
     + cell('Track', fmtTrk(a.track)) + cell('Vertical rate', fmtRate(a.baro_rate))
     + cell('Squawk', a.squawk || '—') + cell('Last seen', fmtSeen(a.seen))
@@ -690,6 +699,8 @@ function renderInfo(a){
     + `</div>`;
   $('info').querySelector('.x').onclick = deselect;
 }
+// a route lookup that was in flight when the card rendered fills in as soon as it arrives
+if (window.FlightRoute) FlightRoute.onUpdate(()=>{ if (selectedHex) renderInfo(lastData.get(selectedHex)); });
 function cell(k, v, wide){ return `<div class="cell${wide?' wide':''}"><div class="k">${k}</div><div class="v">${v}</div></div>`; }
 
 // ---- photo (planespotters.net, same source as the rest of the UI) --------------------------
@@ -753,7 +764,9 @@ function gvLiveTracks(){
   const out = [];
   for (const [hex, a] of lastData){           // lastData already respects the Ground/Air-show filters
     const hist = altHistC.get(hex); if (!hist || hist.length < 2) continue;
-    out.push({ id: hex, label: (a.flight || a.r || hex).trim(),
+    const rt = (a.flight && window.FlightRoute) ? FlightRoute.get(a.flight, a.lat, a.lon) : null;
+    const dst = rt ? FlightRoute.shortLabel(rt) : '';    // '→ MEL' — where it's going to land
+    out.push({ id: hex, label: ((a.flight || a.r || hex).trim() + (dst ? ' ' + dst : '')),
                color: (a.military || isMil(a.squawk)) ? '#ff5d5d' : gvHue(hex),
                type: a.t, category: a.category, military: !!(a.military || isMil(a.squawk)),
                points: hist.map(p => [p[0], p[2], p[3], p[1]]) });   // [t,alt,lat,lon] -> [t,lat,lon,alt]

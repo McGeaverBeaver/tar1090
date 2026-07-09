@@ -48,7 +48,9 @@ collapses with the `—` button.
 **Detail card (right)** — appears when you select an aircraft (from the table or by
 clicking it on the map). Shows a photo (via planespotters) plus altitude, ground
 speed, track, vertical rate, squawk, last-seen, ICAO hex, signal (dBFS), operator
-and position. Close it with **✕**.
+and position. For scheduled (airline) callsigns a **Route** row shows the filed
+origin → destination — **the highlighted airport is where it's going to land** —
+and the map labels / 3D view gain a `→ MEL`-style destination tag. Close it with **✕**.
 
 **Map** — trails are coloured by altitude using the legend at the bottom-right
 (ground → 40k ft). Click anywhere empty to deselect.
@@ -78,7 +80,8 @@ Search the flight index and replay trails from `globe_history`.
   or hides table columns.
 - Select a **single** flight to get its detailed altitude-coloured trail plus a
   replay scrubber (play it back point by point). On mobile, selecting a flight jumps
-  to the map and zooms to fit it.
+  to the map and zooms to fit it. Airline callsigns also get a **route card** under
+  the photo — origin → destination with the landing airport highlighted.
 - **🔔 Alert** (admin) turns the selected flight(s) into alert rules on the Alerts tab.
 
 ---
@@ -128,7 +131,12 @@ within ~20 s and any future sign-in is refused. You can't block your own account
 
 ## Configuration
 
-The front-end itself needs no configuration. The serving API is configured entirely
+The front-end itself needs no configuration. Route (origin → destination) lookups
+query the same public routeset service the stock tar1090 UI uses (`adsb.im`, a cache
+in front of `api.adsb.lol`); results are cached in the browser for 6 h. To turn them
+off, run `localStorage.setItem('routeApi','off')` in the browser console, or set
+`window.ROUTE_API_URL = ''` (or a different routeset URL) before `route.js` loads.
+The serving API is configured entirely
 through environment variables — see [`tar1090-history-api.py`](../tar1090-history-api.py)
 and the [all-in-one README](../../allinone/README.md) for `TAR1090_DB_DSN`,
 `GLOBE_HISTORY_DIR`, `SITE_LAT` / `SITE_LON`, and the optional `OIDC_*` sign-in
