@@ -115,24 +115,27 @@
   #replay input[type=range] { flex: 1; }
   #replay button { background: #2d6cdf; color: #fff; border: 0; border-radius: 999px; padding: 4px 12px; cursor: pointer; }
   #ptlabel { color: #cbd3df; font-variant-numeric: tabular-nums; min-width: 210px; }
-  /* selected-flight card stack: photo on top, route ("lands at") bubble under it */
-  #accard { position: absolute; top: 10px; right: 10px; z-index: 600; display: flex;
-            flex-direction: column; gap: 8px; align-items: flex-end; pointer-events: none; }
+  /* selected-flight card stack: photo on top, route ("lands at") bubble under it.
+     Fixed width so the two cards read as one column, matching the Live page card. */
+  #accard { position: absolute; top: 10px; right: 10px; z-index: 600; width: 252px; display: flex;
+            flex-direction: column; gap: 8px; align-items: stretch; pointer-events: none; }
   #accard > div { pointer-events: auto; }
   #acphoto { display: none;
              background: rgba(20,23,28,.82); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
              border: 1px solid #313845; border-radius: 14px; padding: 4px; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
-  #acphoto.on { display: block; }
-  #acphoto img { display: block; max-width: 240px; max-height: 158px; border-radius: 11px; }
+  #acphoto.on { display: block; animation: cardIn .28s cubic-bezier(.2,.8,.3,1); }
+  #acphoto img { display: block; width: 100%; max-height: 158px; object-fit: cover; border-radius: 11px; }
   #acphoto .cr { font-size: 10px; color: #8a93a2; padding: 2px 6px 0; text-align: right; }
-  #acroute { display: none; max-width: 248px;
+  #acroute { display: none;
              background: rgba(20,23,28,.82); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
              border: 1px solid #313845; border-radius: 14px; padding: 8px 11px; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
-  #acroute.on { display: block; }
+  #acroute.on { display: block; animation: cardIn .28s cubic-bezier(.2,.8,.3,1); }
   #acroute .k { color: #8a93a2; font-size: 10px; text-transform: uppercase; letter-spacing: .4px; margin-bottom: 2px; }
   #acroute .v { font-size: 13px; color: #e6e6e6; line-height: 1.35; }
   #acroute .v small { color: #8a93a2; font-weight: 400; }
   #acroute .v b { color: #6cc1ff; font-weight: 700; }   /* the landing airport */
+  @keyframes cardIn { from { opacity: 0; transform: translateY(-6px) scale(.98); } }
+  @media (prefers-reduced-motion: reduce){ #acphoto.on, #acroute.on { animation: none; } }
   /* observer "ground view" -- the trajectory as seen from a point on the ground */
   #groundview { position: absolute; left: 50%; transform: translateX(-50%); bottom: 64px; z-index: 620;
                 width: min(700px, calc(100% - 24px)); display: none; overflow: hidden;
@@ -641,10 +644,9 @@ async function showRoute(f, at){            // at = a trail point [t,lat,lon,alt
   const my = ++routeReq;
   const rt = await FlightRoute.lookup(f.callsign, at && at[1], at && at[2]);
   if (my !== routeReq || !rt) return;       // superseded, or no route known for this callsign
-  const d = FlightRoute.dest(rt);
   $('acroute').innerHTML =
-    `<div class="k">✈ ${esc(f.callsign.trim())} — lands at ${esc(FlightRoute.place(d) || FlightRoute.code(d))}</div>`
-    + `<div class="v">${FlightRoute.html(rt)}</div>`;
+    `<div class="k">✈ Route · ${esc(f.callsign.trim())}</div>`
+    + `<div class="v" title="the highlighted airport is where it lands">${FlightRoute.html(rt)}</div>`;
   $('acroute').classList.add('on');
 }
 

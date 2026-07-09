@@ -51,9 +51,11 @@
 
   /* modern selected-aircraft card: photo on top, flight-data bubble under it */
   #card { position: absolute; top: 10px; right: 10px; z-index: 650; width: 252px; display: none; }
-  #card.on { display: block; }
+  #card.on { display: block; animation: cardIn .28s cubic-bezier(.2,.8,.3,1); }
+  @keyframes cardIn { from { opacity: 0; transform: translateY(-6px) scale(.98); } }
   #photo { background: rgba(20,23,28,.82); border: 1px solid #313845; border-radius: 14px; padding: 4px; box-shadow: 0 10px 30px rgba(0,0,0,.5); display: none; }
-  #photo.on { display: block; }
+  #photo.on { display: block; animation: cardIn .28s cubic-bezier(.2,.8,.3,1); }
+  @media (prefers-reduced-motion: reduce){ #card.on, #photo.on { animation: none; } }
   #photo img { display: block; width: 100%; max-height: 158px; object-fit: cover; border-radius: 11px; }
   #photo .cr { font-size: 10px; color: #8a93a2; padding: 2px 6px 0; text-align: right; }
   #info { margin-top: 8px; background: rgba(20,23,28,.78); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
@@ -688,11 +690,13 @@ function seenInfo(hex){
   }).catch(()=>{ setTimeout(()=> seenCache.delete(hex), 30000); });
   return null;
 }
+function fmtDay(ms){ return new Date(ms).toLocaleDateString(undefined, { day:'numeric', month:'short', year:'numeric' }); }
 function fmtSeenCount(sn){
   if (sn === null) return '…';                  // lookup still in flight
   if (!sn || sn.count == null) return '—';
-  const since = sn.first_seen ? ` <small>· first seen ${new Date(sn.first_seen).toLocaleDateString()}</small>` : '';
-  return sn.count.toLocaleString() + '×' + since;
+  if (!sn.count) return 'First sighting';
+  return sn.count.toLocaleString() + (sn.count === 1 ? ' flight' : ' flights')
+       + (sn.first_seen ? ` <small>· since ${fmtDay(sn.first_seen)}</small>` : '');
 }
 
 function renderInfo(a){
@@ -708,13 +712,12 @@ function renderInfo(a){
     + `<div class="x" title="Deselect">✕</div></div>`
     + (em ? `<div class="emerg-banner">⚠ ${em}</div>` : '')
     + `<div class="grid">`
-    + (rt ? cell('Route · lands at ' + (FlightRoute.place(FlightRoute.dest(rt)) || FlightRoute.code(FlightRoute.dest(rt))),
-                 FlightRoute.html(rt), true) : '')
+    + (rt ? cell('Route', FlightRoute.html(rt), true) : '')
     + cell('Altitude', fmtAlt(a.alt)) + cell('Ground speed', fmtSpd(a.gs))
     + cell('Track', fmtTrk(a.track)) + cell('Vertical rate', fmtRate(a.baro_rate))
     + cell('Squawk', a.squawk || '—') + cell('Last seen', fmtSeen(a.seen))
     + cell('ICAO hex', (a.hex||'—').toUpperCase()) + cell('Signal', a.rssi!=null ? a.rssi+' <small>dBFS</small>' : '—')
-    + cell('Seen on this radar', fmtSeenCount(seenInfo(a.hex)), true)
+    + cell('Sightings on this radar', fmtSeenCount(seenInfo(a.hex)), true)
     + (a.operator ? cell('Operator', a.operator, true) : '')
     + cell('Position', `${a.lat.toFixed(4)}, ${a.lon.toFixed(4)}`, true)
     + `</div>`;
