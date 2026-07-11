@@ -45,6 +45,18 @@
   #av_head .x { float: right; }
   #av_head .t { font-size: 14px; font-weight: 600; }
   #av_head .s { color: #8a93a2; font-size: 12px; margin-top: 3px; }
+  /* "who is this?" lookup panel inside the alert view */
+  #av_lookup { display: none; max-height: 45%; overflow: auto; padding: 8px 14px 10px; border-bottom: 1px solid #2c313a; background: #171a20; font-size: 12.5px; }
+  #av_lookup.on { display: block; }
+  #av_lookup h4 { margin: 8px 0 3px; font-size: 11px; color: #9aa3b2; text-transform: uppercase; letter-spacing: .04em; }
+  #av_lookup .who { border: 1px solid #2c313a; border-left: 3px solid #2d6cdf; border-radius: 6px; background: #1a1d23; padding: 7px 9px; margin: 4px 0; }
+  #av_lookup .who .wt { font-weight: 600; }
+  #av_lookup .who .wc { color: #8fb4f7; font-size: 11.5px; }
+  #av_lookup .who p { margin: 4px 0 0; color: #c3cad6; }
+  #av_lookup a { color: #6ea8fe; text-decoration: none; }
+  #av_lookup a:hover { text-decoration: underline; }
+  #av_lookup .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 3px; }
+  #av_lookup .chips a { background: #232833; border: 1px solid #313847; border-radius: 12px; padding: 2px 9px; font-size: 11.5px; white-space: nowrap; }
   #amap { flex: 1; min-height: 0; }
   .planeicon { background: none; border: 0; }
   fieldset { border: 1px solid #2c313a; border-radius: 8px; margin: 0 0 12px; padding: 10px 12px; }
@@ -73,6 +85,7 @@
     <div class="bar">
       <button id="new">+ New rule</button>
       <button id="airshowpreset" class="ghost" title="Create a ready-made rule that fires on air-show aircraft (all curated types) and anything maneuvering">✈ Air show</button>
+      <button id="survpreset" class="ghost" title="Create a ready-made rule that fires when an aircraft is circling one spot (surveillance) or flying a mapping grid (aerial photography)">👁 Surveillance</button>
       <span class="sp"></span>
       <button id="notify" class="ghost mini">Enable notifications</button>
       <button id="mute" class="ghost mini">Mute</button>
@@ -110,6 +123,18 @@
         ≥ <input type="number" id="as_rev" value="2" min="0" style="width:50px"> reversals</div>
     </fieldset>
     <fieldset>
+      <legend>Surveillance / aerial photography (optional) — flag pattern flying, live</legend>
+      <div class="f"><label>Patterns</label><div class="aschk">
+        <label title="Sustained same-direction circling over one spot — police/news helicopters, site overwatch, traffic & pipeline patrol"><input type="checkbox" id="p_orbit"> Orbiting / circling (surveillance)</label>
+        <label title="Parallel back-and-forth 'lawnmower' legs at steady altitude — aerial photography, lidar mapping, geophysics"><input type="checkbox" id="p_survey"> Mapping grid (aerial photography)</label>
+      </div></div>
+      <div class="f" id="p_opts" style="display:none"><label>Thresholds</label>
+        watch the last <input type="number" id="p_win" value="900" min="120" style="width:70px"> s ·
+        orbit ≥ <input type="number" id="p_loops" value="2" min="1" step="0.5" style="width:56px"> loops ·
+        grid ≥ <input type="number" id="p_legs" value="4" min="2" style="width:50px"> legs
+        <span class="help">same detectors as the History pattern views; patterns need time to build, so expect a fire ~10–20 min into the flying</span></div>
+    </fieldset>
+    <fieldset>
       <legend>Time window (optional)</legend>
       <div class="f"><label>Restrict by time</label><input type="checkbox" id="w_enable"></div>
       <div class="f days"><label style="width:130px">Days</label>
@@ -139,6 +164,7 @@
       <div class="t" id="av_title">Alert</div>
       <div class="s" id="av_sub"></div>
     </div>
+    <div id="av_lookup"></div>
     <div id="amap"></div>
   </div>
 </div>
@@ -172,6 +198,9 @@ async function loadAirshow(){
   }
 }
 $('as_man').addEventListener('change', () => { $('as_manopts').style.display = $('as_man').checked ? '' : 'none'; });
+function syncPatOpts(){ $('p_opts').style.display = ($('p_orbit').checked || $('p_survey').checked) ? '' : 'none'; }
+$('p_orbit').addEventListener('change', syncPatOpts);
+$('p_survey').addEventListener('change', syncPatOpts);
 
 // ---- rule list ----
 async function loadRules(){
@@ -190,6 +219,7 @@ function summary(r){
   if (c.alt_min != null || c.alt_max != null) p.push('alt ' + (c.alt_min ?? '') + '–' + (c.alt_max ?? '') + 'ft');
   if (c.airshow && c.airshow.length) p.push('✈ ' + c.airshow.join('+'));
   if (c.maneuver) p.push('maneuvering ≥' + (c.maneuver.alt_span_min_ft ?? 1000) + 'ft/' + (c.maneuver.window_sec ?? 120) + 's');
+  if (c.pattern) p.push('👁 ' + ((c.pattern.kinds && c.pattern.kinds.length) ? c.pattern.kinds.join('+') : 'orbit+survey') + '/' + (c.pattern.window_sec ?? 900) + 's');
   if (!p.length) p.push('any aircraft');
   p.push(r.zone ? (r.zone.type === 'circle' ? ('zone ◯ ' + Math.round(r.zone.radius_m/1000) + 'km') : 'zone ▰ polygon') : 'anywhere');
   if (r.time_window){ const w = r.time_window; let t = (w.start ? w.start + '–' + w.end : 'window');
@@ -233,6 +263,13 @@ function openEditor(r){
   $('as_win').value  = (man && man.window_sec) ?? 120;
   $('as_span').value = (man && man.alt_span_min_ft) ?? 1000;
   $('as_rev').value  = (man && man.reversals_min) ?? 2;
+  const pat = c.pattern || null;
+  const kinds = (pat && pat.kinds && pat.kinds.length) ? pat.kinds : (pat ? ['orbit','survey'] : []);
+  $('p_orbit').checked = kinds.includes('orbit'); $('p_survey').checked = kinds.includes('survey');
+  syncPatOpts();
+  $('p_win').value   = (pat && pat.window_sec) ?? 900;
+  $('p_loops').value = (pat && pat.orbit_min_loops) ?? 2;
+  $('p_legs').value  = (pat && pat.survey_min_legs) ?? 4;
   const w = (r && r.time_window) || null;
   $('w_enable').checked = !!w;
   document.querySelectorAll('.wday').forEach(x => x.checked = !!(w && w.days && w.days.includes(+x.value)));
@@ -263,6 +300,14 @@ function collectConditions(){
     window_sec: +$('as_win').value || 120,
     alt_span_min_ft: +$('as_span').value || 1000,
     reversals_min: +$('as_rev').value || 0 };
+  const pkinds = [];
+  if ($('p_orbit').checked) pkinds.push('orbit');
+  if ($('p_survey').checked) pkinds.push('survey');
+  if (pkinds.length) c.pattern = {
+    kinds: pkinds,
+    window_sec: +$('p_win').value || 900,
+    orbit_min_loops: +$('p_loops').value || 2,
+    survey_min_legs: +$('p_legs').value || 4 };
   return c;
 }
 function collectWindow(){
@@ -288,6 +333,11 @@ $('airshowpreset').onclick = () => {
     conditions: { airshow: airshowCats.map(c => c.key),
                   maneuver: { window_sec: 120, alt_span_min_ft: 1000, reversals_min: 2 } } });
   $('ed_title').textContent = 'New rule · air show';   // it's a fresh rule (no id), saves as new
+};
+$('survpreset').onclick = () => {
+  openEditor({ name: 'Surveillance / aerial photography', enabled: true, cooldown_sec: 1800, zone: null, time_window: null,
+    conditions: { pattern: { kinds: ['orbit','survey'], window_sec: 900, orbit_min_loops: 2, survey_min_legs: 4 } } });
+  $('ed_title').textContent = 'New rule · surveillance';   // fresh rule (no id), saves as new
 };
 $('cancel').onclick = closeEditor;
 $('save').onclick = saveRule;
@@ -357,6 +407,51 @@ function planeIcon(color, deg){
     + `fill="${color}" stroke="#0b0d10" stroke-width="1"/></svg></div>`;
   return L.divIcon({ className:'planeicon', html, iconSize:[30,30], iconAnchor:[15,15] });
 }
+// ---- "who is this?" lookup: operator profile, pattern history, imagery + registry links ----
+let lookupSeq = 0;
+async function loadLookup(x){
+  const el = $('av_lookup'), seq = ++lookupSeq;
+  el.classList.remove('on'); el.innerHTML = '';
+  if (!x.icao_hex) return;
+  let d = null;
+  try { d = await (await fetch('api/lookup?' + new URLSearchParams({ hex: x.icao_hex, callsign: x.callsign || '' }))).json(); }
+  catch(e){ return; }
+  if (seq !== lookupSeq || !d || d.error) return;    // a newer alert was opened meanwhile
+  const parts = [];
+  const a = d.aircraft;
+  if (a){
+    parts.push('<div>' + [esc(a.registration || x.icao_hex), esc(a.icao_type || ''), esc(a.type_desc || ''),
+      a.operator ? 'operated by <b>' + esc(a.operator) + '</b>' : '<span class="muted">operator unknown</span>',
+      a.military ? '<span class="mil">MIL</span>' : '', d.flights ? esc(d.flights + ' flight' + (d.flights === 1 ? '' : 's') + ' on this radar') : '']
+      .filter(Boolean).join(' · ') + '</div>');
+  }
+  const who = d.profile || d.guess;
+  if (who){
+    parts.push('<h4>Who this likely is</h4><div class="who"><span class="wt">' + esc(who.name || '') + '</span>'
+      + (who.name ? ' — ' : '') + '<span class="wc">' + esc(who.category || '') + '</span>'
+      + (who.works_for || who.text ? '<p>' + esc(who.works_for || who.text) + '</p>' : '')
+      + (who.imagery ? '<p><b>Imagery:</b> ' + esc(who.imagery) + '</p>' : '')
+      + (who.url ? '<p><a href="' + esc(who.url) + '" target="_blank" rel="noopener">' + esc(who.url) + '</a></p>' : '')
+      + '</div>');
+  }
+  const ph = d.pattern_history || {};
+  const phKeys = Object.keys(ph);
+  if (phKeys.length){
+    parts.push('<h4>Seen doing this before</h4><div>' + phKeys.map(k =>
+      esc(k) + ' ×' + ph[k].count + (ph[k].last ? ' (last ' + esc(new Date(ph[k].last).toLocaleDateString()) + ')' : ''))
+      .join(' · ') + ' <span class="muted">— from the History pattern build</span></div>');
+  }
+  const chip = l => '<a href="' + esc(l.url) + '" target="_blank" rel="noopener">' + esc(l.label) + '</a>';
+  if ((d.public_imagery || []).length)
+    parts.push('<h4>Public imagery sources</h4><div class="chips">' + d.public_imagery.map(chip).join('') + '</div>');
+  if ((d.links || []).length)
+    parts.push('<h4>Look this aircraft up</h4><div class="chips">' + d.links.map(chip).join('') + '</div>');
+  if (!parts.length) return;
+  el.innerHTML = parts.join('');
+  el.classList.add('on');
+  if (amapInited) setTimeout(() => amap.invalidateSize(), 60);   // the map just lost height
+}
+
 async function openAlert(x){
   closeEditor();
   $('alertview').classList.add('on');
@@ -364,6 +459,7 @@ async function openAlert(x){
   $('av_title').textContent = x.rule_name || 'Alert';
   $('av_sub').textContent = [ (x.callsign || x.icao_hex || '').trim(), x.icao_type, fmtTime(x.fired_at),
     (x.alt != null ? x.alt + ' ft' : null), (x.squawk ? 'squawk ' + x.squawk : null) ].filter(Boolean).join(' · ');
+  loadLookup(x);                   // fills the "who is this?" panel while the trail loads
   initAmap();
   atrail.clearLayers();
   // Pull the aircraft's trail around the time the alert fired (the log keeps only the trigger

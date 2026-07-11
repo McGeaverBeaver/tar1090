@@ -27,6 +27,7 @@ import psycopg
 import tar1090_mqtt as mq
 import airshow_types
 import maneuver
+import patterns
 
 log = logging.getLogger("tar1090-alerter")
 
@@ -35,6 +36,9 @@ INTERVAL      = float(os.environ.get("ALERT_INTERVAL", "5"))
 HOLD_SEC      = int(os.environ.get("ALERT_HOLD_SEC", "60"))         # how long the HA sensor stays ON
 MAN_HISTORY_SEC = int(os.environ.get("ALERT_MANEUVER_HISTORY_SEC", "300"))  # altitude history kept per a/c
 MAN_DEADBAND_FT = int(os.environ.get("ALERT_MANEUVER_DEADBAND_FT", "75"))   # ignore wiggles below this
+# orbit/survey patterns build up far slower than aerobatics (a mapping leg alone can run several
+# minutes), so pattern rules get a longer rolling history than the maneuver detector needs.
+PAT_HISTORY_SEC = int(os.environ.get("ALERT_PATTERN_HISTORY_SEC", "1800"))
 FETCH_PHOTO   = os.environ.get("ALERT_FETCH_PHOTO", "true").strip().lower() != "false"
 AIRCRAFT_URL  = os.environ.get("ALERT_AIRCRAFT_URL") or os.environ.get("AIRCRAFT_URL")
 AIRCRAFT_JSON = os.environ.get("ALERT_AIRCRAFT_JSON")
@@ -144,11 +148,12 @@ def join_metadata(planes):
 
 # --- aerobatic maneuvering detection ----------------------------------------
 class AltTracker:
-    """Rolling per-aircraft position+altitude history, so the shared maneuver detector can spot
-    aerobatic flying (confined box, steep vertical rates, repeated reversals) live, the same way
-    the air-show backfill judges archived trails."""
+    """Rolling per-aircraft position+altitude history. The shared maneuver detector reads it to
+    spot aerobatic flying live, and the shared pattern classifier reads it to spot surveillance
+    orbits / aerial-photography survey grids -- both judged the same way the history backfill
+    judges archived trails."""
 
-    def __init__(self, keep_sec=MAN_HISTORY_SEC):
+    def __init__(self, keep_sec=max(MAN_HISTORY_SEC, PAT_HISTORY_SEC)):
         self.keep = keep_sec
         self.hist = {}                      # hex -> deque[(t_epoch, alt_ft, lat, lon)]
 
@@ -293,6 +298,23 @@ def matches_conditions(cond, p, tracker=None):
         if not maneuver.is_air_show(m, min_span=man.get("alt_span_min_ft"),
                                     min_reversals=man.get("reversals_min")):
             return False
+    # surveillance / aerial photography: orbit (sustained same-direction circling over a point)
+    # and/or survey (parallel "lawnmower" mapping legs), judged on the rolling live trail with
+    # the same geometry the history backfill uses (patterns.py)
+    pat = cond.get("pattern")
+    if pat:
+        if tracker is None:
+            return False
+        kinds = [k for k in (pat.get("kinds") or []) if k in ("orbit", "survey")]
+        if not kinds:
+            kinds = ["orbit", "survey"]
+        pts = tracker.points(p["hex"], float(pat.get("window_sec") or 900))
+        hits = patterns.detect(pts, kinds,
+                               min_loops=pat.get("orbit_min_loops"),
+                               min_legs=pat.get("survey_min_legs"))
+        if not hits:
+            return False
+        p["_pattern"] = "; ".join(f"{k}: {v}" for k, v in sorted(hits.items()))
     return True
 
 
@@ -486,6 +508,9 @@ def build_payload(rule, p):
         "military": bool(p["military"]) if p["military"] is not None else None,
         "lat": p["lat"], "lon": p["lon"], "alt": p["alt"], "gs": p["gs"],
         "track": p["track"], "squawk": p["squawk"],
+        # what the pattern condition saw (e.g. "orbit: 2.5 loops over 3.1 km box"), when the
+        # rule has one -- guarded so another rule's stashed detection can't leak in
+        "pattern": p.get("_pattern") if (rule.get("conditions") or {}).get("pattern") else None,
         "photo": fetch_photo(p),
         "time": datetime.now(timezone.utc).isoformat(),
     }

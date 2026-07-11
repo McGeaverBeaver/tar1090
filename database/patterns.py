@@ -110,15 +110,33 @@ def _features(points):
             "path_ratio": round(path / box, 1) if box > 0.05 else 0.0}
 
 
-def is_orbit(f):
-    return bool(f and f["loops"] >= ORBIT_MIN_LOOPS and f["consistency"] >= ORBIT_CONSISTENCY
+def is_orbit(f, min_loops=None):
+    """min_loops lets a caller (e.g. an alert rule) tighten/loosen the main knob."""
+    return bool(f and f["loops"] >= (ORBIT_MIN_LOOPS if min_loops is None else min_loops)
+               and f["consistency"] >= ORBIT_CONSISTENCY
                and 0 < f["box_km"] <= ORBIT_MAX_BOX_KM and f["span"] <= ORBIT_MAX_SPAN_FT)
 
 
-def is_survey(f):
-    return bool(f and f["legs"] >= SURVEY_MIN_LEGS and f["concentration"] >= SURVEY_CONCENTR
+def is_survey(f, min_legs=None):
+    """min_legs lets a caller (e.g. an alert rule) tighten/loosen the main knob."""
+    return bool(f and f["legs"] >= (SURVEY_MIN_LEGS if min_legs is None else min_legs)
+               and f["concentration"] >= SURVEY_CONCENTR
                and f["loops"] < 1.5 and f["span"] <= SURVEY_MAX_SPAN_FT
                and f["box_km"] >= SURVEY_MIN_BOX_KM and f["path_ratio"] >= SURVEY_MIN_PATH_RATIO)
+
+
+def detect(points, kinds, min_loops=None, min_legs=None):
+    """Live variant of classify() for the alert engine: check only the requested geometric
+    kinds ('orbit' / 'survey') so a rolling window can be judged every scan without paying
+    for the maneuver metrics too. Returns {kind: short detail string}."""
+    out = {}
+    f = _features(points)
+    if f:
+        if "orbit" in kinds and is_orbit(f, min_loops=min_loops):
+            out["orbit"] = f"{f['loops']:.1f} loops over {f['box_km']} km box"
+        if "survey" in kinds and is_survey(f, min_legs=min_legs):
+            out["survey"] = f"{f['legs']} parallel legs over {f['box_km']} km box"
+    return out
 
 
 def classify(points):

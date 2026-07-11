@@ -43,6 +43,7 @@ import tar1090_mqtt as mq        # noqa: E402
 import airshow_types             # noqa: E402
 import maneuver                  # noqa: E402
 import patterns                  # noqa: E402
+import survey_operators          # noqa: E402
 try:
     import tar1090_heatmap_import as hm        # noqa: E402  (the Settings "Historical import" job)
 except Exception as _e:          # pragma: no cover -- import feature just disabled if missing
@@ -1522,11 +1523,65 @@ def patterns_get(q):
     return {"patterns": patterns.CATALOG}
 
 
+def lookup(q):
+    """Who is this aircraft / operator? Joins the aircraft index with the curated
+    survey/surveillance operator knowledge base (survey_operators.py), this airframe's pattern
+    history from the backfill ("has it done this before?"), public-imagery pointers for its
+    registry country, and external registry/photo/tracker links. Drives the "who is this?"
+    panel on the Alerts page; callsign is optional extra context from the alert log."""
+    hx = (q.get("hex", [""])[0] or "").strip().lower().lstrip("~")
+    reg_q = (q.get("reg", [""])[0] or "").strip().upper()
+    callsign = (q.get("callsign", [""])[0] or "").strip()
+    if not hx and not reg_q:
+        return {"error": "hex or reg required"}
+
+    cols = ("SELECT icao_hex, registration, icao_type, type_desc, operator, military, "
+            "first_seen, last_seen FROM aircraft ")
+    rows = (query(cols + "WHERE icao_hex = %s", [hx]) if hx
+            else query(cols + "WHERE upper(registration) = %s", [reg_q]))
+    ac = rows[0] if rows else None
+    if ac:
+        hx = ac["icao_hex"]
+        ac["military"] = bool(ac["military"])
+        ac["first_seen"] = ms(ac["first_seen"])
+        ac["last_seen"] = ms(ac["last_seen"])
+    reg = (ac and ac["registration"]) or reg_q or None
+    operator = ac and ac["operator"]
+    icao_type = ac and ac["icao_type"]
+
+    # what the history backfill has already tagged this airframe with (orbit/survey/airshow)
+    history, flights_n = {}, 0
+    if hx:
+        _ensure_patterns()
+        for r in query("SELECT fp.pattern, count(*) AS n, max(f.start_time) AS last "
+                       "FROM flight_patterns fp JOIN flights f ON f.id = fp.flight_id "
+                       "WHERE f.icao_hex = %s GROUP BY fp.pattern", [hx]):
+            history[r["pattern"]] = {"count": r["n"], "last": ms(r["last"])}
+        n = query("SELECT count(*) AS n FROM flights WHERE icao_hex = %s", [hx])
+        flights_n = n[0]["n"] if n else 0
+
+    profile = survey_operators.match_profile(operator=operator, callsign=callsign,
+                                             registration=reg)
+    # heuristic guess when nothing matched: judge from the patterns we've actually seen
+    # (or the caller's hint, e.g. the pattern that just fired an alert)
+    kinds = [k for k in (q.get("patterns", [""])[0] or "").split(",") if k]
+    if not kinds:
+        kinds = [k for k in ("survey", "orbit") if k in history]
+    guess = None if profile else survey_operators.heuristic(icao_type=icao_type,
+                                                            pattern_kinds=kinds)
+    return {"hex": hx or None, "aircraft": ac, "flights": flights_n,
+            "pattern_history": history, "profile": profile, "guess": guess,
+            "public_imagery": survey_operators.public_imagery_sources(reg),
+            "links": survey_operators.external_links(hexid=hx, registration=reg,
+                                                     callsign=callsign, operator=operator)}
+
+
 ROUTES = {"/api/search": search, "/api/options": options, "/api/seen": seen,
           "/api/trace": trace, "/api/traces": traces, "/api/live": live,
           "/api/airshow": airshow_get, "/api/airshow/custom": airshow_custom_get,
           "/api/airshow/scan": airshow_scan,
           "/api/patterns": patterns_get, "/api/patterns/build-status": pattern_build_status,
+          "/api/lookup": lookup,
           "/api/alerts/rules": alerts_rules_get, "/api/alerts/config": alerts_config_get,
           "/api/alerts/log": alerts_log_get, "/api/import/status": import_status,
           "/api/users": users_get}

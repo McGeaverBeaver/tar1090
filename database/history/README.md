@@ -101,14 +101,29 @@ and show up in-app.
 **Rules** — each rule has:
 - **Match conditions** (all must match): callsign, ICAO type, registration, operator,
   squawk, altitude band, military-only. Wildcards (`*` `?`) and comma lists are allowed.
+- **Air show** (optional) — match the curated air-show aircraft types and/or live
+  aerobatic **maneuvering** (wide altitude swings with repeated reversals in a small box).
+- **Surveillance / aerial photography** (optional) — fire on live **pattern flying**:
+  **orbiting/circling** one spot (police, news, site overwatch, traffic & pipeline
+  patrol) and/or a parallel-line **mapping grid** (aerial photography, lidar,
+  geophysics). These are the same detectors the History pattern views use, judged on a
+  rolling window of the live trail — patterns need time to build, so expect a fire
+  ~10–20 minutes into the flying. The one-click **✈ Air show** and **👁 Surveillance**
+  presets above the rule list create ready-made rules.
 - **Zone** (optional) — draw a circle or polygon on the map; empty = anywhere in range.
 - **Time window** (optional) — restrict to certain days / hours (container local time).
 - **Re-alert after** a cooldown so you aren't spammed for the same aircraft.
 
 **Recent alerts** — a live log of everything that has fired. **Click any entry** to
 open a map showing that flight's **trail** plus a **plane icon at the exact spot the
-alert went off**, pointed along its direction of travel. Enable browser
-**notifications** or **mute** the chime from the buttons at the top.
+alert went off**, pointed along its direction of travel, and a **“who is this?”
+lookup** above the map: the aircraft's registration/type/operator, a match against a
+curated knowledge base of known survey & imagery operators (who they are, who they
+typically fly for, and **where their imagery is published** if it ever becomes
+public), how often this airframe has been tagged orbiting/surveying before, plus
+registry, photo-site and tracker links. The knowledge base is hand-maintained in
+[`survey_operators.py`](../survey_operators.py) — edit it to add local operators.
+Enable browser **notifications** or **mute** the chime from the buttons at the top.
 
 ---
 

@@ -34,6 +34,7 @@ COPY database/tar1090_mqtt.py        /usr/local/share/tar1090/tar1090_mqtt.py
 COPY database/airshow_types.py       /usr/local/share/tar1090/airshow_types.py
 COPY database/maneuver.py            /usr/local/share/tar1090/maneuver.py
 COPY database/patterns.py            /usr/local/share/tar1090/patterns.py
+COPY database/survey_operators.py    /usr/local/share/tar1090/survey_operators.py
 COPY database/tar1090_heatmap_import.py /usr/local/share/tar1090/tar1090_heatmap_import.py
 COPY database/backfill_heatmap.py       /usr/local/share/tar1090/backfill_heatmap.py
 COPY database/backfill_globe_history.py /usr/local/share/tar1090/backfill_globe_history.py
