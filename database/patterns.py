@@ -29,11 +29,15 @@ def _envf(name, default):
         return float(default)
 
 
-# orbit / surveillance
-ORBIT_MIN_LOOPS   = _envf("PATTERN_ORBIT_MIN_LOOPS", 2.0)    # net full circles
-ORBIT_CONSISTENCY = _envf("PATTERN_ORBIT_CONSISTENCY", 0.75)  # share of turning in one direction
-ORBIT_MAX_BOX_KM  = _envf("PATTERN_ORBIT_MAX_BOX_KM", 9.0)
-ORBIT_MAX_SPAN_FT = _envf("PATTERN_ORBIT_MAX_SPAN_FT", 2500)
+# orbit / surveillance -- deliberately strict: a genuine surveillance orbit is many laps of
+# tight, level, same-direction circling over one spot. Brief loop bursts (steep-turn practice,
+# a flight-school lesson wandering a practice area, a couple of circuits at a field) must NOT
+# read as surveillance, so the loop count demands sustained circling and the box/span/
+# consistency gates require it to be tight, flat and one-directional.
+ORBIT_MIN_LOOPS   = _envf("PATTERN_ORBIT_MIN_LOOPS", 3.5)    # net full circles, same direction
+ORBIT_CONSISTENCY = _envf("PATTERN_ORBIT_CONSISTENCY", 0.8)   # share of turning in one direction
+ORBIT_MAX_BOX_KM  = _envf("PATTERN_ORBIT_MAX_BOX_KM", 6.0)
+ORBIT_MAX_SPAN_FT = _envf("PATTERN_ORBIT_MAX_SPAN_FT", 1800)
 
 # survey / lawnmower
 SURVEY_MIN_LEGS    = _envf("PATTERN_SURVEY_MIN_LEGS", 4)      # parallel passes
@@ -128,13 +132,19 @@ def is_survey(f, min_legs=None):
 def detect(points, kinds, min_loops=None, min_legs=None):
     """Live variant of classify() for the alert engine: check only the requested geometric
     kinds ('orbit' / 'survey') so a rolling window can be judged every scan without paying
-    for the maneuver metrics too. Returns {kind: short detail string}."""
+    for the maneuver metrics too. Returns {kind: short detail string}.
+
+    A rule's knobs may TIGHTEN the detection but never relax it below the global (env-set)
+    minimums -- the floor is what keeps a trainer doing a couple of laps from paging anyone,
+    even if a stored rule still carries an older, looser threshold."""
+    ml = max(float(min_loops), ORBIT_MIN_LOOPS) if min_loops is not None else None
+    mg = max(float(min_legs), SURVEY_MIN_LEGS) if min_legs is not None else None
     out = {}
     f = _features(points)
     if f:
-        if "orbit" in kinds and is_orbit(f, min_loops=min_loops):
+        if "orbit" in kinds and is_orbit(f, min_loops=ml):
             out["orbit"] = f"{f['loops']:.1f} loops over {f['box_km']} km box"
-        if "survey" in kinds and is_survey(f, min_legs=min_legs):
+        if "survey" in kinds and is_survey(f, min_legs=mg):
             out["survey"] = f"{f['legs']} parallel legs over {f['box_km']} km box"
     return out
 

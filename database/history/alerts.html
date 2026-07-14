@@ -38,6 +38,7 @@
   .logitem.sel { background: #243049; }
   .logitem .lt { color: #7e8794; font-variant-numeric: tabular-nums; }
   .mil { color: #ff6b6b; font-weight: 600; }
+  .atype { color: #8fb4f7; font-size: 10.5px; border: 1px solid #31435f; border-radius: 9px; padding: 0 6px; white-space: nowrap; }
   /* clicked-alert view: the flight's trail + a plane icon at the trigger point */
   #alertview { flex: 1; min-height: 0; min-width: 0; display: none; flex-direction: column; }
   #alertview.on { display: flex; }
@@ -130,9 +131,9 @@
       </div></div>
       <div class="f" id="p_opts" style="display:none"><label>Thresholds</label>
         watch the last <input type="number" id="p_win" value="900" min="120" style="width:70px"> s ·
-        orbit ≥ <input type="number" id="p_loops" value="2" min="1" step="0.5" style="width:56px"> loops ·
+        orbit ≥ <input type="number" id="p_loops" value="4" min="2" step="0.5" style="width:56px"> loops ·
         grid ≥ <input type="number" id="p_legs" value="4" min="2" style="width:50px"> legs
-        <span class="help">same detectors as the History pattern views; patterns need time to build, so expect a fire ~10–20 min into the flying</span></div>
+        <span class="help">same detectors as the History pattern views; patterns need time to build, so expect a fire ~10–20 min into the flying. The server enforces minimum floors (orbit ≥ 3.5 loops, grid ≥ 4 legs) so circuit training and steep-turn practice don't page you.</span></div>
     </fieldset>
     <fieldset>
       <legend>Time window (optional)</legend>
@@ -268,7 +269,7 @@ function openEditor(r){
   $('p_orbit').checked = kinds.includes('orbit'); $('p_survey').checked = kinds.includes('survey');
   syncPatOpts();
   $('p_win').value   = (pat && pat.window_sec) ?? 900;
-  $('p_loops').value = (pat && pat.orbit_min_loops) ?? 2;
+  $('p_loops').value = (pat && pat.orbit_min_loops) ?? 4;
   $('p_legs').value  = (pat && pat.survey_min_legs) ?? 4;
   const w = (r && r.time_window) || null;
   $('w_enable').checked = !!w;
@@ -306,7 +307,7 @@ function collectConditions(){
   if (pkinds.length) c.pattern = {
     kinds: pkinds,
     window_sec: +$('p_win').value || 900,
-    orbit_min_loops: +$('p_loops').value || 2,
+    orbit_min_loops: +$('p_loops').value || 4,
     survey_min_legs: +$('p_legs').value || 4 };
   return c;
 }
@@ -336,7 +337,7 @@ $('airshowpreset').onclick = () => {
 };
 $('survpreset').onclick = () => {
   openEditor({ name: 'Surveillance / aerial photography', enabled: true, cooldown_sec: 1800, zone: null, time_window: null,
-    conditions: { pattern: { kinds: ['orbit','survey'], window_sec: 900, orbit_min_loops: 2, survey_min_legs: 4 } } });
+    conditions: { pattern: { kinds: ['orbit','survey'], window_sec: 900, orbit_min_loops: 4, survey_min_legs: 4 } } });
   $('ed_title').textContent = 'New rule · surveillance';   // fresh rule (no id), saves as new
 };
 $('cancel').onclick = closeEditor;
@@ -456,7 +457,7 @@ async function openAlert(x){
   closeEditor();
   $('alertview').classList.add('on');
   document.querySelectorAll('#log .logitem').forEach(el => el.classList.toggle('sel', el.dataset.id === String(x.id)));
-  $('av_title').textContent = x.rule_name || 'Alert';
+  $('av_title').textContent = (x.rule_name || 'Alert') + (x.alert_type && x.alert_type !== 'aircraft match' ? ' — ' + x.alert_type : '');
   $('av_sub').textContent = [ (x.callsign || x.icao_hex || '').trim(), x.icao_type, fmtTime(x.fired_at),
     (x.alt != null ? x.alt + ' ft' : null), (x.squawk ? 'squawk ' + x.squawk : null) ].filter(Boolean).join(' · ');
   loadLookup(x);                   // fills the "who is this?" panel while the trail loads
@@ -494,7 +495,8 @@ $('notify').onclick = async () => { if (typeof Notification === 'undefined') ret
 $('mute').onclick = () => { muted = !muted; $('mute').textContent = muted ? 'Unmute' : 'Mute'; };
 function beep(){ if (muted) return; try { const ac = new (window.AudioContext || window.webkitAudioContext)(); const o = ac.createOscillator(), g = ac.createGain();
   o.connect(g); g.connect(ac.destination); o.type = 'sine'; o.frequency.value = 880; g.gain.value = 0.05; o.start(); o.stop(ac.currentTime + 0.18); } catch(e){} }
-function popup(x){ if (!notifyOK) return; try { new Notification('✈ ' + (x.rule_name || 'Aircraft alert'),
+function popup(x){ if (!notifyOK) return; try { new Notification('✈ ' + (x.rule_name || 'Aircraft alert')
+  + (x.alert_type && x.alert_type !== 'aircraft match' ? ' — ' + x.alert_type : ''),
   { body: (x.callsign || x.icao_hex || '') + ' ' + (x.icao_type || '') + '\n' + fmtTime(x.fired_at), tag: 'tar1090-' + x.id }); } catch(e){} }
 function renderLogItems(items, prepend){
   const el = $('log');
@@ -502,7 +504,7 @@ function renderLogItems(items, prepend){
   for (const x of items){
     const div = document.createElement('div'); div.className = 'logitem'; div.dataset.id = x.id;
     div.title = "Show this flight's trail and where the alert fired";
-    div.innerHTML = `<span class="lt">${esc(fmtTime(x.fired_at))}</span> · <b>${esc(x.rule_name||'')}</b> — ${esc(x.callsign||x.icao_hex||'')} ${esc(x.icao_type||'')} ${x.military?'<span class="mil">MIL</span>':''}`;
+    div.innerHTML = `<span class="lt">${esc(fmtTime(x.fired_at))}</span> · <b>${esc(x.rule_name||'')}</b>${x.alert_type && x.alert_type !== 'aircraft match' ? ' <span class="atype">' + esc(x.alert_type) + '</span>' : ''} — ${esc(x.callsign||x.icao_hex||'')} ${esc(x.icao_type||'')} ${x.military?'<span class="mil">MIL</span>':''}`;
     div.onclick = () => openAlert(x);
     if (prepend) el.insertBefore(div, el.firstChild); else el.appendChild(div);
   }

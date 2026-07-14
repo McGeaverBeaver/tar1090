@@ -108,11 +108,20 @@ and show up in-app.
   patrol) and/or a parallel-line **mapping grid** (aerial photography, lidar,
   geophysics). These are the same detectors the History pattern views use, judged on a
   rolling window of the live trail — patterns need time to build, so expect a fire
-  ~10–20 minutes into the flying. The one-click **✈ Air show** and **👁 Surveillance**
-  presets above the rule list create ready-made rules.
+  ~10–20 minutes into the flying. Orbit detection deliberately demands **sustained**
+  circling (several same-direction loops in a tight, level box) so circuit training and
+  steep-turn practice don't fire it, and the server enforces minimum floors (orbit
+  ≥ 3.5 loops, grid ≥ 4 legs — env-overridable via `PATTERN_ORBIT_*` / `PATTERN_SURVEY_*`)
+  that per-rule thresholds can tighten but not relax. The one-click **✈ Air show** and
+  **👁 Surveillance** presets above the rule list create ready-made rules.
 - **Zone** (optional) — draw a circle or polygon on the map; empty = anywhere in range.
 - **Time window** (optional) — restrict to certain days / hours (container local time).
 - **Re-alert after** a cooldown so you aren't spammed for the same aircraft.
+
+Every fired alert carries **what kind of match triggered it** — `air show`,
+`surveillance` (orbit), `aerial survey` (mapping grid), or `aircraft match` for plain
+metadata/zone rules — shown as a tag in the alert log and included as `alert_type` in
+the MQTT / Home Assistant payload and the `alert_log` table.
 
 **Recent alerts** — a live log of everything that has fired. **Click any entry** to
 open a map showing that flight's **trail** plus a **plane icon at the exact spot the

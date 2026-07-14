@@ -753,10 +753,11 @@ CREATE TABLE IF NOT EXISTS alert_rules (
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS alert_log (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  rule_id bigint, rule_name text, icao_hex text, callsign text, registration text,
+  rule_id bigint, rule_name text, alert_type text, icao_hex text, callsign text, registration text,
   icao_type text, operator text, military boolean,
   lat double precision, lon double precision, alt int, squawk text,
   fired_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE alert_log ADD COLUMN IF NOT EXISTS alert_type text;
 CREATE INDEX IF NOT EXISTS alert_log_fired_idx ON alert_log (fired_at DESC);
 """
 _alerts_ready = False
@@ -868,8 +869,8 @@ def alerts_log_get(q):
         except ValueError:
             pass
     params.append(limit)
-    rows = query("SELECT id, rule_id, rule_name, icao_hex, callsign, registration, icao_type, "
-                 "operator, military, lat, lon, alt, squawk, fired_at FROM alert_log "
+    rows = query("SELECT id, rule_id, rule_name, alert_type, icao_hex, callsign, registration, "
+                 "icao_type, operator, military, lat, lon, alt, squawk, fired_at FROM alert_log "
                  + where + " ORDER BY fired_at DESC LIMIT %s", params)
     for r in rows:
         r["fired_at"] = ms(r["fired_at"])

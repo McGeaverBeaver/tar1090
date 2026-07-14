@@ -257,8 +257,13 @@ def _squawk_match(pattern, value):
 
 
 def matches_conditions(cond, p, tracker=None):
+    # what kind of alert this is ("air show", "surveillance", ...) is decided by which special
+    # conditions fire below; a plain metadata/zone rule stays an "aircraft match". Stashed on
+    # the plane and re-set on every successful match, so it's always the current rule's verdict.
+    p["_alert_type"] = "aircraft match"
     if not cond:
         return True
+    trig = []
     if not _txt_match(cond.get("callsign"), p["callsign"]):
         return False
     if not _type_match(cond.get("icao_type"), p["icao_type"]):
@@ -285,6 +290,7 @@ def matches_conditions(cond, p, tracker=None):
         toks = airshow_types.types_for(cats)
         if not toks or not _type_match(",".join(toks), p["icao_type"]):
             return False
+        trig.append("air show")
     # aerobatic maneuvering: confined box + steep vertical rates + repeated reversals, and the
     # aircraft must be a plausible air-show type (not a trainer/tourer/heli just doing steep work)
     man = cond.get("maneuver")
@@ -298,6 +304,8 @@ def matches_conditions(cond, p, tracker=None):
         if not maneuver.is_air_show(m, min_span=man.get("alt_span_min_ft"),
                                     min_reversals=man.get("reversals_min")):
             return False
+        if "air show" not in trig:
+            trig.append("air show")
     # surveillance / aerial photography: orbit (sustained same-direction circling over a point)
     # and/or survey (parallel "lawnmower" mapping legs), judged on the rolling live trail with
     # the same geometry the history backfill uses (patterns.py)
@@ -315,6 +323,12 @@ def matches_conditions(cond, p, tracker=None):
         if not hits:
             return False
         p["_pattern"] = "; ".join(f"{k}: {v}" for k, v in sorted(hits.items()))
+        if "orbit" in hits:
+            trig.append("surveillance")
+        if "survey" in hits:
+            trig.append("aerial survey")
+    if trig:
+        p["_alert_type"] = " + ".join(trig)
     return True
 
 
@@ -412,14 +426,30 @@ def fetch_photo(p):
     return _thumb_src(ph) if ph else None
 
 
+_log_schema_ok = [False]
+
+
+def ensure_log_schema():
+    """The history-api owns the alert DDL; older installs predate the alert_type column, so add
+    it here too (idempotent) before we insert into it. Retried until it succeeds."""
+    if _log_schema_ok[0]:
+        return
+    try:
+        db().execute("ALTER TABLE alert_log ADD COLUMN IF NOT EXISTS alert_type text")
+        _log_schema_ok[0] = True
+    except psycopg.Error as e:
+        log.debug("alert_log schema top-up not applied yet: %s", e)
+
+
 def log_alert(rule, p):
     try:
         db().execute(
-            "INSERT INTO alert_log (rule_id, rule_name, icao_hex, callsign, registration, "
-            "icao_type, operator, military, lat, lon, alt, squawk) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-            (rule["id"], rule["name"], p["hex"], p["callsign"] or None, p["registration"],
-             p["icao_type"], p["operator"], bool(p["military"]) if p["military"] is not None else None,
+            "INSERT INTO alert_log (rule_id, rule_name, alert_type, icao_hex, callsign, "
+            "registration, icao_type, operator, military, lat, lon, alt, squawk) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (rule["id"], rule["name"], p.get("_alert_type"), p["hex"], p["callsign"] or None,
+             p["registration"], p["icao_type"], p["operator"],
+             bool(p["military"]) if p["military"] is not None else None,
              p["lat"], p["lon"], p["alt"], p["squawk"]))
     except psycopg.Error as e:
         log.warning("alert_log insert failed: %s", e)
@@ -503,6 +533,9 @@ class Mqtt:
 def build_payload(rule, p):
     return {
         "rule_id": rule["id"], "rule": rule["name"],
+        # what kind of match fired: "air show", "surveillance", "aerial survey" (combined with
+        # " + " when one rule matched several ways), or "aircraft match" for plain rules
+        "alert_type": p.get("_alert_type"),
         "hex": p["hex"], "callsign": p["callsign"] or None,
         "registration": p["registration"], "type": p["icao_type"], "operator": p["operator"],
         "military": bool(p["military"]) if p["military"] is not None else None,
@@ -538,6 +571,7 @@ def main():
             continue
 
         load_extra_exclude()        # admin-added non-aerobatic types (so maneuver rules match the UI)
+        ensure_log_schema()         # add alert_log.alert_type on installs that predate it
 
         mqtt_up = mqtt_mgr.ensure(cfg)
         if mqtt_up:
@@ -568,8 +602,9 @@ def main():
                         log_alert(rule, p)
                         if mqtt_up:
                             mqtt_mgr.fire(cfg, rule, payload)
-                        log.info("ALERT '%s' <- %s %s %s @ %.4f,%.4f",
-                                 rule["name"], p["hex"], p["callsign"] or "", p["icao_type"] or "",
+                        log.info("ALERT '%s' [%s] <- %s %s %s @ %.4f,%.4f",
+                                 rule["name"], p.get("_alert_type") or "aircraft match",
+                                 p["hex"], p["callsign"] or "", p["icao_type"] or "",
                                  p["lat"], p["lon"])
                 # prune old cooldowns (>6h)
                 for k, v in list(cooldowns.items()):

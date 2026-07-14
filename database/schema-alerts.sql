@@ -39,6 +39,8 @@ CREATE TABLE IF NOT EXISTS alert_log (
   id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   rule_id      bigint,
   rule_name    text,
+  alert_type   text,   -- what kind of match fired: 'air show' | 'surveillance' | 'aerial survey'
+                       -- ('+'-combined when one rule matched several ways) | 'aircraft match'
   icao_hex     text,
   callsign     text,
   registration text,
