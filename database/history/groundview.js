@@ -329,28 +329,46 @@
     projectAll() {
       if (!this.three || !this.observer) return;
       const T = this.three.T, fleet = this.three.fleet;
-      // dispose the previous fleet's GPU resources (skip shared shadow geo/texture)
-      fleet.traverse(o => {
-        if (o.geometry && !(o.geometry.userData && o.geometry.userData.shared)) o.geometry.dispose();
-        if (o.material) { const mm = o.material; if (mm.map && !(mm.map.userData && mm.map.userData.shared)) mm.map.dispose(); mm.dispose(); }
-      });
-      while (fleet.children.length) fleet.remove(fleet.children[0]);
-      this.three.meshes = {};
       const EXAG = 14, span = 12 * EXAG; this._span = span;  // exaggerate ~12 m wingspan so the model is visible
+      // reuse the plane mesh (and its in-flight sim state) per track id — live updates arrive every
+      // second, and rebuilding the fleet each tick used to reset every aircraft's motion. Only the
+      // trail ribbon is rebuilt, since the points change under it.
+      const old = this.three.meshes, next = {};
       for (const tr of this.tracks) {
-        const col = tr.color || '#6cc1ff';
+        const col = tr.color || '#6cc1ff', kind = this._kind(tr);
+        let m = old[tr.id];
+        if (m && m.kind === kind && m.color === col) {
+          delete old[tr.id]; m.track = tr;
+          if (m.ribbon) { fleet.remove(m.ribbon); this._disposeTree(m.ribbon); m.ribbon = null; }
+        } else {
+          if (m) { this._removeMesh(m); delete old[tr.id]; }
+          const plane = this._planeMesh(col, span, kind); fleet.add(plane);
+          const shadow = new T.Mesh(this._shadowGeo, new T.MeshBasicMaterial({ map: this._shadowTex, color: 0x000000, transparent: true, opacity: 0.34, depthWrite: false, fog: false, toneMapped: false }));
+          shadow.rotation.x = -Math.PI / 2; shadow.position.y = 1.5; fleet.add(shadow);
+          m = { plane, shadow, kind, color: col, track: tr };
+        }
         // trail: a flat altitude-coloured ribbon (smoke-trail look), not a 1-px GL line
         const stepN = Math.max(1, Math.floor(tr.points.length / 400)), pts3 = [], cols3 = [];
         for (let i = 0; i < tr.points.length; i += stepN) { const p = tr.points[i]; if (p[1] == null) continue;
           pts3.push(enu(this.observer, p[1], p[2], p[3]));
           cols3.push(new T.Color(this.altColor(p[3]))); }
-        const ribbon = this._ribbon(T, pts3, cols3, span * 0.16);
-        if (ribbon) fleet.add(ribbon);
-        const plane = this._planeMesh(col, span, this._kind(tr)); fleet.add(plane);
-        const shadow = new T.Mesh(this._shadowGeo, new T.MeshBasicMaterial({ map: this._shadowTex, color: 0x000000, transparent: true, opacity: 0.34, depthWrite: false, fog: false, toneMapped: false }));
-        shadow.rotation.x = -Math.PI / 2; shadow.position.y = 1.5; fleet.add(shadow);
-        this.three.meshes[tr.id] = { plane, shadow, track: tr };
+        m.ribbon = this._ribbon(T, pts3, cols3, span * 0.16);
+        if (m.ribbon) fleet.add(m.ribbon);
+        next[tr.id] = m;
       }
+      for (const id in old) this._removeMesh(old[id]);       // aircraft gone from the data
+      this.three.meshes = next;
+    }
+    _removeMesh(m) {
+      for (const o of [m.ribbon, m.plane, m.shadow]) {
+        if (!o) continue; this.three.fleet.remove(o); this._disposeTree(o);
+      }
+    }
+    _disposeTree(root) {                                     // free GPU resources (skip shared geo/textures)
+      root.traverse(o => {
+        if (o.geometry && !(o.geometry.userData && o.geometry.userData.shared)) o.geometry.dispose();
+        if (o.material) { const mm = o.material; if (mm.map && !(mm.map.userData && mm.map.userData.shared)) mm.map.dispose(); mm.dispose(); }
+      });
     }
     _ribbon(T, pts, cols, width) {                           // horizontal triangle-strip ribbon through the fixes
       const n = pts.length; if (n < 2) return null;
@@ -416,28 +434,37 @@
         const m = this.three.meshes[tr.id]; if (m && m.plane.visible) return m; }
       return null;
     }
-    _followCam() {                                           // place + smoothly chase the camera relative to the plane
+    _followCam(dt) {                                         // place + smoothly chase the camera relative to the plane
       const T = this.three.T, cam = this.three.camera, m = this._followMesh();
       if (!m) return;                                        // nobody up at this moment -> hold the last camera
-      const pl = m.plane, p = pl.position, s = this._span || 264;
-      const fwd = new T.Vector3(0, 0, 1).applyQuaternion(pl.quaternion);   // nose direction (the model's local +Z)
+      const pl = m.plane, p = pl.position, s = this._span || 264, st = m._sim;
+      // frame the smoothed FLIGHT PATH, not the nose — the plane banks and yaws inside a steady
+      // shot instead of dragging the camera along with every attitude change
+      const fwd = new T.Vector3();
+      if (st && st.yaw != null) {
+        const cp = Math.cos(st.pitch);
+        fwd.set(Math.sin(st.yaw) * cp, Math.sin(st.pitch), Math.cos(st.yaw) * cp);
+      } else fwd.set(0, 0, 1).applyQuaternion(pl.quaternion);
       if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1); else fwd.normalize();
       const up = new T.Vector3(0, 1, 0), right = new T.Vector3().crossVectors(fwd, up);
       if (right.lengthSq() < 1e-6) right.set(1, 0, 0); else right.normalize();
-      const dPos = new T.Vector3(), dTgt = new T.Vector3(); let fov, k;
+      const dPos = new T.Vector3(), dTgt = new T.Vector3(); let fov, resp;   // resp: approach rate, 1/s
       if (this.view === 'cockpit') {                         // sit just behind the nose, look down the heading
         dPos.copy(p).addScaledVector(fwd, s * 0.32).addScaledVector(up, s * 0.11);
-        dTgt.copy(p).addScaledVector(fwd, s * 60); fov = VIEW_META.cockpit.fov; k = 0.24;
+        dTgt.copy(p).addScaledVector(fwd, s * 60); fov = VIEW_META.cockpit.fov; resp = 15;
       } else if (this.view === 'wing') {                     // ride the wingtip, fuselage to one side
         dPos.copy(p).addScaledVector(right, s * 0.55).addScaledVector(up, s * 0.10).addScaledVector(fwd, -s * 0.05);
-        dTgt.copy(p).addScaledVector(fwd, s * 3.5).addScaledVector(right, -s * 0.25); fov = VIEW_META.wing.fov; k = 0.18;
+        dTgt.copy(p).addScaledVector(fwd, s * 3.5).addScaledVector(right, -s * 0.25); fov = VIEW_META.wing.fov; resp = 11;
       } else {                                               // chase: behind + above, trailing the plane down its own path
         dPos.copy(p).addScaledVector(fwd, -s * 3.2).addScaledVector(up, s * 1.15);
-        dTgt.copy(p).addScaledVector(fwd, s * 1.6); fov = VIEW_META.chase.fov; k = 0.09;
+        dTgt.copy(p).addScaledVector(fwd, s * 1.6); fov = VIEW_META.chase.fov; resp = 5.5;
       }
       const fc = this._follow || (this._follow = { pos: dPos.clone(), tgt: dTgt.clone(), fov });
       if (this._snapCam) { fc.pos.copy(dPos); fc.tgt.copy(dTgt); fc.fov = fov; this._snapCam = false; }
-      else { fc.pos.lerp(dPos, k); fc.tgt.lerp(dTgt, k); fc.fov += (fov - fc.fov) * 0.15; }
+      else {                                                 // frame-rate-independent exponential chase
+        const k = 1 - Math.exp(-(dt || 0.016) * resp), kf = 1 - Math.exp(-(dt || 0.016) * 9);
+        fc.pos.lerp(dPos, k); fc.tgt.lerp(dTgt, k); fc.fov += (fov - fc.fov) * kf;
+      }
       cam.up.set(0, 1, 0); cam.position.copy(fc.pos); cam.lookAt(fc.tgt);
       if (Math.abs(cam.fov - fc.fov) > 0.02) { cam.fov = fc.fov; cam.updateProjectionMatrix(); }
     }
@@ -541,12 +568,18 @@
     }
     // Virtual-aircraft tracker, run every rendered frame: each plane has its own position and
     // velocity and FLIES toward the spline target (critically-damped spring + target-velocity
-    // feed-forward). Data gaps are dead-reckoned at the last known velocity, noise is absorbed by
-    // inertia, and bank comes from the lateral acceleration actually flown — a simulation of the
-    // flight between the data points, not a verbatim replay of them.
+    // feed-forward). Attitude is flown like a flight director on top of that: the nose chases the
+    // LOW-PASSED flight direction with a lag, bank follows the turn rate actually flown as a
+    // coordinated turn (normalised back to real-world speeds when playback is time-compressed),
+    // and pitch follows the flight-path angle — so fix-to-fix jitter is absorbed long before it
+    // can wiggle the wings.
     _simStep(dt) {
       if (!this.three || dt <= 0) return;
       const K = 25, C = 10;                                  // spring stiffness / damping (~0.3 s response)
+      const rate = this.live ? 1 : Math.max(0.2, this._baseRate * this.speed);  // display-seconds per real second
+      const gEff = 9.81 * rate * rate;                       // gravity in display units, so bank stays physical
+      const TAU_V = 0.35, TAU_YAW = 0.28, TAU_ATT = 0.4;     // smoothing time constants (display seconds)
+      const TWO_PI = Math.PI * 2;
       for (const id in this.three.meshes) {
         const m = this.three.meshes[id], tg = m._tgt;
         const vis = !!tg;
@@ -554,41 +587,55 @@
         if (!vis) { m._sim = null; continue; }
         let st = m._sim;
         if (!st) st = m._sim = { px: tg.x, py: tg.y, pz: tg.z, vx: 0, vy: 0, vz: 0,
-                                 tx: tg.x, ty: tg.y, tz: tg.z, tvx: 0, tvy: 0, tvz: 0, age: 0, bank: 0 };
-        // target velocity, measured per target CHANGE (live targets tick ~1 Hz; playback every frame)
+                                 tx: tg.x, ty: tg.y, tz: tg.z, tvx: 0, tvy: 0, tvz: 0, age: 0,
+                                 svx: 0, svy: 0, svz: 0, yaw: null, pitch: 0, bank: 0 };
+        // target velocity, measured per target CHANGE and low-passed: a 1 Hz live tick is already
+        // a one-second average (taken whole), a per-frame playback delta only nudges the estimate
         st.age += dt;
         if (tg.x !== st.tx || tg.y !== st.ty || tg.z !== st.tz) {
-          const a = Math.min(Math.max(st.age, 0.05), 3);
-          st.tvx = (tg.x - st.tx) / a; st.tvy = (tg.y - st.ty) / a; st.tvz = (tg.z - st.tz) / a;
+          const a = Math.max(st.age, 0.004), kv = Math.min(1, st.age * 6);
+          st.tvx += ((tg.x - st.tx) / a - st.tvx) * kv;
+          st.tvy += ((tg.y - st.ty) / a - st.tvy) * kv;
+          st.tvz += ((tg.z - st.tz) / a - st.tvz) * kv;
           st.tx = tg.x; st.ty = tg.y; st.tz = tg.z; st.age = 0;
         } else if (st.age > 1.5) {                           // target stopped (paused) -> bleed off speed
           const d = Math.max(0, 1 - dt * 2); st.tvx *= d; st.tvy *= d; st.tvz *= d;
         }
         const ex = tg.x - st.px, ey = tg.y - st.py, ez = tg.z - st.pz;
-        let ax = 0, ay = 0, az = 0;
         if (ex*ex + ey*ey + ez*ez > 25e6) {                  // >5 km apart (scrub jump) -> teleport
           st.px = tg.x; st.py = tg.y; st.pz = tg.z; st.vx = st.tvx; st.vy = st.tvy; st.vz = st.tvz;
+          st.svx = st.vx; st.svy = st.vy; st.svz = st.vz; st.yaw = null; st.bank = 0;
         } else {
-          ax = ex*K + (st.tvx - st.vx)*C; ay = ey*K + (st.tvy - st.vy)*C; az = ez*K + (st.tvz - st.vz)*C;
+          const ax = ex*K + (st.tvx - st.vx)*C, ay = ey*K + (st.tvy - st.vy)*C, az = ez*K + (st.tvz - st.vz)*C;
           st.vx += ax*dt; st.vy += ay*dt; st.vz += az*dt;
           st.px += st.vx*dt; st.py += st.vy*dt; st.pz += st.vz*dt;
         }
-        // bank from the lateral acceleration being flown (what actually tilts an aircraft)
-        const sp2 = st.vx*st.vx + st.vz*st.vz;
-        if (sp2 > 4) {
-          const sp = Math.sqrt(sp2), rx = -st.vz/sp, rz = st.vx/sp;    // pilot's-right, horizontal
-          const bt = Math.max(-1.2, Math.min(1.2, Math.atan2(ax*rx + az*rz, 9.81)));
-          st.bank += (bt - st.bank) * Math.min(1, 6*dt);
-        } else st.bank *= Math.max(0, 1 - 3*dt);
+        // the direction actually flown, low-passed — position noise never reaches the attitude
+        const kV = 1 - Math.exp(-dt / TAU_V);
+        st.svx += (st.vx - st.svx) * kV; st.svy += (st.vy - st.svy) * kV; st.svz += (st.vz - st.svz) * kV;
+        const vh = Math.hypot(st.svx, st.svz);
+        // nose: chase the flight direction with a lag; hovering/parked aircraft hold their heading
+        let omega = 0;
+        if (vh > 2.5 * rate) {                               // faster than ~2.5 m/s real -> flying
+          const want = Math.atan2(st.svx, st.svz);
+          if (st.yaw == null) st.yaw = want;
+          let dpsi = want - st.yaw;
+          dpsi -= Math.round(dpsi / TWO_PI) * TWO_PI;        // shortest way around
+          const step = dpsi * (1 - Math.exp(-dt / TAU_YAW));
+          st.yaw += step; omega = step / dt;
+        } else if (st.yaw == null) st.yaw = 0;
+        // coordinated turn: tan(bank) = v·ω/g in real units (positive = right wing down);
+        // helicopters bank less, and pitch with the flight path only a little
+        const kAtt = 1 - Math.exp(-dt / TAU_ATT), heli = m.kind === 'heli';
+        const bankT = Math.max(-1, Math.min(1, -Math.atan2(vh * omega, gEff) * (heli ? 0.6 : 1)));
+        st.bank += (bankT - st.bank) * kAtt;
+        const pitchT = (vh > 1.5 * rate ? Math.max(-0.55, Math.min(0.55, Math.atan2(st.svy, vh))) : 0) * (heli ? 0.35 : 1);
+        st.pitch += (pitchT - st.pitch) * kAtt;
         // pose (with the ground-clearance clamp for the exaggerated model)
         const clear = this._span * (0.16 + 0.5 * Math.abs(Math.sin(st.bank)));
         const py = Math.max(st.py, clear);
         m.plane.position.set(st.px, py, st.pz);
-        if (st.vx || st.vy || st.vz) {
-          m.plane.up.set(0, 1, 0);
-          m.plane.lookAt(st.px + st.vx, py + st.vy, st.pz + st.vz);
-          m.plane.rotateZ(-st.bank);
-        }
+        m.plane.rotation.set(-st.pitch, st.yaw, st.bank, 'YXZ');   // yaw, then pitch, then roll about the nose
         if (m.shadow) {                                      // sun-cast, faded by daylight
           const sd = this._sd; let sx = st.px, sz2 = st.pz;
           if (sd && sd.y > 0.08) { const k2 = Math.min(st.py / sd.y, 12000); sx -= sd.x * k2; sz2 -= sd.z * k2; }
@@ -659,7 +706,7 @@
           if (cl.position.x > half) cl.position.x = -half;
         }
         if (this.view === 'orbit') this.three.controls.update();       // stand sets the camera from pointer drags
-        else if (this._isFollow()) this._followCam();                  // chase/cockpit/wing track the aircraft
+        else if (this._isFollow()) this._followCam(dt);                // chase/cockpit/wing track the aircraft
         this.three.renderer.render(this.three.scene, this.three.camera);
       };
       this._raf = requestAnimationFrame(loop);

@@ -205,7 +205,7 @@
     <button class="tgl" id="t-recenter" title="Zoom to fit every aircraft">⤢ Fit</button>
     <button class="tgl" id="t-filter" title="Filter by altitude / military / type">⏷ Filter</button>
     <button class="tgl" id="t-airshow" title="Show only likely air-show aircraft: aerobatic / warbird / jet-demo types, or anything maneuvering with big altitude swings">✈ Air show</button>
-    <button class="tgl" id="t-ground" title="Open the 3D view — the aircraft now in the list, from your receiver site">🧊 3D</button>
+    <button class="tgl" id="t-3d" title="Open the 3D view — the aircraft now in the list, from your receiver site">🧊 3D</button>
   </div>
   <span id="count">—</span>
   <span id="updated"></span>
@@ -269,7 +269,7 @@
 <script src="acicons.js"></script>
 <script src="https://unpkg.com/three@0.147.0/build/three.min.js"></script>
 <script src="https://unpkg.com/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
-<script src="groundview.js?v=3e2"></script>
+<script src="groundview.js?v=3f"></script>
 <script src="route.js?v=2"></script>
 <script>
 const $ = id => document.getElementById(id);
@@ -816,17 +816,17 @@ function gvPlaceObs(){
     $('gv-from').textContent = `${ll.lat.toFixed(4)}, ${ll.lng.toFixed(4)}`; gv.setObserver(ll.lat, ll.lng); });
 }
 function gvLiveUpdate(){ if (gv.isOpen()) gv.updateTracks(gvLiveTracks()); }
-function gvOnClose(){ if (gvObsMarker){ map.removeLayer(gvObsMarker); gvObsMarker = null; } $('t-ground').classList.remove('on'); }
+function gvOnClose(){ if (gvObsMarker){ map.removeLayer(gvObsMarker); gvObsMarker = null; } $('t-3d').classList.remove('on'); }
 function gvOpenLive(){
   const tr = gvLiveTracks();
   if (!tr.length){ $('status').style.display='block'; $('status').textContent = 'No aircraft with a position to show yet — let the feed run a few seconds.'; return; }
   if (!gvObs) gvObs = siteLoc ? { lat: siteLoc.lat, lon: siteLoc.lon } : map.getCenter() && { lat: map.getCenter().lat, lon: map.getCenter().lng };
   $('gv-from').textContent = siteLoc ? 'your receiver' : 'the map centre';
   gvPlaceObs();
-  $('t-ground').classList.add('on');
+  $('t-3d').classList.add('on');
   gv.open(tr, gvObs, { live: true });
 }
-$('t-ground').onclick = ()=> gv.isOpen() ? gv.close() : gvOpenLive();
+$('t-3d').onclick = ()=> gv.isOpen() ? gv.close() : gvOpenLive();
 
 $('t-labels').onclick   = e => { showLabels = !showLabels; e.currentTarget.classList.toggle('on', showLabels); applyLabels(); };
 // Trails: show/hide the SELECTED aircraft's trail. With it off, picking a plane shows no trail.
