@@ -101,6 +101,8 @@ and show up in-app.
 **Rules** — each rule has:
 - **Match conditions** (all must match): callsign, ICAO type, registration, operator,
   squawk, altitude band, military-only. Wildcards (`*` `?`) and comma lists are allowed.
+  An **ignore list** per rule (matched against callsign, registration, operator and hex)
+  makes sure a known local flyer can never fire that rule.
 - **Air show** (optional) — match the curated air-show aircraft types and/or live
   aerobatic **maneuvering** (wide altitude swings with repeated reversals in a small box).
 - **Surveillance / aerial photography** (optional) — fire on live **pattern flying**:
@@ -108,12 +110,27 @@ and show up in-app.
   patrol) and/or a parallel-line **mapping grid** (aerial photography, lidar,
   geophysics). These are the same detectors the History pattern views use, judged on a
   rolling window of the live trail — patterns need time to build, so expect a fire
-  ~10–20 minutes into the flying. Orbit detection deliberately demands **sustained**
-  circling (several same-direction loops in a tight, level box) so circuit training and
-  steep-turn practice don't fire it, and the server enforces minimum floors (orbit
-  ≥ 3.5 loops, grid ≥ 4 legs — env-overridable via `PATTERN_ORBIT_*` / `PATTERN_SURVEY_*`)
-  that per-rule thresholds can tighten but not relax. The one-click **✈ Air show** and
-  **👁 Surveillance** presets above the rule list create ready-made rules.
+  ~10–20 minutes into the flying. Detection is deliberately strict so flight-school
+  flying can't page you:
+  - an **orbit** must be sustained, level, same-direction circling — ≥ 3.5 net loops in
+    a tight box, held ≥ 7 minutes, without climb/descend cycling (circuits at a field
+    look like an orbit but climb and descend every lap; steep-turn practice is over in
+    2–3 minutes — neither counts);
+  - a **grid** must be ≥ 4 **long (≥ 1 km), straight, even, parallel** legs flown over
+    ≥ 7 minutes — a lesson wandering a practice area racks up direction reversals, but
+    its runs are short, crooked and uneven, so the leg-quality gates reject it;
+  - the detection must then **hold** for the rule's *hold* time (default 3 min,
+    server floor `ALERT_PATTERN_PERSIST_SEC`) before the alert fires — one fluky
+    window can't page;
+  - **training operators are skipped**: aircraft whose operator reads like a flight
+    school / college / flying club (list in
+    [`survey_operators.py`](../survey_operators.py) `TRAINING_KEYWORDS`) don't fire
+    pattern alerts unless the rule opts back in with *also alert for training
+    operators*.
+  The server enforces the geometric floors (env-overridable via `PATTERN_ORBIT_*` /
+  `PATTERN_SURVEY_*`); per-rule thresholds can tighten but not relax them. The
+  one-click **✈ Air show** and **👁 Surveillance** presets above the rule list create
+  ready-made rules.
 - **Zone** (optional) — draw a circle or polygon on the map; empty = anywhere in range.
 - **Time window** (optional) — restrict to certain days / hours (container local time).
 - **Re-alert after** a cooldown so you aren't spammed for the same aircraft.

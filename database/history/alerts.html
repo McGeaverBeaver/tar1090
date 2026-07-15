@@ -113,6 +113,7 @@
       <div class="f"><label>Squawk</label><input type="text" id="c_squawk" placeholder="7700  or  emergency"></div>
       <div class="f"><label>Altitude ft</label><input type="number" id="c_altmin" placeholder="min" style="width:90px"> – <input type="number" id="c_altmax" placeholder="max" style="width:90px"></div>
       <div class="f"><label>Military only</label><input type="checkbox" id="c_mil"></div>
+      <div class="f"><label>Ignore aircraft</label><input type="text" id="c_excl" placeholder="C-GSEQ, Seneca*, c074a9"> <span class="help">never fire for these — matched against callsign, registration, operator and hex</span></div>
     </fieldset>
     <fieldset>
       <legend>Air show (optional) — match common air-show aircraft, or aerobatic maneuvering</legend>
@@ -132,8 +133,11 @@
       <div class="f" id="p_opts" style="display:none"><label>Thresholds</label>
         watch the last <input type="number" id="p_win" value="900" min="120" style="width:70px"> s ·
         orbit ≥ <input type="number" id="p_loops" value="4" min="2" step="0.5" style="width:56px"> loops ·
-        grid ≥ <input type="number" id="p_legs" value="4" min="2" style="width:50px"> legs
-        <span class="help">same detectors as the History pattern views; patterns need time to build, so expect a fire ~10–20 min into the flying. The server enforces minimum floors (orbit ≥ 3.5 loops, grid ≥ 4 legs) so circuit training and steep-turn practice don't page you.</span></div>
+        grid ≥ <input type="number" id="p_legs" value="4" min="2" style="width:50px"> legs ·
+        hold ≥ <input type="number" id="p_hold" value="3" min="0" style="width:50px"> min
+        <span class="help">same detectors as the History pattern views; patterns need time to build, so expect a fire ~10–20 min into the flying. The server enforces minimum floors — orbit: ≥ 3.5 sustained level same-direction loops for ≥ 7 min (circuits climbing/descending each lap don't count); grid: ≥ 4 straight, even, parallel legs of ≥ 1 km — and the detection must <b>hold</b> for the time above before it pages, so steep-turn practice and practice-area wandering stay quiet.</span></div>
+      <div class="f" id="p_opts2" style="display:none"><label>Flight schools</label>
+        <label><input type="checkbox" id="p_train"> also alert for training operators <span class="help">(flight schools / colleges / flying clubs are skipped by default — their drills mimic these patterns)</span></label></div>
     </fieldset>
     <fieldset>
       <legend>Time window (optional)</legend>
@@ -199,7 +203,8 @@ async function loadAirshow(){
   }
 }
 $('as_man').addEventListener('change', () => { $('as_manopts').style.display = $('as_man').checked ? '' : 'none'; });
-function syncPatOpts(){ $('p_opts').style.display = ($('p_orbit').checked || $('p_survey').checked) ? '' : 'none'; }
+function syncPatOpts(){ const on = ($('p_orbit').checked || $('p_survey').checked) ? '' : 'none';
+  $('p_opts').style.display = on; $('p_opts2').style.display = on; }
 $('p_orbit').addEventListener('change', syncPatOpts);
 $('p_survey').addEventListener('change', syncPatOpts);
 
@@ -220,7 +225,9 @@ function summary(r){
   if (c.alt_min != null || c.alt_max != null) p.push('alt ' + (c.alt_min ?? '') + '–' + (c.alt_max ?? '') + 'ft');
   if (c.airshow && c.airshow.length) p.push('✈ ' + c.airshow.join('+'));
   if (c.maneuver) p.push('maneuvering ≥' + (c.maneuver.alt_span_min_ft ?? 1000) + 'ft/' + (c.maneuver.window_sec ?? 120) + 's');
-  if (c.pattern) p.push('👁 ' + ((c.pattern.kinds && c.pattern.kinds.length) ? c.pattern.kinds.join('+') : 'orbit+survey') + '/' + (c.pattern.window_sec ?? 900) + 's');
+  if (c.pattern) p.push('👁 ' + ((c.pattern.kinds && c.pattern.kinds.length) ? c.pattern.kinds.join('+') : 'orbit+survey') + '/' + (c.pattern.window_sec ?? 900) + 's'
+    + ' hold ' + Math.round((c.pattern.persist_sec ?? 180)/60) + 'm' + (c.pattern.include_training ? ' incl. schools' : ''));
+  if (c.exclude) p.push('ignore ' + c.exclude);
   if (!p.length) p.push('any aircraft');
   p.push(r.zone ? (r.zone.type === 'circle' ? ('zone ◯ ' + Math.round(r.zone.radius_m/1000) + 'km') : 'zone ▰ polygon') : 'anywhere');
   if (r.time_window){ const w = r.time_window; let t = (w.start ? w.start + '–' + w.end : 'window');
@@ -257,6 +264,7 @@ function openEditor(r){
   $('c_reg').value = c.registration || ''; $('c_op').value = c.operator || '';
   $('c_squawk').value = c.squawk || ''; $('c_altmin').value = c.alt_min ?? ''; $('c_altmax').value = c.alt_max ?? '';
   $('c_mil').checked = !!c.military;
+  $('c_excl').value = c.exclude || '';
   const cats = c.airshow || [];
   document.querySelectorAll('#as_cats input').forEach(x => x.checked = cats.includes(x.dataset.key));
   const man = c.maneuver || null;
@@ -271,6 +279,8 @@ function openEditor(r){
   $('p_win').value   = (pat && pat.window_sec) ?? 900;
   $('p_loops').value = (pat && pat.orbit_min_loops) ?? 4;
   $('p_legs').value  = (pat && pat.survey_min_legs) ?? 4;
+  $('p_hold').value  = Math.round(((pat && pat.persist_sec) ?? 180) / 60);
+  $('p_train').checked = !!(pat && pat.include_training);
   const w = (r && r.time_window) || null;
   $('w_enable').checked = !!w;
   document.querySelectorAll('.wday').forEach(x => x.checked = !!(w && w.days && w.days.includes(+x.value)));
@@ -295,6 +305,7 @@ function collectConditions(){
   if (t('c_altmin') !== '') c.alt_min = +t('c_altmin');
   if (t('c_altmax') !== '') c.alt_max = +t('c_altmax');
   if ($('c_mil').checked) c.military = true;
+  if (t('c_excl')) c.exclude = t('c_excl');
   const cats = [...document.querySelectorAll('#as_cats input:checked')].map(x => x.dataset.key);
   if (cats.length) c.airshow = cats;
   if ($('as_man').checked) c.maneuver = {
@@ -304,11 +315,15 @@ function collectConditions(){
   const pkinds = [];
   if ($('p_orbit').checked) pkinds.push('orbit');
   if ($('p_survey').checked) pkinds.push('survey');
-  if (pkinds.length) c.pattern = {
-    kinds: pkinds,
-    window_sec: +$('p_win').value || 900,
-    orbit_min_loops: +$('p_loops').value || 4,
-    survey_min_legs: +$('p_legs').value || 4 };
+  if (pkinds.length){
+    c.pattern = {
+      kinds: pkinds,
+      window_sec: +$('p_win').value || 900,
+      orbit_min_loops: +$('p_loops').value || 4,
+      survey_min_legs: +$('p_legs').value || 4,
+      persist_sec: Math.max(0, Math.round((+$('p_hold').value || 0) * 60)) };
+    if ($('p_train').checked) c.pattern.include_training = true;
+  }
   return c;
 }
 function collectWindow(){
@@ -337,7 +352,7 @@ $('airshowpreset').onclick = () => {
 };
 $('survpreset').onclick = () => {
   openEditor({ name: 'Surveillance / aerial photography', enabled: true, cooldown_sec: 1800, zone: null, time_window: null,
-    conditions: { pattern: { kinds: ['orbit','survey'], window_sec: 900, orbit_min_loops: 4, survey_min_legs: 4 } } });
+    conditions: { pattern: { kinds: ['orbit','survey'], window_sec: 900, orbit_min_loops: 4, survey_min_legs: 4, persist_sec: 180 } } });
   $('ed_title').textContent = 'New rule · surveillance';   // fresh rule (no id), saves as new
 };
 $('cancel').onclick = closeEditor;

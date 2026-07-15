@@ -28,6 +28,7 @@ import tar1090_mqtt as mq
 import airshow_types
 import maneuver
 import patterns
+import survey_operators
 
 log = logging.getLogger("tar1090-alerter")
 
@@ -39,6 +40,11 @@ MAN_DEADBAND_FT = int(os.environ.get("ALERT_MANEUVER_DEADBAND_FT", "75"))   # ig
 # orbit/survey patterns build up far slower than aerobatics (a mapping leg alone can run several
 # minutes), so pattern rules get a longer rolling history than the maneuver detector needs.
 PAT_HISTORY_SEC = int(os.environ.get("ALERT_PATTERN_HISTORY_SEC", "1800"))
+# a real mission holds its geometry scan after scan, so a pattern detection must persist this
+# long before it may page (a rule's persist_sec can lengthen the hold but not shorten it) --
+# one fluky window can't fire. The gap tolerance covers detection flapping as the window slides.
+PAT_PERSIST_SEC = float(os.environ.get("ALERT_PATTERN_PERSIST_SEC", "180"))
+PAT_STREAK_GAP  = float(os.environ.get("ALERT_PATTERN_STREAK_GAP_SEC", "60"))
 FETCH_PHOTO   = os.environ.get("ALERT_FETCH_PHOTO", "true").strip().lower() != "false"
 AIRCRAFT_URL  = os.environ.get("ALERT_AIRCRAFT_URL") or os.environ.get("AIRCRAFT_URL")
 AIRCRAFT_JSON = os.environ.get("ALERT_AIRCRAFT_JSON")
@@ -256,13 +262,40 @@ def _squawk_match(pattern, value):
     return False
 
 
-def matches_conditions(cond, p, tracker=None):
+_pat_streaks = {}       # (rule_id, hex, kind) -> [streak_start_epoch, last_seen_epoch]
+
+
+def _pattern_persisted(rule_id, hexid, kind, now, need_sec):
+    """Track how long a raw pattern detection has been continuously present for this
+    rule+aircraft+kind; True once the streak is at least need_sec old."""
+    key = (rule_id, hexid, kind)
+    st = _pat_streaks.get(key)
+    if st is None or now - st[1] > PAT_STREAK_GAP:
+        _pat_streaks[key] = st = [now, now]
+    else:
+        st[1] = now
+    return (now - st[0]) >= need_sec
+
+
+def prune_pattern_streaks(now):
+    for k, st in list(_pat_streaks.items()):
+        if now - st[1] > 3600:
+            del _pat_streaks[k]
+
+
+def matches_conditions(cond, p, tracker=None, rule_id=None):
     # what kind of alert this is ("air show", "surveillance", ...) is decided by which special
     # conditions fire below; a plain metadata/zone rule stays an "aircraft match". Stashed on
     # the plane and re-set on every successful match, so it's always the current rule's verdict.
     p["_alert_type"] = "aircraft match"
     if not cond:
         return True
+    # per-rule ignore list: never fire for aircraft whose callsign, registration, operator or
+    # hex matches -- the escape hatch for a known local flyer that keeps tripping a rule
+    excl = cond.get("exclude")
+    if excl and any(_txt_match(excl, v)
+                    for v in (p["callsign"], p["registration"], p["operator"], p["hex"]) if v):
+        return False
     trig = []
     if not _txt_match(cond.get("callsign"), p["callsign"]):
         return False
@@ -313,6 +346,10 @@ def matches_conditions(cond, p, tracker=None):
     if pat:
         if tracker is None:
             return False
+        # flight schools fly loops and back-and-forth drills all day -- unless the rule opts
+        # in, training operators can't fire pattern alerts (plain metadata rules still match)
+        if not pat.get("include_training") and survey_operators.is_training_operator(p["operator"]):
+            return False
         kinds = [k for k in (pat.get("kinds") or []) if k in ("orbit", "survey")]
         if not kinds:
             kinds = ["orbit", "survey"]
@@ -320,6 +357,12 @@ def matches_conditions(cond, p, tracker=None):
         hits = patterns.detect(pts, kinds,
                                min_loops=pat.get("orbit_min_loops"),
                                min_legs=pat.get("survey_min_legs"))
+        # the geometry must keep reading as a pattern for a while before it may page; a rule
+        # can lengthen the hold but never shorten it below the global (env-set) floor
+        need = max(float(pat.get("persist_sec") or 0), PAT_PERSIST_SEC)
+        now = time.time()
+        hits = {k: v for k, v in hits.items()
+                if _pattern_persisted(rule_id, p["hex"], k, now, need)}
         if not hits:
             return False
         p["_pattern"] = "; ".join(f"{k}: {v}" for k, v in sorted(hits.items()))
@@ -587,7 +630,7 @@ def main():
                 tracker.update(planes, now)        # feed altitude history for maneuver detection
                 for p in planes:
                     for rule in rules:
-                        if not matches_conditions(rule["conditions"], p, tracker):
+                        if not matches_conditions(rule["conditions"], p, tracker, rule["id"]):
                             continue
                         if not in_zone(rule["zone"], p):
                             continue
@@ -606,10 +649,11 @@ def main():
                                  rule["name"], p.get("_alert_type") or "aircraft match",
                                  p["hex"], p["callsign"] or "", p["icao_type"] or "",
                                  p["lat"], p["lon"])
-                # prune old cooldowns (>6h)
+                # prune old cooldowns (>6h) and dead pattern streaks
                 for k, v in list(cooldowns.items()):
                     if now - v > 21600:
                         del cooldowns[k]
+                prune_pattern_streaks(now)
 
         mqtt_mgr.flush_off()
         time.sleep(max(0.5, INTERVAL - (time.time() - loop_start)))

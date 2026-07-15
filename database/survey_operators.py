@@ -187,6 +187,26 @@ KEYWORD_CATEGORIES = [
      "imagery": "Sometimes published in agency reports or open-data portals."},
 ]
 
+# --- operators that are almost certainly NOT surveillance ------------------------------------
+# Flight schools / training operators fly loops, back-and-forth drills and practice-area
+# wandering all day, which is exactly the geometry the orbit/survey detectors look for. The
+# alert engine skips pattern (orbit/survey) alerts for operators whose name matches one of
+# these, unless the rule opts back in -- plain metadata/zone rules are unaffected.
+TRAINING_KEYWORDS = [
+    "flight school", "flying school", "flight training", "pilot training", "aviation training",
+    "air training", "flight academy", "flying academy", "aviation academy", "flight college",
+    "flight instruction", "flight center", "flight centre", "flying club", "aero club",
+    "aeroclub", "college", "university", "polytechnic", "cegep", "institute of technology",
+]
+
+
+def is_training_operator(operator):
+    """True when the operator name reads like a flight school / training organisation
+    (e.g. 'Seneca College Of Applied Arts And Technology', 'Brampton Flying Club')."""
+    op = (operator or "").lower()
+    return bool(op) and any(k in op for k in TRAINING_KEYWORDS)
+
+
 # aircraft types commonly used as camera/lidar survey platforms (heuristic hint only)
 SURVEY_PLATFORM_TYPES = {
     "C402", "C404", "C310", "C421", "C414", "PA31", "PA34", "P68", "DA42", "DA62",
