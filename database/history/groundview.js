@@ -1,5 +1,6 @@
 /* Shared 3D "ground view": stand at a point on the ground and watch the aircraft fly overhead,
- * rendered as real 3D models over a satellite-textured ground, lit by the Sun for the time of day.
+ * rendered as real 3D models over streamed satellite terrain — LOD imagery tiles draped on a
+ * real elevation mesh (hills, valleys, shorelines) — lit by the Sun for the time of day.
  * Orbit/zoom with mouse drag + scroll (pinch on touch). WebGL via Three.js.
  *
  * Public API (kept stable so the History + Live pages need almost no change):
@@ -56,7 +57,20 @@
     return { top:N_T, hor:N_H, light:0.06, night:true };
   }
 
-  const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export';
+  // --- streamed terrain sources + web-mercator tile math ---------------------------------------
+  // Imagery comes from Esri's cached World_Imagery tile CDN (small 256px tiles, fast — the same
+  // cache Leaflet layers use), NOT the old dynamic /export renderer that took 10-30 s per image.
+  // Elevation comes from the AWS Open Data "terrarium" terrain tiles (free, CORS-enabled):
+  // height m = R*256 + G + B/256 - 32768.
+  const TILE_IMG  = (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
+  const TILE_ELEV = (z, x, y) => `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
+  const ELEV_Z = 11;                                        // height-field zoom (~50-75 m/px)
+  const tileSpanM = (z, lat) => 40075016.686 * Math.cos(lat * D2R) / (1 << z);
+  const lon2tx = (lon, z) => (lon + 180) / 360 * (1 << z);
+  const lat2ty = (lat, z) => { const s = Math.max(-0.9999, Math.min(0.9999, Math.sin(lat * D2R)));
+    return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * (1 << z); };
+  const tx2lon = (x, z) => x / (1 << z) * 360 - 180;
+  const ty2lat = (y, z) => Math.atan(Math.sinh(Math.PI * (1 - 2 * y / (1 << z)))) * R2D;
 
   // camera presets — icon/label for the header button, plus the field of view each one uses
   const VIEW_META = {
@@ -192,16 +206,14 @@
         sv.push(388000*ss*Math.cos(th), Math.abs(388000*u)*0.92 + 1500, 388000*ss*Math.sin(th)); }
       const starGeo = new T.BufferGeometry(); starGeo.setAttribute('position', new T.Float32BufferAttribute(sv, 3));
       const stars = new T.Points(starGeo, new T.PointsMaterial({ color: 0xfdfdff, size: 2, sizeAttenuation: false, transparent: true, opacity: 0, depthWrite: false, fog: false, toneMapped: false })); scene.add(stars);
-      // ground — edges fade into the haze (radial alpha) so it reads as atmosphere, not a floating square
-      const fadeC = document.createElement('canvas'); fadeC.width = fadeC.height = 256;
-      const fg = fadeC.getContext('2d'), fgrd = fg.createRadialGradient(128, 128, 0, 128, 128, 128);
-      fgrd.addColorStop(0, '#fff'); fgrd.addColorStop(0.66, '#fff'); fgrd.addColorStop(1, '#000');
-      fg.fillStyle = fgrd; fg.fillRect(0, 0, 256, 256);
-      const groundFade = new T.CanvasTexture(fadeC); groundFade.userData.shared = true;
-      const groundMat = new T.MeshStandardMaterial({ color: 0x2a3340, roughness: 1, metalness: 0,
-        transparent: true, alphaMap: groundFade });
-      const ground = new T.Mesh(new T.PlaneGeometry(1, 1), groundMat);
-      ground.rotation.x = -Math.PI / 2; ground.renderOrder = -1; scene.add(ground);
+      // ground — real terrain streamed as imagery tiles draped over an elevation mesh (see
+      // _loadGround); beneath it a huge dark disc catches grazing sightlines so the world never
+      // shows a void edge — the fog paints it into the haze like everything else
+      const underlay = new T.Mesh(new T.CircleGeometry(390000, 48),
+        new T.MeshStandardMaterial({ color: 0x1b232d, roughness: 1, metalness: 0 }));
+      underlay.rotation.x = -Math.PI / 2; underlay.position.y = -45; underlay.renderOrder = -2;
+      scene.add(underlay);
+      const terrain = new T.Group(); scene.add(terrain);
       // drifting billboard clouds (populated to fit the area in _loadGround)
       const cloudMat = new T.SpriteMaterial({ map: this._cloudTex(T), transparent: true, opacity: 0.4, depthWrite: false });
       const clouds = new T.Group(); scene.add(clouds);
@@ -212,7 +224,7 @@
       this._shadowGeo = new T.PlaneGeometry(1, 1); this._shadowGeo.userData.shared = true;
       // image-based lighting: reflect the sky off the aircraft + ground for a modern PBR look (refreshed in setTime)
       let pmrem = null; try { pmrem = new T.PMREMGenerator(renderer); pmrem.compileEquirectangularShader(); } catch (e) { pmrem = null; }
-      this.three = { T, renderer, scene, camera, controls, sky, skyCanvas, skyTex, hemi, sun, sunBall, glow, stars, ground, groundMat, clouds, cloudMat, fleet, pmrem, envRT: null, raf: 0, meshes: {} };
+      this.three = { T, renderer, scene, camera, controls, sky, skyCanvas, skyTex, hemi, sun, sunBall, glow, stars, terrain, underlay, clouds, cloudMat, fleet, pmrem, envRT: null, raf: 0, meshes: {} };
       return true;
     }
     _radialTex(T, rgbStr) {
@@ -348,9 +360,12 @@
           m = { plane, shadow, kind, color: col, track: tr };
         }
         // trail: a flat altitude-coloured ribbon (smoke-trail look), not a 1-px GL line
+        // (heights are MSL minus the observer's ground elevation, like everything in the scene)
+        const e0 = this._elev0 || 0;
         const stepN = Math.max(1, Math.floor(tr.points.length / 400)), pts3 = [], cols3 = [];
         for (let i = 0; i < tr.points.length; i += stepN) { const p = tr.points[i]; if (p[1] == null) continue;
-          pts3.push(enu(this.observer, p[1], p[2], p[3]));
+          const e = enu(this.observer, p[1], p[2], p[3]); e.y -= e0;
+          pts3.push(e);
           cols3.push(new T.Color(this.altColor(p[3]))); }
         m.ribbon = this._ribbon(T, pts3, cols3, span * 0.16);
         if (m.ribbon) fleet.add(m.ribbon);
@@ -389,8 +404,8 @@
         side: T.DoubleSide, depthWrite: false, toneMapped: false }));
     }
     _centroid() {
-      let n = 0, cx = 0, cy = 0, cz = 0;
-      for (const tr of this.tracks) for (const p of tr.points) { if (p[1] == null) continue; const e = enu(this.observer, p[1], p[2], p[3]); cx += e.x; cy += e.y; cz += e.z; n++; }
+      let n = 0, cx = 0, cy = 0, cz = 0; const e0 = this._elev0 || 0;
+      for (const tr of this.tracks) for (const p of tr.points) { if (p[1] == null) continue; const e = enu(this.observer, p[1], p[2], p[3]); cx += e.x; cy += e.y - e0; cz += e.z; n++; }
       return n ? { x: cx/n, y: cy/n, z: cz/n, n } : { x: 0, y: 500, z: -2000, n: 0 };
     }
     fitView() {
@@ -412,8 +427,9 @@
       if (!this.three) return;
       const cam = this.three.camera, y = this.fpv.yaw * D2R, p = this.fpv.pitch * D2R;
       const dir = new this.three.T.Vector3(Math.sin(y) * Math.cos(p), Math.sin(p), -Math.cos(y) * Math.cos(p));
-      cam.position.set(0, 2, 0);
-      cam.lookAt(dir.x * 1000, 2 + dir.y * 1000, dir.z * 1000);
+      const eye = this._terrainY(0, 0) + 2;                  // stand on the actual ground
+      cam.position.set(0, eye, 0);
+      cam.lookAt(dir.x * 1000, eye + dir.y * 1000, dir.z * 1000);
       cam.fov = this.fpv.fov; cam.updateProjectionMatrix();
     }
     setView(v) {
@@ -465,6 +481,9 @@
         const k = 1 - Math.exp(-(dt || 0.016) * resp), kf = 1 - Math.exp(-(dt || 0.016) * 9);
         fc.pos.lerp(dPos, k); fc.tgt.lerp(dTgt, k); fc.fov += (fov - fc.fov) * kf;
       }
+      // never let the follow camera sink into a hillside
+      const camGY = this._terrainY(fc.pos.x, fc.pos.z) + s * 0.1;
+      if (fc.pos.y < camGY) fc.pos.y = camGY;
       cam.up.set(0, 1, 0); cam.position.copy(fc.pos); cam.lookAt(fc.tgt);
       if (Math.abs(cam.fov - fc.fov) > 0.02) { cam.fov = fc.fov; cam.updateProjectionMatrix(); }
     }
@@ -550,11 +569,11 @@
         const m = this.three.meshes[tr.id]; if (!m) continue;
         const r = this._state(tr, t);
         if (!r) { m._tgt = null; continue; }
-        const e = enu(this.observer, r.lat, r.lon, r.alt);
+        const e = enu(this.observer, r.lat, r.lon, r.alt), e0 = this._elev0 || 0;
         const tg = m._tgt || (m._tgt = {});
-        tg.x = e.x; tg.y = e.y; tg.z = e.z; tg.alt = r.alt;
+        tg.x = e.x; tg.y = e.y - e0; tg.z = e.z; tg.alt = r.alt;
         positions.push({ id: tr.id, color: tr.color, label: tr.label, lat: r.lat, lon: r.lon, alt: r.alt });
-        if (!readout) { const el = Math.atan2(e.up, Math.max(e.d,1))*R2D, dist = Math.hypot(e.d, e.up);
+        if (!readout) { const el = Math.atan2(e.up - e0, Math.max(e.d,1))*R2D, dist = Math.hypot(e.d, e.up - e0);
           const kt = isFinite(r.spd) ? ` · speed <b>${Math.round(r.spd * 1.94384)} kt</b>` : '';
           readout = `bearing <b>${compass(e.az)}</b> · elevation <b>${el.toFixed(0)}°</b>${kt} · range <b>${dist>=1000?(dist/1000).toFixed(1)+' km':Math.round(dist)+' m'}</b> · alt <b>${r.alt!=null?Math.round(r.alt).toLocaleString()+' ft':'—'}</b>`; }
       }
@@ -631,17 +650,19 @@
         st.bank += (bankT - st.bank) * kAtt;
         const pitchT = (vh > 1.5 * rate ? Math.max(-0.55, Math.min(0.55, Math.atan2(st.svy, vh))) : 0) * (heli ? 0.35 : 1);
         st.pitch += (pitchT - st.pitch) * kAtt;
-        // pose (with the ground-clearance clamp for the exaggerated model)
+        // pose (ground-clearance clamp for the exaggerated model, against the real terrain)
+        const gY = this._terrainY(st.px, st.pz);
         const clear = this._span * (0.16 + 0.5 * Math.abs(Math.sin(st.bank)));
-        const py = Math.max(st.py, clear);
+        const py = Math.max(st.py, gY + clear);
         m.plane.position.set(st.px, py, st.pz);
         m.plane.rotation.set(-st.pitch, st.yaw, st.bank, 'YXZ');   // yaw, then pitch, then roll about the nose
-        if (m.shadow) {                                      // sun-cast, faded by daylight
+        if (m.shadow) {                                      // sun-cast onto the terrain, faded by daylight
           const sd = this._sd; let sx = st.px, sz2 = st.pz;
-          if (sd && sd.y > 0.08) { const k2 = Math.min(st.py / sd.y, 12000); sx -= sd.x * k2; sz2 -= sd.z * k2; }
-          const szc = (this._span || 168) * (1 + st.py / 1500);
-          m.shadow.position.set(sx, 1.5, sz2); m.shadow.scale.set(szc, szc, 1);
-          m.shadow.material.opacity = Math.max(0.03, 0.38 - st.py * 0.00012) * Math.max(0.25, this._light == null ? 1 : this._light);
+          const agl = Math.max(0, py - gY);
+          if (sd && sd.y > 0.08) { const k2 = Math.min(agl / sd.y, 12000); sx -= sd.x * k2; sz2 -= sd.z * k2; }
+          const szc = (this._span || 168) * (1 + agl / 1500);
+          m.shadow.position.set(sx, this._terrainY(sx, sz2) + 2, sz2); m.shadow.scale.set(szc, szc, 1);
+          m.shadow.material.opacity = Math.max(0.03, 0.38 - agl * 0.00012) * Math.max(0.25, this._light == null ? 1 : this._light);
         }
       }
     }
@@ -652,28 +673,224 @@
       try { const rt = th.pmrem.fromEquirectangular(th.skyTex);
         if (th.envRT) th.envRT.dispose(); th.envRT = rt; th.scene.environment = rt.texture; } catch (e) {}
     }
+    // ---- streamed terrain --------------------------------------------------
+    // The ground is a quadtree of web-mercator tiles centred on the observer: sharp imagery
+    // close in, coarser rings toward the horizon — the way a mid-2000s flight sim streams
+    // scenery. Every tile is a small grid mesh displaced by real elevation (AWS terrarium
+    // tiles) with a skirt hiding LOD seams; the cached Esri World_Imagery tile CDN serves
+    // the textures nearest-first, and a cropped low-zoom parent stands in under each tile so
+    // the whole area is textured within a few hundred ms instead of the old single /export
+    // image that could take half a minute.
     _loadGround() {
       if (!this.three || !this.observer) return;
-      let maxKm = 3; for (const tr of this.tracks) for (const p of tr.points) { if (p[1]==null) continue; maxKm = Math.max(maxKm, haversineM(this.observer.lat,this.observer.lon,p[1],p[2])/1000); }
+      const o = this.observer, T = this.three.T;
+      let maxKm = 3; for (const tr of this.tracks) for (const p of tr.points) { if (p[1]==null) continue; maxKm = Math.max(maxKm, haversineM(o.lat,o.lon,p[1],p[2])/1000); }
       const halfKm = Math.min(40, Math.max(4, maxKm * 1.25)), sizeM = halfKm * 2000;
-      this.three.ground.geometry.dispose(); this.three.ground.geometry = new this.three.T.PlaneGeometry(sizeM, sizeM);
-      this.three.scene.fog.far = sizeM * 0.8;
-      this._makeClouds(sizeM / 2);
-      const dLat = halfKm/111, dLon = halfKm/(111*Math.cos(this.observer.lat*D2R));
-      const bbox = [this.observer.lon-dLon, this.observer.lat-dLat, this.observer.lon+dLon, this.observer.lat+dLat].join(',');
-      const mk = px => `${ESRI}?bbox=${bbox}&bboxSR=4326&imageSR=4326&size=${px},${px}&format=jpg&transparent=false&f=image`;
-      const loader = new this.three.T.TextureLoader(); loader.setCrossOrigin('anonymous');
-      const token = ++this._groundToken;                     // ignore stale loads when the observer is dragged around
-      const apply = tex => {
-        if (!this.three || token !== this._groundToken) { if (tex && tex.dispose) tex.dispose(); return; }
-        const T = this.three.T; if (T.sRGBEncoding != null) tex.encoding = T.sRGBEncoding;
-        try { tex.anisotropy = this.three.renderer.capabilities.getMaxAnisotropy(); } catch (e) {}
-        const old = this.three.groundMat.map; this.three.groundMat.map = tex; this.three.groundMat.color.set(0xffffff);
-        this.three.groundMat.roughness = 0.92; this.three.groundMat.needsUpdate = true;
-        if (old && old !== tex) old.dispose();
+      const visM = Math.max(26000, sizeM * 0.55);            // haze distance: FS-style ~26+ km visibility
+      this.three.scene.fog.near = visM * 0.18; this.three.scene.fog.far = visM;
+      this._makeClouds(Math.min(visM * 0.7, sizeM * 0.75));
+      // same spot + same coverage -> keep the terrain we already streamed (reopen is instant)
+      const sig = o.lat.toFixed(3) + '|' + o.lon.toFixed(3) + '|' + Math.round(halfKm);
+      if (this._terrainSig === sig && this.three.terrain.children.length) return;
+      this._terrainSig = sig;
+      const token = ++this._groundToken;                     // ignore stale loads when the observer moves
+      const terr = this.three.terrain;
+      while (terr.children.length) { const c = terr.children.pop(); this._disposeTree(c); }
+      this._elev0 = 0; this._minY = 0; this.three.underlay.position.y = -45;
+      // observer ground height first — the whole scene sits relative to it, so once it's known
+      // re-anchor the aircraft + trails (AGL finally means AGL, even on a hill)
+      const e0p = this._elevData(ELEV_Z, Math.floor(lon2tx(o.lon, ELEV_Z)), Math.floor(lat2ty(o.lat, ELEV_Z)))
+        .then(() => { if (token !== this._groundToken || !this.three) return;
+          const h = this._elevAtAny(o.lat, o.lon); this._elev0 = h == null ? 0 : Math.max(0, h);
+          this.projectAll(); this.setTime(this.t);
+          if (this.view === 'stand') this._applyFpv(); });   // re-stand on the real ground height
+      // quadtree: subdivide any tile the observer is within ~a tile-width of, down to zmax
+      const zmax = halfKm > 24 ? 13 : halfKm > 10 ? 14 : 15;
+      const extentM = visM * 1.35;
+      let zb = 6; while (zb < zmax && tileSpanM(zb, o.lat) > extentM * 0.8) zb++;
+      const kx = 6371000 * D2R * Math.cos(o.lat * D2R), kz = 6371000 * D2R;   // metres per degree
+      const x0 = Math.floor(lon2tx(o.lon - extentM / kx, zb)), x1 = Math.floor(lon2tx(o.lon + extentM / kx, zb));
+      const y0 = Math.floor(lat2ty(o.lat + extentM / kz, zb)), y1 = Math.floor(lat2ty(o.lat - extentM / kz, zb));
+      const leaves = [];
+      const rec = (z, x, y) => {
+        const latC = ty2lat(y + 0.5, z), lonC = tx2lon(x + 0.5, z), span = tileSpanM(z, latC);
+        const d = Math.max(0, Math.hypot((lonC - o.lon) * kx, (latC - o.lat) * kz) - span * 0.71);
+        if (z < zmax && d < span * 0.9) { const X = x * 2, Y = y * 2; rec(z+1, X, Y); rec(z+1, X+1, Y); rec(z+1, X, Y+1); rec(z+1, X+1, Y+1); }
+        else leaves.push({ z, x, y, d });
       };
-      // show a quick low-res tile first so the ground appears fast, then sharpen it in the background
-      loader.load(mk(1024), tex => { apply(tex); if (this.three && token === this._groundToken) loader.load(mk(2048), apply, undefined, () => {}); }, undefined, () => {});
+      for (let ty = y0; ty <= y1; ty++) for (let tx = x0; tx <= x1; tx++) rec(zb, tx, ty);
+      leaves.sort((a, b) => a.d - b.d);                      // nearest-first: centre sharpens first
+      const loader = new T.TextureLoader(); loader.setCrossOrigin('anonymous');
+      const setupTex = tex => { if (T.sRGBEncoding != null) tex.encoding = T.sRGBEncoding;
+        try { tex.anisotropy = this.three.renderer.capabilities.getMaxAnisotropy(); } catch (e) {} };
+      const byBase = {};                                     // zb ancestor "x/y" -> leaf meshes under it
+      for (const lf of leaves) {
+        const mesh = this._tileMesh(lf.z, lf.x, lf.y);
+        mesh.visible = false; terr.add(mesh);
+        const bk = (lf.x >> (lf.z - zb)) + '/' + (lf.y >> (lf.z - zb));
+        (byBase[bk] = byBase[bk] || []).push(mesh);
+        // elevation: displace once the covering height tiles + observer height are in
+        const ze = Math.max(7, Math.min(ELEV_Z, lf.z)), sh = lf.z - ze, ep = [e0p];
+        if (sh >= 0) ep.push(this._elevData(ze, lf.x >> sh, lf.y >> sh));
+        else { const m2 = 1 << -sh;
+          for (let j = 0; j < m2; j++) for (let i = 0; i < m2; i++) ep.push(this._elevData(ze, lf.x * m2 + i, lf.y * m2 + j)); }
+        Promise.all(ep).then(() => { if (token === this._groundToken && this.three) this._displace(mesh); });
+        // imagery: own tile (retried once); until it lands the cropped parent below stands in
+        const load = again => loader.load(TILE_IMG(lf.z, lf.x, lf.y), tex => {
+          if (token !== this._groundToken || !this.three) { tex.dispose(); return; }
+          setupTex(tex);
+          const old = mesh.material.map; mesh.material.map = tex;
+          mesh.material.color.set(0xffffff); mesh.material.needsUpdate = true;
+          mesh.visible = true; mesh.userData.ownTex = true;
+          if (old) old.dispose();
+        }, undefined, () => { if (!again && token === this._groundToken) setTimeout(() => load(true), 1500); });
+        load(false);
+      }
+      // the handful of low-zoom parents that cover everything: cropped over any leaf still
+      // waiting for its own texture, so the whole ground reads as imagery almost immediately
+      for (const bk in byBase) {
+        const bx = +bk.split('/')[0], by = +bk.split('/')[1];
+        loader.load(TILE_IMG(zb, bx, by), tex => {
+          if (token !== this._groundToken || !this.three) { tex.dispose(); return; }
+          setupTex(tex);
+          for (const mesh of byBase[bk]) {
+            if (mesh.userData.ownTex) continue;
+            const ud = mesh.userData, n = 1 << (ud.z - zb);
+            const t2 = tex.clone(); t2.needsUpdate = true;
+            t2.repeat.set(1 / n, 1 / n);
+            t2.offset.set((ud.x - bx * n) / n, 1 - (ud.y - by * n + 1) / n);
+            const old = mesh.material.map; mesh.material.map = t2;
+            mesh.material.color.set(0xffffff); mesh.material.needsUpdate = true;
+            mesh.visible = true;
+            if (old) old.dispose();
+          }
+          tex.dispose();                                     // clones own their GPU copies
+        }, undefined, () => {});
+      }
+    }
+    _tileMesh(z, x, y) {                                     // one terrain tile: grid mesh + seam skirt
+      const T = this.three.T, o = this.observer, G = 16, N = G + 1;
+      const kx = 6371000 * D2R * Math.cos(o.lat * D2R), kz = 6371000 * D2R;
+      const lats = new Float64Array(N), lons = new Float64Array(N);
+      for (let i = 0; i < N; i++) { lats[i] = ty2lat(y + i / G, z); lons[i] = tx2lon(x + i / G, z); }
+      const nv = N * N + 4 * N;
+      const pos = new Float32Array(nv * 3), uv = new Float32Array(nv * 2), nrm = new Float32Array(nv * 3);
+      let p = 0, q = 0;
+      for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+        pos[p] = (lons[j] - o.lon) * kx; pos[p + 2] = -(lats[i] - o.lat) * kz; p += 3;
+        uv[q] = j / G; uv[q + 1] = 1 - i / G; q += 2;
+      }
+      for (let k = 0; k < nv; k++) nrm[k * 3 + 1] = 1;
+      // skirt: duplicates of the border vertices, dropped below ground level in _displace so
+      // neighbouring tiles at different LOD never show a crack of sky
+      const edge = [];
+      for (let j = 0; j < N; j++) edge.push(j, (N - 1) * N + j);
+      for (let i = 0; i < N; i++) edge.push(i * N, i * N + N - 1);
+      const skirt = []; let si = N * N;
+      for (const gi of edge) {
+        pos[si * 3] = pos[gi * 3]; pos[si * 3 + 2] = pos[gi * 3 + 2];
+        uv[si * 2] = uv[gi * 2]; uv[si * 2 + 1] = uv[gi * 2 + 1];
+        skirt.push([gi, si]); si++;
+      }
+      const idx = [];
+      for (let i = 0; i < G; i++) for (let j = 0; j < G; j++) {
+        const a = i * N + j, b = a + 1, c = a + N, d = c + 1;
+        idx.push(a, c, b, b, c, d);
+      }
+      // skirt walls (material is DoubleSide, so winding doesn't matter);
+      // edge[] interleaves north/south then west/east — walk each border as its own run
+      for (let k = 0; k < N - 1; k++) {
+        const pairs = [[k * 2, (k + 1) * 2], [k * 2 + 1, (k + 1) * 2 + 1],
+                       [2 * N + k * 2, 2 * N + (k + 1) * 2], [2 * N + k * 2 + 1, 2 * N + (k + 1) * 2 + 1]];
+        for (const [e0, e1] of pairs) idx.push(edge[e0], N * N + e0, edge[e1], edge[e1], N * N + e0, N * N + e1);
+      }
+      const g = new T.BufferGeometry();
+      g.setAttribute('position', new T.BufferAttribute(pos, 3));
+      g.setAttribute('uv', new T.BufferAttribute(uv, 2));
+      g.setAttribute('normal', new T.BufferAttribute(nrm, 3));
+      g.setIndex(idx);
+      const mat = new T.MeshStandardMaterial({ color: 0x2c3540, roughness: 0.95, metalness: 0,
+        side: T.DoubleSide, envMapIntensity: 0.3 });
+      const mesh = new T.Mesh(g, mat);
+      mesh.userData = { z, x, y, N, lats, lons, skirt, span: tileSpanM(z, lats[N >> 1]) };
+      return mesh;
+    }
+    _displace(mesh) {                                        // lift the tile's grid to real elevation
+      const ud = mesh.userData, pos = mesh.geometry.attributes.position, nrm = mesh.geometry.attributes.normal;
+      const N = ud.N, e0 = this._elev0 || 0, H = new Float32Array(N * N);
+      let minH = 1e9;
+      for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+        const h = this._elevAtAny(ud.lats[i], ud.lons[j]);
+        const v = (h == null ? 0 : Math.max(0, h)) - e0;     // clamp ocean bathymetry to sea level
+        H[i * N + j] = v; if (v < minH) minH = v;
+        pos.setY(i * N + j, v);
+      }
+      // normals from the height field (central differences) so hills catch the sun; the skirt
+      // copies its edge vertex so the rim doesn't shade dark
+      for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+        const jl = Math.max(0, j - 1), jr = Math.min(N - 1, j + 1), iu = Math.max(0, i - 1), id = Math.min(N - 1, i + 1);
+        const dx = pos.getX(i * N + jr) - pos.getX(i * N + jl) || 1;
+        const dz = pos.getZ(id * N + j) - pos.getZ(iu * N + j) || 1;
+        const dhx = (H[i * N + jr] - H[i * N + jl]) / dx, dhz = (H[id * N + j] - H[iu * N + j]) / dz;
+        const inv = 1 / Math.hypot(dhx, 1, dhz);
+        nrm.setXYZ(i * N + j, -dhx * inv, inv, -dhz * inv);
+      }
+      const drop = ud.span * 0.08 + 60;                      // deep enough to cover LOD-boundary dips
+      for (const [gi, sk] of ud.skirt) {
+        pos.setY(sk, pos.getY(gi) - drop);
+        nrm.setXYZ(sk, nrm.getX(gi), nrm.getY(gi), nrm.getZ(gi));
+      }
+      pos.needsUpdate = true; nrm.needsUpdate = true;
+      mesh.geometry.computeBoundingSphere();
+      if (minH - 60 < this._minY) {                          // keep the horizon disc below the deepest valley
+        this._minY = minH - 60; this.three.underlay.position.y = Math.min(-45, this._minY);
+      }
+    }
+    _elevData(z, x, y) {                                     // decoded terrarium heights for one tile, cached
+      const key = z + '/' + x + '/' + y;
+      const c = this._elevCache || (this._elevCache = new Map());
+      let e = c.get(key);
+      if (e) return e.p;
+      e = { data: null };
+      e.p = new Promise(res => {
+        const img = new Image(); img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          try {
+            const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+            const g = cv.getContext('2d', { willReadFrequently: true });
+            g.drawImage(img, 0, 0);
+            const px = g.getImageData(0, 0, 256, 256).data, out = new Int16Array(65536);
+            for (let i = 0; i < 65536; i++) out[i] = px[i * 4] * 256 + px[i * 4 + 1] + px[i * 4 + 2] / 256 - 32768;
+            e.data = out;
+          } catch (err) {}                                   // CORS/decode trouble -> flat tile
+          res();
+        };
+        img.onerror = () => res();
+        img.src = TILE_ELEV(z, x, y);
+      });
+      if (c.size > 90) for (const k of c.keys()) { c.delete(k); if (c.size <= 60) break; }
+      c.set(key, e);
+      return e.p;
+    }
+    _elevAtAny(lat, lon) {                                   // metres MSL from whatever height tile is loaded
+      const c = this._elevCache; if (!c) return null;
+      for (let z = ELEV_Z; z >= 6; z--) {
+        const fx = lon2tx(lon, z), fy = lat2ty(lat, z), tx = Math.floor(fx), ty = Math.floor(fy);
+        const e = c.get(z + '/' + tx + '/' + ty);
+        if (!e || !e.data) continue;
+        let u = (fx - tx) * 256 - 0.5, v = (fy - ty) * 256 - 0.5;
+        u = Math.max(0, Math.min(254.999, u)); v = Math.max(0, Math.min(254.999, v));
+        const x0 = u | 0, y0 = v | 0, du = u - x0, dv = v - y0, d = e.data, i00 = y0 * 256 + x0;
+        return d[i00] * (1 - du) * (1 - dv) + d[i00 + 1] * du * (1 - dv)
+             + d[i00 + 256] * (1 - du) * dv + d[i00 + 257] * du * dv;
+      }
+      return null;
+    }
+    _terrainY(x, z) {                                        // scene-space ground height under (x,z)
+      const o = this.observer; if (!o) return 0;
+      const kz = 6371000 * D2R, kx = kz * Math.cos(o.lat * D2R);
+      const h = this._elevAtAny(o.lat - z / kz, o.lon + x / kx);
+      return h == null ? 0 : Math.max(0, h) - (this._elev0 || 0);
     }
     _resize() {
       if (!this.three || !this._open) return;
