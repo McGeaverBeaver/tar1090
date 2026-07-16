@@ -45,6 +45,7 @@ import airshow_types             # noqa: E402
 import maneuver                  # noqa: E402
 import patterns                  # noqa: E402
 import survey_operators          # noqa: E402
+import gltf1to2                  # noqa: E402
 try:
     import tar1090_heatmap_import as hm        # noqa: E402  (the Settings "Historical import" job)
 except Exception as _e:          # pragma: no cover -- import feature just disabled if missing
@@ -1897,10 +1898,23 @@ class Handler(BaseHTTPRequestHandler):
             if _model_name_ok(name):
                 for d in (MODELS_DIR, os.path.join(WEB_DIR, "models")):
                     fp = os.path.join(d, name)
-                    if os.path.isfile(fp):
-                        with open(fp, "rb") as fh:
-                            self._send(200, fh.read(), CONTENT[".glb"])
-                        return
+                    if not os.path.isfile(fp):
+                        continue
+                    with open(fp, "rb") as fh:
+                        data = fh.read()
+                    if gltf1to2.is_glb1(data):       # heal models stored before auto-conversion
+                        try:
+                            data = gltf1to2.convert(data)
+                            if d == MODELS_DIR:
+                                tmp = fp + ".part"
+                                with open(tmp, "wb") as fh:
+                                    fh.write(data)
+                                os.replace(tmp, fp)
+                                log.info("model %s upgraded glTF 1.0 -> 2.0 on serve", name)
+                        except (ValueError, KeyError, struct.error, OSError) as e:
+                            log.warning("glTF 1.0 conversion failed for %s: %s", name, e)
+                    self._send(200, data, CONTENT[".glb"])
+                    return
             self._send(404, {"error": "not found"})
             return
         self._serve_static(path)
@@ -1962,14 +1976,23 @@ class Handler(BaseHTTPRequestHandler):
         if data[:4] != b"glTF":
             self._send(400, {"error": "not a .glb file (glTF binary header missing)"})
             return
+        converted = False
+        if gltf1to2.is_glb1(data):                   # e.g. the FR24 set: glTF 1.0 -> convert to 2.0
+            try:
+                data = gltf1to2.convert(data)
+                converted = True
+            except (ValueError, KeyError, struct.error) as e:
+                self._send(400, {"error": "glTF 1.0 model could not be converted: %s" % e})
+                return
         final = _model_canonical(name)
         os.makedirs(MODELS_DIR, exist_ok=True)
         tmp = os.path.join(MODELS_DIR, "." + final + ".part")
         with open(tmp, "wb") as fh:
             fh.write(data)
         os.replace(tmp, os.path.join(MODELS_DIR, final))    # atomic: never a half-written model
-        log.info("model uploaded: %s (%d bytes)", final, len(data))
-        self._send(200, {"ok": True, "name": final, "size": len(data)})
+        log.info("model uploaded: %s (%d bytes%s)", final, len(data),
+                 ", converted from glTF 1.0" if converted else "")
+        self._send(200, {"ok": True, "name": final, "size": len(data), "converted": converted})
 
     def _serve_static(self, path):
         if path in ("/", ""):

@@ -363,9 +363,9 @@
         Aircraft with no matching file keep the silhouette. Models are auto-scaled and auto-centred
         (glTF convention, nose facing +Z), and nodes named <code>prop*</code>/<code>rotor*</code> spin.
         Flightradar24's published set
-        (<a href="https://github.com/Flightradar24/fr24-3d-models" target="_blank" rel="noopener">fr24-3d-models</a>)
-        is already named by type and drops straight in — check that repo's licence for your use first.
-        Reload the Live/History page after uploading to see them.</div>
+        (<a href="https://github.com/Flightradar24/fr24-3d-models" target="_blank" rel="noopener">fr24-3d-models</a>,
+        GPLv2) is already named by type and drops straight in — their files are old-format glTF 1.0 and are
+        <b>converted to glTF 2.0 automatically on upload</b>. Reload the Live/History page after uploading.</div>
       <div id="mdl_drop" style="border:1px dashed #3a4150;border-radius:8px;padding:20px;text-align:center;cursor:pointer;color:#9aa3b2">
         Drop <code>.glb</code> files here, or click to choose files
         <input type="file" id="mdl_file" accept=".glb" multiple style="display:none">
@@ -800,14 +800,14 @@ $('u_reset').onclick = async () => {
 const MDL_KINDS = { ga: 'all light single-engine aircraft (fallback)', jet: 'all fast military jets (fallback)',
                     heli: 'all helicopters (fallback)', airliner: 'airliners & everything else (fallback)' };
 function fmtSize(b){ return b >= 1048576 ? (b/1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b/1024)) + ' KB'; }
-async function loadModels(){
+async function loadModels(keepMsg){
   let j = null;
   try { j = await (await fetch('api/models')).json(); } catch(e){}
   const rows = $('mdl_rows'), tbl = $('mdl_tbl');
-  if (!j || !j.models){ $('mdl_msg').textContent = 'Could not load the model list.'; return; }
+  if (!j || !j.models){ if (!keepMsg) $('mdl_msg').textContent = 'Could not load the model list.'; return; }
   rows.innerHTML = '';
   tbl.style.display = j.models.length ? '' : 'none';
-  if (!j.models.length) $('mdl_msg').textContent = 'No models installed yet — aircraft use the built-in silhouettes.';
+  if (!j.models.length && !keepMsg) $('mdl_msg').textContent = 'No models installed yet — aircraft use the built-in silhouettes.';
   for (const m of j.models){
     const stem = m.name.replace(/\.glb$/i, '');
     const what = MDL_KINDS[stem.toLowerCase()] || ('aircraft with ICAO type ' + stem.toUpperCase());
@@ -828,18 +828,21 @@ async function loadModels(){
 async function uploadModels(files){
   const list = [...files].filter(f => /\.glb$/i.test(f.name));
   if (!list.length){ $('mdl_msg').textContent = 'Only .glb (glTF binary) files are accepted.'; return; }
-  let okCount = 0;
+  const ok = [], bad = [];
   for (const f of list){
     $('mdl_msg').textContent = 'Uploading ' + f.name + '…';
     try {
       const r = await fetch('api/models/upload?name=' + encodeURIComponent(f.name), { method: 'POST', body: f });
-      const j = await r.json();
-      if (j.ok){ okCount++; $('mdl_msg').textContent = 'Installed ' + j.name + ' ✓'; }
-      else $('mdl_msg').textContent = f.name + ': ' + (j.error || 'upload failed');
-    } catch(e){ $('mdl_msg').textContent = f.name + ': upload failed — ' + e; }
+      let j = null; try { j = await r.json(); } catch(e){}
+      if (j && j.ok) ok.push(j.name + (j.converted ? ' (converted from glTF 1.0)' : ''));
+      else bad.push(f.name + ' — ' + ((j && j.error) || ('HTTP ' + r.status)));
+    } catch(e){ bad.push(f.name + ' — ' + e); }
   }
-  if (okCount > 1) $('mdl_msg').textContent = 'Installed ' + okCount + ' models ✓';
-  loadModels();
+  await loadModels(true);   // keepMsg: the result summary below must not be clobbered
+  $('mdl_msg').innerHTML = [
+    ok.length ? ('Installed ' + ok.map(esc).join(', ') + ' ✓ — reload the Live/History page to see them') : '',
+    bad.length ? ('<span style="color:#ffb4a8">Failed: ' + bad.map(esc).join(' · ') + '</span>') : '',
+  ].filter(Boolean).join('<br>');
 }
 {
   const drop = $('mdl_drop'), inp = $('mdl_file');

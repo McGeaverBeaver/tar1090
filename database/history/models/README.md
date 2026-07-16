@@ -19,6 +19,8 @@ Model conventions (the glTF standard): the front of the aircraft faces **+Z**, u
 Models are auto-scaled to the display size and auto-centred, so raw exports work as-is.
 If a model has nodes named `prop*`, `rotor*` or `spinner*`, they spin.
 
-A good source is Flightradar24's published model set:
-https://github.com/Flightradar24/fr24-3d-models — check that repo's LICENSE for what
-use it permits before copying models in; they are not bundled here for that reason.
+A good source is Flightradar24's published model set (GPLv2):
+https://github.com/Flightradar24/fr24-3d-models — already named by ICAO type. Those
+files are old-format **glTF 1.0** binaries; the Settings uploader converts them to
+glTF 2.0 automatically (`gltf1to2.py`), and any 1.0 file dropped into this folder by
+hand is converted the first time it is served.
