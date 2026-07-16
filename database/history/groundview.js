@@ -157,7 +157,10 @@
       if (!global.THREE || !global.THREE.WebGLRenderer || !global.THREE.OrbitControls) return false;
       const T = global.THREE, canvas = $('gv-canvas');
       let renderer;
-      try { renderer = new T.WebGLRenderer({ canvas, antialias: true }); } catch (e) { return false; }
+      // logarithmic depth: the scene spans centimetres (livery details) to 400 km (sky dome);
+      // a linear depth buffer z-fights on real models' coplanar decals at chase distance
+      try { renderer = new T.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true }); }
+      catch (e) { return false; }
       renderer.setPixelRatio(Math.min(2, global.devicePixelRatio || 1));
       // modern colour pipeline: sRGB output + filmic tone mapping so lighting reads rich, not flat
       if (T.sRGBEncoding != null) renderer.outputEncoding = T.sRGBEncoding;
@@ -349,27 +352,112 @@
     // fallback (models/ga.glb, jet.glb, heli.glb, airliner.glb). Anything missing simply keeps
     // the silhouette — probing results (including 404s) are cached per session. Models follow
     // the glTF convention (front faces +Z), which matches the sim's nose direction.
-    _modelTemplate(url) {                                    // cached template scene (or null), per URL
+    _modelTemplate(url) {                                    // cached PREPARED template (or null), per URL
       const c = this._models || (this._models = new Map());
       if (c.has(url)) return c.get(url);
       const T = this.three.T;
       const p = new Promise(res => {
         try {
           new T.GLTFLoader().load(url, g => {
-            const t = (g && (g.scene || (g.scenes && g.scenes[0]))) || null;
-            if (t) t.traverse(o => {                         // clones share these -> never dispose them
-              if (o.geometry) o.geometry.userData.shared = true;
-              const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
-              for (const mm of mats) { mm.userData.shared = true;
-                if (mm.map) mm.map.userData.shared = true;
-                if (mm.envMapIntensity != null) mm.envMapIntensity = 1.0; }
-            });
-            res(t);
+            const scene = (g && (g.scene || (g.scenes && g.scenes[0]))) || null;
+            let tpl = null;
+            try { tpl = scene && this._prepModel(scene); } catch (e) { tpl = null; }
+            res(tpl);
           }, undefined, () => res(null));
         } catch (e) { res(null); }
       });
       c.set(url, p);
       return p;
+    }
+    // One-time preparation of a loaded model so that instances are cheap AND safe:
+    //  * outlier-trimmed bounds — centring/scaling anchors on the biggest mesh cluster, so a
+    //    stray helper mesh far from the airframe (common in old packs) can't displace the
+    //    aircraft off its trail or shrink it to a dot
+    //  * merge by material — FR24-style models arrive as ~150 separate meshes; merged, a whole
+    //    plane costs about as many draw calls as the silhouette did, so a fleet stays smooth
+    //  * prop/rotor/spinner nodes stay separate subtrees (re-found by name on each clone) so
+    //    they can still spin
+    _prepModel(root) {
+      const T = this.three.T;
+      root.updateMatrixWorld(true);
+      const spinRe = /prop|rotor|spinner/i;
+      const underSpin = o => { let p = o; while (p) { if (spinRe.test(p.name || '')) return p; p = p.parent; } return null; };
+      const meshes = [];
+      root.traverse(o => { if (o.isMesh && o.geometry && o.geometry.attributes.position) meshes.push(o); });
+      if (!meshes.length) return null;
+      const boxes = meshes.map(m => new T.Box3().setFromObject(m));
+      const diag = b => { const d = b.getSize(new T.Vector3()).length(); return isFinite(d) ? d : -1; };
+      let anchor = -1;
+      boxes.forEach((b, i) => { if (diag(b) > (anchor < 0 ? -1 : diag(boxes[anchor]))) anchor = i; });
+      if (anchor < 0) return null;                           // nothing with usable bounds
+      const aCtr = boxes[anchor].getCenter(new T.Vector3()), aDiag = Math.max(diag(boxes[anchor]), 1e-6);
+      const keep = [], box = new T.Box3();
+      meshes.forEach((m, i) => {
+        if (diag(boxes[i]) < 0 || boxes[i].getCenter(new T.Vector3()).distanceTo(aCtr) > aDiag * 2) return;
+        keep.push(m); box.union(boxes[i]);
+      });
+      if (!keep.length) return null;
+      const size = box.getSize(new T.Vector3()), ctr = box.getCenter(new T.Vector3());
+      const extent = Math.max(size.x, size.z);
+      if (!isFinite(extent) || extent <= 0) return null;
+      let maxAniso = 1; try { maxAniso = this.three.renderer.capabilities.getMaxAnisotropy(); } catch (e) {}
+      const shareTex = mm => { mm.userData.shared = true;
+        if (mm.map) { mm.map.userData.shared = true; mm.map.anisotropy = maxAniso; }
+        if (mm.envMapIntensity != null) mm.envMapIntensity = 1.0; };
+      // merge the static meshes by material (transforms baked in, world space)
+      const grp = new T.Group(), byMat = new Map(), v = new T.Vector3();
+      for (const m of keep) {
+        if (underSpin(m)) continue;
+        if (Array.isArray(m.material)) {                     // rare multi-material mesh: keep as-is
+          m.material.forEach(shareTex); m.geometry.userData.shared = true;
+          const cl = m.clone();
+          m.matrixWorld.decompose(cl.position, cl.quaternion, cl.scale);   // bake world, not world*local
+          grp.add(cl); continue;
+        }
+        let e = byMat.get(m.material.uuid);
+        if (!e) { e = { mat: m.material, pos: [], nrm: [], uv: [], idx: [], base: 0, hasUv: false }; byMat.set(m.material.uuid, e); }
+        const ga = m.geometry.attributes, posA = ga.position, nrmA = ga.normal, uvA = ga.uv;
+        const nm = new T.Matrix3().getNormalMatrix(m.matrixWorld);
+        for (let i = 0; i < posA.count; i++) {
+          v.fromBufferAttribute(posA, i).applyMatrix4(m.matrixWorld); e.pos.push(v.x, v.y, v.z);
+          if (nrmA) { v.fromBufferAttribute(nrmA, i).applyMatrix3(nm).normalize(); e.nrm.push(v.x, v.y, v.z); }
+          else e.nrm.push(0, 1, 0);
+          if (uvA) { e.uv.push(uvA.getX(i), uvA.getY(i)); e.hasUv = true; } else e.uv.push(0, 0);
+        }
+        const idx = m.geometry.index;
+        if (idx) for (let i = 0; i < idx.count; i++) e.idx.push(e.base + idx.getX(i));
+        else for (let i = 0; i < posA.count; i++) e.idx.push(e.base + i);
+        e.base += posA.count;
+      }
+      for (const e of byMat.values()) {
+        const geo = new T.BufferGeometry();
+        geo.setAttribute('position', new T.Float32BufferAttribute(e.pos, 3));
+        geo.setAttribute('normal', new T.Float32BufferAttribute(e.nrm, 3));
+        if (e.hasUv) geo.setAttribute('uv', new T.Float32BufferAttribute(e.uv, 2));
+        geo.setIndex(new T.BufferAttribute(e.base > 65535 ? new Uint32Array(e.idx) : new Uint16Array(e.idx), 1));
+        geo.userData.shared = true;
+        shareTex(e.mat);
+        grp.add(new T.Mesh(geo, e.mat));
+      }
+      // spin subtrees: parent world transform baked into a wrapper, node kept intact
+      const spinNames = [];
+      const spinRoots = [];
+      root.traverse(o => { if (spinRe.test(o.name || '') && !(o.parent && underSpin(o.parent))) spinRoots.push(o); });
+      for (const sr of spinRoots) {
+        const wrap = new T.Group(); wrap.matrixAutoUpdate = false;
+        if (sr.parent) wrap.matrix.copy(sr.parent.matrixWorld);
+        const cl = sr.clone(true);
+        cl.traverse(o => {
+          if (o.geometry) o.geometry.userData.shared = true;
+          const ms = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+          ms.forEach(shareTex);
+        });
+        wrap.add(cl); grp.add(wrap);
+        spinNames.push(sr.name);
+      }
+      grp.position.set(-ctr.x, -ctr.y, -ctr.z);              // pivot about the airframe's centre
+      const tpl = new T.Group(); tpl.add(grp);
+      return { obj: tpl, extent, spinNames };
     }
     _swapInModel(g, kind, type, s) {                         // replace the silhouette when a model exists
       if (!this.three || !this.three.T.GLTFLoader) return;
@@ -381,16 +469,10 @@
         : this._modelTemplate('models/' + names[i]).then(t => t || tryOne(i + 1));
       tryOne(0).then(tpl => {
         if (!tpl || !this.three || !g.parent) return;        // no model / plane already gone
-        const T = this.three.T, inst = tpl.clone(true);
-        const box = new T.Box3().setFromObject(inst);
-        const size = new T.Vector3(), ctr = new T.Vector3();
-        box.getSize(size); box.getCenter(ctr);
-        const holder = new T.Group();
-        inst.position.set(-ctr.x, -ctr.y, -ctr.z);           // pivot about the model's own centre
-        holder.add(inst);
-        holder.scale.setScalar(s / (Math.max(size.x, size.z) || 1));   // wingspan/length -> our display size
-        const spin = [];                                     // spin named props/rotors if the model has them
-        inst.traverse(o => { if (/prop|rotor|spinner/i.test(o.name || ''))
+        const holder = tpl.obj.clone(true);                  // shares the merged geometry + materials
+        holder.scale.setScalar(s / tpl.extent);              // wingspan/length -> our display size
+        const spin = [];
+        if (tpl.spinNames.length) holder.traverse(o => { if (tpl.spinNames.indexOf(o.name) >= 0)
           spin.push({ obj: o, axis: kind === 'heli' ? 'y' : 'z', rate: kind === 'heli' ? 26 : 45 }); });
         const body = g.userData.body;
         if (body) { g.remove(body); this._disposeTree(body); }
