@@ -13,6 +13,11 @@ on:
       - database/tar1090-history-api.py
       - database/tar1090-alerter.py
       - database/tar1090_mqtt.py
+      - database/airshow_types.py
+      - database/maneuver.py
+      - database/patterns.py
+      - database/survey_operators.py
+      - database/gltf1to2.py
       - database/tar1090_heatmap_import.py
       - database/backfill_heatmap.py
       - database/backfill_globe_history.py
