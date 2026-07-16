@@ -1596,7 +1596,7 @@ POST_ROUTES = {"/api/alerts/rules": alerts_rule_save, "/api/alerts/rules/delete"
 CONTENT = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
            ".css": "text/css", ".json": "application/json", ".ico": "image/x-icon",
            ".svg": "image/svg+xml", ".webmanifest": "application/manifest+json",
-           ".png": "image/png"}
+           ".png": "image/png", ".glb": "model/gltf-binary"}
 
 
 class Handler(BaseHTTPRequestHandler):

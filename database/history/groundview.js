@@ -328,6 +328,11 @@
         for (const sx of [1, -1]) { const n = new T.Mesh(new T.CylinderGeometry(s*0.036, s*0.03, s*0.17, 14), dark); n.rotation.x = Math.PI/2; n.position.set(sx*s*0.2, -s*0.05, s*0.02); g.add(n); }
         const canopy = new T.Mesh(new T.SphereGeometry(s*0.03, 12, 10), glass); canopy.scale.set(1, 0.62, 2.1); canopy.position.set(0, s*0.028, s*0.22); g.add(canopy);
       }
+      // group the airframe parts into a "body" so a real 3D model (models/*.glb — e.g. the
+      // Flightradar24 model set) can replace the silhouette when one is available for this type
+      const body = new T.Group();
+      while (g.children.length) body.add(g.children[0]);
+      g.add(body); g.userData.body = body;
       // red anti-collision strobe on top — double-flash pulsed in the render loop, like the real thing
       const strobeMat = new T.MeshBasicMaterial({ color: 0xff4444, transparent: true, opacity: 0.25, toneMapped: false });
       const strobe = new T.Mesh(new T.SphereGeometry(s*0.014, 8, 6), strobeMat);
@@ -337,6 +342,61 @@
       g.userData.strobe = strobeMat;
       g.userData.spin = spin;
       return g;
+    }
+    // ---- real 3D models (optional) ------------------------------------------
+    // Drop glTF binaries into the report site's models/ folder and they replace the built-in
+    // silhouettes: models/<ICAO-TYPE>.glb first (C172.glb, A320.glb, ...), then a category
+    // fallback (models/ga.glb, jet.glb, heli.glb, airliner.glb). Anything missing simply keeps
+    // the silhouette — probing results (including 404s) are cached per session. Models follow
+    // the glTF convention (front faces +Z), which matches the sim's nose direction.
+    _modelTemplate(url) {                                    // cached template scene (or null), per URL
+      const c = this._models || (this._models = new Map());
+      if (c.has(url)) return c.get(url);
+      const T = this.three.T;
+      const p = new Promise(res => {
+        try {
+          new T.GLTFLoader().load(url, g => {
+            const t = (g && (g.scene || (g.scenes && g.scenes[0]))) || null;
+            if (t) t.traverse(o => {                         // clones share these -> never dispose them
+              if (o.geometry) o.geometry.userData.shared = true;
+              const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+              for (const mm of mats) { mm.userData.shared = true;
+                if (mm.map) mm.map.userData.shared = true;
+                if (mm.envMapIntensity != null) mm.envMapIntensity = 1.0; }
+            });
+            res(t);
+          }, undefined, () => res(null));
+        } catch (e) { res(null); }
+      });
+      c.set(url, p);
+      return p;
+    }
+    _swapInModel(g, kind, type, s) {                         // replace the silhouette when a model exists
+      if (!this.three || !this.three.T.GLTFLoader) return;
+      const names = [];
+      const ty = (type || '').trim();
+      if (ty) names.push(ty.toUpperCase() + '.glb', ty.toLowerCase() + '.glb');
+      names.push(kind + '.glb');
+      const tryOne = i => i >= names.length ? Promise.resolve(null)
+        : this._modelTemplate('models/' + names[i]).then(t => t || tryOne(i + 1));
+      tryOne(0).then(tpl => {
+        if (!tpl || !this.three || !g.parent) return;        // no model / plane already gone
+        const T = this.three.T, inst = tpl.clone(true);
+        const box = new T.Box3().setFromObject(inst);
+        const size = new T.Vector3(), ctr = new T.Vector3();
+        box.getSize(size); box.getCenter(ctr);
+        const holder = new T.Group();
+        inst.position.set(-ctr.x, -ctr.y, -ctr.z);           // pivot about the model's own centre
+        holder.add(inst);
+        holder.scale.setScalar(s / (Math.max(size.x, size.z) || 1));   // wingspan/length -> our display size
+        const spin = [];                                     // spin named props/rotors if the model has them
+        inst.traverse(o => { if (/prop|rotor|spinner/i.test(o.name || ''))
+          spin.push({ obj: o, axis: kind === 'heli' ? 'y' : 'z', rate: kind === 'heli' ? 26 : 45 }); });
+        const body = g.userData.body;
+        if (body) { g.remove(body); this._disposeTree(body); }
+        g.userData.body = holder; g.userData.spin = spin; g.userData.hasModel = true;
+        g.add(holder);
+      });
     }
     projectAll() {
       if (!this.three || !this.observer) return;
@@ -355,6 +415,7 @@
         } else {
           if (m) { this._removeMesh(m); delete old[tr.id]; }
           const plane = this._planeMesh(col, span, kind); fleet.add(plane);
+          this._swapInModel(plane, kind, tr.type, span);     // upgrade to a real model if one is installed
           const shadow = new T.Mesh(this._shadowGeo, new T.MeshBasicMaterial({ map: this._shadowTex, color: 0x000000, transparent: true, opacity: 0.34, depthWrite: false, fog: false, toneMapped: false }));
           shadow.rotation.x = -Math.PI / 2; shadow.position.y = 1.5; fleet.add(shadow);
           m = { plane, shadow, kind, color: col, track: tr };
@@ -379,10 +440,15 @@
         if (!o) continue; this.three.fleet.remove(o); this._disposeTree(o);
       }
     }
-    _disposeTree(root) {                                     // free GPU resources (skip shared geo/textures)
+    _disposeTree(root) {                                     // free GPU resources (skip shared geo/mats/textures)
       root.traverse(o => {
         if (o.geometry && !(o.geometry.userData && o.geometry.userData.shared)) o.geometry.dispose();
-        if (o.material) { const mm = o.material; if (mm.map && !(mm.map.userData && mm.map.userData.shared)) mm.map.dispose(); mm.dispose(); }
+        const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+        for (const mm of mats) {
+          if (mm.userData && mm.userData.shared) continue;   // glTF model template resources live on
+          if (mm.map && !(mm.map.userData && mm.map.userData.shared)) mm.map.dispose();
+          mm.dispose();
+        }
       });
     }
     _ribbon(T, pts, cols, width) {                           // horizontal triangle-strip ribbon through the fixes
@@ -534,9 +600,20 @@
       const spd = haversineM(a.lat, a.lon, b.lat, b.lon) / (2 * dt/1000);
       return { lat: mid.lat, lon: mid.lon, alt: mid.alt, spd };
     }
+    // hard timeline jump (rewind, scrub click, long live gap): snap every aircraft and the
+    // camera to the new moment instead of letting the flight sim FLY them there — without
+    // this, pressing play at the end of a track made the plane swoop backwards to the start
+    // and visibly "work itself out" before the motion settled
+    _cut() {
+      if (!this.three) return;
+      for (const id in this.three.meshes) this.three.meshes[id]._sim = null;
+      this._follow = null; this._snapCam = true;
+    }
     setTime(t, fast) {
+      const prevT = this.t;
       this.t = t; const sc = $('gv-scrub'); if (sc && !this.live) sc.value = t;
       if (!this.three || !this.observer) return;
+      if (!fast && isFinite(prevT) && Math.abs(t - prevT) > 10000) this._cut();
       const T = this.three.T;
       const now = (global.performance && performance.now) ? performance.now() : Date.now();
       // during smooth playback (fast) throttle the slow work — sky repaint, env, readout, map markers — to ~8 Hz;
@@ -622,8 +699,11 @@
         }
         const ex = tg.x - st.px, ey = tg.y - st.py, ez = tg.z - st.pz;
         if (ex*ex + ey*ey + ez*ez > 25e6) {                  // >5 km apart (scrub jump) -> teleport
-          st.px = tg.x; st.py = tg.y; st.pz = tg.z; st.vx = st.tvx; st.vy = st.tvy; st.vz = st.tvz;
-          st.svx = st.vx; st.svy = st.vy; st.svz = st.vz; st.yaw = null; st.bank = 0;
+          // the jump itself just polluted the target-velocity estimate, so restart it at zero
+          // rather than launching the plane off with a garbage velocity
+          st.px = tg.x; st.py = tg.y; st.pz = tg.z;
+          st.vx = st.vy = st.vz = st.tvx = st.tvy = st.tvz = 0;
+          st.svx = st.svy = st.svz = 0; st.yaw = null; st.bank = 0; st.pitch = 0; st.age = 0;
         } else {
           const ax = ex*K + (st.tvx - st.vx)*C, ay = ey*K + (st.tvy - st.vy)*C, az = ez*K + (st.tvz - st.vz)*C;
           st.vx += ax*dt; st.vy += ay*dt; st.vz += az*dt;
@@ -931,7 +1011,7 @@
     _stop() { if (this._raf) { cancelAnimationFrame(this._raf); this._raf = 0; } }
     play() {
       if (this.live) return; this.playing = true; const pl = $('gv-play'); if (pl) pl.textContent = '❚❚';
-      if (this.t >= this.tmax) this.t = this.tmin;                     // restart from the beginning if parked at the end
+      if (this.t >= this.tmax) this.setTime(this.tmin);                // restart from the beginning (deliberate jump -> clean cut)
     }
     pause() { this.playing = false; const pl = $('gv-play'); if (pl) pl.textContent = '▶'; }
     cycleSpeed() {
