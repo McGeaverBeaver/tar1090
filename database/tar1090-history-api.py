@@ -1902,17 +1902,27 @@ class Handler(BaseHTTPRequestHandler):
                         continue
                     with open(fp, "rb") as fh:
                         data = fh.read()
-                    if gltf1to2.is_glb1(data):       # heal models stored before auto-conversion
-                        try:
-                            data = gltf1to2.convert(data)
-                            if d == MODELS_DIR:
+                    # heal stored models: glTF 1.0 files from before auto-conversion, and files
+                    # converted before the -Z nose fix (planes flew backwards)
+                    upgraded = why = None
+                    try:
+                        if gltf1to2.is_glb1(data):
+                            upgraded, why = gltf1to2.convert(data), "glTF 1.0 -> 2.0"
+                        elif gltf1to2.needs_orientation_fix(data):
+                            upgraded, why = gltf1to2.fix_orientation(data), "nose-direction fix"
+                    except (ValueError, KeyError, struct.error) as e:
+                        log.warning("model upgrade failed for %s: %s", name, e)
+                    if upgraded:
+                        data = upgraded
+                        if d == MODELS_DIR:
+                            try:
                                 tmp = fp + ".part"
                                 with open(tmp, "wb") as fh:
                                     fh.write(data)
                                 os.replace(tmp, fp)
-                                log.info("model %s upgraded glTF 1.0 -> 2.0 on serve", name)
-                        except (ValueError, KeyError, struct.error, OSError) as e:
-                            log.warning("glTF 1.0 conversion failed for %s: %s", name, e)
+                                log.info("model %s upgraded on serve (%s)", name, why)
+                            except OSError as e:
+                                log.warning("could not rewrite %s: %s", name, e)
                     self._send(200, data, CONTENT[".glb"])
                     return
             self._send(404, {"error": "not found"})

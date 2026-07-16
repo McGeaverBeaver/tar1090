@@ -24,6 +24,11 @@ import struct
 _COMP_SIZE = {5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4}
 _TYPE_N = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT2": 4, "MAT3": 9, "MAT4": 16}
 
+# generator strings: files converted before the -Z nose fix carry _GEN1 and are healed on
+# serve (see needs_orientation_fix); everything converted now carries _GEN.
+_GEN1 = "tar1090 gltf1to2"
+_GEN = "tar1090 gltf1to2 2"
+
 
 def is_glb1(data):
     return len(data) >= 12 and data[:4] == b"glTF" and struct.unpack("<I", data[4:8])[0] == 1
@@ -45,13 +50,67 @@ def _parse_glb1(data):
     return gltf, body
 
 
+def _parse_glb2(data):
+    """JSON dict + BIN bytes of a glTF 2.0 binary."""
+    if len(data) < 20 or data[:4] != b"glTF" or struct.unpack("<I", data[4:8])[0] != 2:
+        raise ValueError("not a glTF 2.0 binary")
+    pos, j, body = 12, None, b""
+    while pos + 8 <= len(data):
+        clen, ctype = struct.unpack("<II", data[pos:pos + 8])
+        chunk = data[pos + 8:pos + 8 + clen]
+        if ctype == 0x4E4F534A:
+            j = json.loads(chunk.decode("utf-8"))
+        elif ctype == 0x004E4942:
+            body = chunk
+        pos += 8 + clen
+    if j is None:
+        raise ValueError("no JSON chunk in .glb")
+    return j, body
+
+
+def _pack_glb2(j, body):
+    js = json.dumps(j, separators=(",", ":")).encode("utf-8")
+    js += b" " * ((4 - len(js) % 4) % 4)
+    bin_ = body + b"\0" * ((4 - len(body) % 4) % 4)
+    total = 12 + 8 + len(js) + 8 + len(bin_)
+    return b"".join([struct.pack("<4sII", b"glTF", 2, total),
+                     struct.pack("<II", len(js), 0x4E4F534A), js,
+                     struct.pack("<II", len(bin_), 0x004E4942), bin_])
+
+
+def _flip_to_z_forward(j):
+    """FR24-era COLLADA exports face -Z; glTF declares +Z as an asset's front. Wrap the scene
+    in a 180-degree Y rotation so viewers can treat the converted file as spec-compliant."""
+    sc = j["scenes"][j.get("scene", 0)]
+    j["nodes"].append({"name": "z_forward_fix", "rotation": [0.0, 1.0, 0.0, 0.0],
+                       "children": sc["nodes"]})
+    sc["nodes"] = [len(j["nodes"]) - 1]
+
+
+def needs_orientation_fix(data):
+    """True for v2 .glb files produced by the first converter version (no -Z nose fix)."""
+    try:
+        j, _ = _parse_glb2(data)
+    except (ValueError, KeyError):
+        return False
+    return (j.get("asset") or {}).get("generator") == _GEN1
+
+
+def fix_orientation(data):
+    """Re-wrap an old converted file with the 180-degree nose fix (idempotent via generator)."""
+    j, body = _parse_glb2(data)
+    _flip_to_z_forward(j)
+    j.setdefault("asset", {})["generator"] = _GEN
+    return _pack_glb2(j, body)
+
+
 def convert(data):
     """glTF 1.0 .glb bytes -> glTF 2.0 .glb bytes (raises ValueError if not convertible)."""
     g1, body = _parse_glb1(data)
 
     views1 = g1.get("bufferViews") or {}
     acc1 = g1.get("accessors") or {}
-    out = {"asset": {"version": "2.0", "generator": "tar1090 gltf1to2"},
+    out = {"asset": {"version": "2.0", "generator": _GEN},
            "buffers": [{"byteLength": len(body)}],
            "bufferViews": [], "accessors": []}
 
@@ -216,12 +275,6 @@ def convert(data):
         roots = [n for n in nodes1 if n not in child_set]
     out["scenes"] = [{"nodes": [node_idx[r] for r in roots if r in node_idx]}]
     out["scene"] = 0
+    _flip_to_z_forward(out)
 
-    # assemble GLB v2: 12-byte header + JSON chunk (space-padded) + BIN chunk (zero-padded)
-    js = json.dumps(out, separators=(",", ":")).encode("utf-8")
-    js += b" " * ((4 - len(js) % 4) % 4)
-    bin_ = body + b"\0" * ((4 - len(body) % 4) % 4)
-    total = 12 + 8 + len(js) + 8 + len(bin_)
-    return b"".join([struct.pack("<4sII", b"glTF", 2, total),
-                     struct.pack("<II", len(js), 0x4E4F534A), js,
-                     struct.pack("<II", len(bin_), 0x004E4942), bin_])
+    return _pack_glb2(out, body)

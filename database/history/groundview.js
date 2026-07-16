@@ -649,6 +649,20 @@
         const e = enu(this.observer, r.lat, r.lon, r.alt), e0 = this._elev0 || 0;
         const tg = m._tgt || (m._tgt = {});
         tg.x = e.x; tg.y = e.y - e0; tg.z = e.z; tg.alt = r.alt;
+        if (!m._sim) {
+          // fresh aircraft or a timeline cut: seed the sim with the track's direction and
+          // speed AT THIS MOMENT (display-scaled), so the plane starts flying its path
+          // immediately instead of standing still facing north while the velocity estimator
+          // spins up — the "figures itself out" wobble at the start of playback
+          const fq = this._smooth(tr, t + 600), bq = fq ? null : this._smooth(tr, t - 600);
+          const q = fq || bq;
+          if (q) {
+            const e2 = enu(this.observer, q.lat, q.lon, q.alt);
+            const rate = this.live ? 1 : Math.max(0.2, this._baseRate * this.speed);
+            const k = (fq ? 1 : -1) * rate / 0.6;
+            m._seed = { vx: (e2.x - e.x) * k, vy: (e2.y - e.y) * k, vz: (e2.z - e.z) * k };
+          } else m._seed = null;
+        }
         positions.push({ id: tr.id, color: tr.color, label: tr.label, lat: r.lat, lon: r.lon, alt: r.alt });
         if (!readout) { const el = Math.atan2(e.up - e0, Math.max(e.d,1))*R2D, dist = Math.hypot(e.d, e.up - e0);
           const kt = isFinite(r.spd) ? ` · speed <b>${Math.round(r.spd * 1.94384)} kt</b>` : '';
@@ -682,9 +696,16 @@
         m.plane.visible = vis; if (m.shadow) m.shadow.visible = vis;
         if (!vis) { m._sim = null; continue; }
         let st = m._sim;
-        if (!st) st = m._sim = { px: tg.x, py: tg.y, pz: tg.z, vx: 0, vy: 0, vz: 0,
-                                 tx: tg.x, ty: tg.y, tz: tg.z, tvx: 0, tvy: 0, tvz: 0, age: 0,
-                                 svx: 0, svy: 0, svz: 0, yaw: null, pitch: 0, bank: 0 };
+        if (!st) {                                           // start already flying (see _seed)
+          const sd = m._seed || { vx: 0, vy: 0, vz: 0 };
+          const vh0 = Math.hypot(sd.vx, sd.vz);
+          st = m._sim = { px: tg.x, py: tg.y, pz: tg.z, vx: sd.vx, vy: sd.vy, vz: sd.vz,
+                          tx: tg.x, ty: tg.y, tz: tg.z, tvx: sd.vx, tvy: sd.vy, tvz: sd.vz, age: 0,
+                          svx: sd.vx, svy: sd.vy, svz: sd.vz,
+                          yaw: vh0 > 2.5 * rate ? Math.atan2(sd.vx, sd.vz) : null,
+                          pitch: vh0 > 1.5 * rate ? Math.max(-0.55, Math.min(0.55, Math.atan2(sd.vy, vh0))) : 0,
+                          bank: 0 };
+        }
         // target velocity, measured per target CHANGE and low-passed: a 1 Hz live tick is already
         // a one-second average (taken whole), a per-frame playback delta only nudges the estimate
         st.age += dt;
