@@ -1,7 +1,7 @@
 // tar1090 reports — minimal service worker (installability + fast static assets).
 // Deliberately conservative: it never intercepts navigations, /api, /oidc or cross-origin
 // requests, so server-side OIDC auth stays fully in control.
-const CACHE = 'tar1090-reports-v18';
+const CACHE = 'tar1090-reports-v19';
 const ASSETS = ['/acicons.js', '/groundview.js', '/route.js', '/auth.js', '/manifest.webmanifest', '/icon.svg', '/icon-maskable.svg'];
 
 self.addEventListener('install', (e) => {
@@ -24,7 +24,7 @@ self.addEventListener('fetch', (e) => {
   if (url.origin !== location.origin) return;                 // leave CDN / IdP alone
   if (req.mode === 'navigate') return;                        // navigations -> network (auth redirects)
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/oidc/')) return;
-  if (!/\.(js|css|svg|png|ico|webmanifest|glb)$/.test(url.pathname)) return;
+  if (!/\.(js|css|svg|png|ico|webmanifest)$/.test(url.pathname)) return;
   // auth.js drives the role/logout UI -> always network-first so it can't go stale
   if (url.pathname === '/auth.js') {
     e.respondWith(fetch(req).then((r) => {

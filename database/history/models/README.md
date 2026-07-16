@@ -1,7 +1,11 @@
 # 3D aircraft models (optional)
 
-Drop glTF binary models (`.glb`) into this folder and the 3D view swaps them in for the
-built-in silhouettes. Lookup order per aircraft, first hit wins:
+The easy way: **Settings → 3D models** — drag `.glb` files onto the upload area and
+they're stored under the persistent data volume (`HISTORY_MODELS_DIR`, default
+`<globe_history>/models`) and used immediately on the next page load.
+
+Files placed in this folder work too (bundled fallbacks; uploads take precedence on a
+name clash). Lookup order per aircraft, first hit wins:
 
 1. `<ICAO-TYPE>.glb` — exact type, e.g. `C172.glb`, `A320.glb`, `B738.glb`, `PC12.glb`
    (upper- or lower-case filenames both work)

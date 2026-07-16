@@ -19,6 +19,7 @@ import gzip
 import json
 import logging
 import os
+import re
 import struct
 import sys
 import threading
@@ -61,6 +62,10 @@ PORT        = int(os.environ.get("HISTORY_API_PORT", "8090"))
 BIND        = os.environ.get("HISTORY_API_BIND", "0.0.0.0")
 WEB_DIR     = os.environ.get("HISTORY_WEB_DIR",
                              os.path.join(os.path.dirname(os.path.abspath(__file__)), "history"))
+# uploaded 3D aircraft models (.glb) for the ground view — kept under the persistent
+# globe_history volume by default so they survive container rebuilds; models bundled in
+# WEB_DIR/models still serve as fallbacks
+MODELS_DIR  = os.environ.get("HISTORY_MODELS_DIR", os.path.join(GLOBE_DIR, "models"))
 MAX_RESULTS = int(os.environ.get("HISTORY_MAX_RESULTS", "2000"))
 # "Show all trails" caps: how many flights to draw at once, and how many distinct 30-min
 # heatmap chunks we'll read for one overview request (bounds work for wide time ranges).
@@ -111,7 +116,7 @@ SESSION_COOKIE = "tar1090_session"
 TX_COOKIE      = "tar1090_oidc_tx"
 # Anything under these is admin-only; viewers get 403 (and the UI hides it too).
 ADMIN_PREFIXES = ("/api/alerts", "/api/import", "/api/patterns/build", "/api/airshow/",
-                  "/api/users", "/api/settings/global")
+                  "/api/users", "/api/settings/global", "/api/models")
 # settings.html is reachable by viewers (their Preferences tab); its admin sub-tabs are hidden in
 # the UI and the admin APIs above stay server-gated.
 ADMIN_PAGES    = ("/alerts.html",)
@@ -1577,6 +1582,57 @@ def lookup(q):
                                                      callsign=callsign, operator=operator)}
 
 
+# --- 3D aircraft models (ground view) -----------------------------------------
+# The 3D view swaps its built-in silhouettes for glTF models dropped in the models folder:
+# models/<ICAO-TYPE>.glb first (C172.glb, A320.glb), then a category fallback
+# (ga/jet/heli/airliner.glb). Admins manage them from Settings -> 3D models.
+_MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.\-]{0,39}\.glb")
+MODEL_KINDS = ("ga", "jet", "heli", "airliner")
+MODEL_MAX_BYTES = int(os.environ.get("HISTORY_MODEL_MAX_MB", "25")) * 1024 * 1024
+
+
+def _model_name_ok(name):
+    return bool(name) and os.path.basename(name) == name and bool(_MODEL_NAME.fullmatch(name))
+
+
+def _model_canonical(name):
+    """Predictable lookup names: category files lowercase, type files UPPERCASE stem —
+    exactly the two spellings the 3D view probes."""
+    stem = name[:-4]
+    return (stem.lower() if stem.lower() in MODEL_KINDS else stem.upper()) + ".glb"
+
+
+def models_list(q=None):
+    out = {}
+    for d, builtin in ((os.path.join(WEB_DIR, "models"), True), (MODELS_DIR, False)):
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        for n in names:
+            if not n.lower().endswith(".glb"):
+                continue
+            try:
+                st = os.stat(os.path.join(d, n))
+            except OSError:
+                continue
+            out[n] = {"name": n, "size": st.st_size, "mtime": int(st.st_mtime), "builtin": builtin}
+    return {"models": sorted(out.values(), key=lambda m: m["name"].lower()),
+            "dir": MODELS_DIR, "max_mb": MODEL_MAX_BYTES // (1024 * 1024)}
+
+
+def models_delete(body):
+    name = str(body.get("name") or "")
+    if not _model_name_ok(name):
+        return {"ok": False, "error": "bad model name"}
+    p = os.path.join(MODELS_DIR, name)
+    if not os.path.isfile(p):
+        return {"ok": False, "error": "not an uploaded model (bundled models can't be deleted)"}
+    os.remove(p)
+    log.info("model deleted: %s", name)
+    return {"ok": True}
+
+
 ROUTES = {"/api/search": search, "/api/options": options, "/api/seen": seen,
           "/api/trace": trace, "/api/traces": traces, "/api/live": live,
           "/api/airshow": airshow_get, "/api/airshow/custom": airshow_custom_get,
@@ -1585,14 +1641,15 @@ ROUTES = {"/api/search": search, "/api/options": options, "/api/seen": seen,
           "/api/lookup": lookup,
           "/api/alerts/rules": alerts_rules_get, "/api/alerts/config": alerts_config_get,
           "/api/alerts/log": alerts_log_get, "/api/import/status": import_status,
-          "/api/users": users_get}
+          "/api/users": users_get, "/api/models": models_list}
 POST_ROUTES = {"/api/alerts/rules": alerts_rule_save, "/api/alerts/rules/delete": alerts_rule_delete,
                "/api/alerts/config": alerts_config_save, "/api/alerts/test": alerts_test,
                "/api/import/start": import_start, "/api/import/stop": import_stop,
                "/api/import/clear-history": import_clear_history,
                "/api/patterns/build": pattern_build_start, "/api/patterns/build-stop": pattern_build_stop,
                "/api/airshow/custom": airshow_custom_save,
-               "/api/users/block": users_block, "/api/settings/global": settings_global_save}
+               "/api/users/block": users_block, "/api/settings/global": settings_global_save,
+               "/api/models/delete": models_delete}
 CONTENT = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
            ".css": "text/css", ".json": "application/json", ".ico": "image/x-icon",
            ".svg": "image/svg+xml", ".webmanifest": "application/manifest+json",
@@ -1835,13 +1892,31 @@ class Handler(BaseHTTPRequestHandler):
                 log.exception("handler error")
                 self._send(500, {"error": str(e)})
             return
+        if path.startswith("/models/"):              # uploaded models first, bundled ones as fallback
+            name = os.path.basename(path[len("/models/"):])
+            if _model_name_ok(name):
+                for d in (MODELS_DIR, os.path.join(WEB_DIR, "models")):
+                    fp = os.path.join(d, name)
+                    if os.path.isfile(fp):
+                        with open(fp, "rb") as fh:
+                            self._send(200, fh.read(), CONTENT[".glb"])
+                        return
+            self._send(404, {"error": "not found"})
+            return
         self._serve_static(path)
 
     do_HEAD = do_GET
 
     def do_POST(self):
-        path = urlparse(self.path).path
+        u = urlparse(self.path)
+        path = u.path
         if not self._gate(path, True):               # admin paths gated; others just need a session
+            return
+        if path == "/api/models/upload":             # raw .glb bytes, ?name=C172.glb — not JSON
+            try:
+                self._models_upload(u)
+            except OSError as e:
+                self._send(500, {"error": str(e)})
             return
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -1866,6 +1941,35 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:                           # noqa: BLE001
             log.exception("post handler error")
             self._send(500, {"error": str(e)})
+
+    def _models_upload(self, u):
+        """POST /api/models/upload?name=C172.glb with the raw .glb bytes as the body (admin)."""
+        name = (parse_qs(u.query).get("name") or [""])[0]
+        if not _model_name_ok(name):
+            self._send(400, {"error": "model name must look like C172.glb, a320.glb or heli.glb"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            length = 0
+        if length <= 0:
+            self._send(400, {"error": "empty upload"})
+            return
+        if length > MODEL_MAX_BYTES:
+            self._send(413, {"error": "model too large (max %d MB)" % (MODEL_MAX_BYTES // (1024 * 1024))})
+            return
+        data = self.rfile.read(length)
+        if data[:4] != b"glTF":
+            self._send(400, {"error": "not a .glb file (glTF binary header missing)"})
+            return
+        final = _model_canonical(name)
+        os.makedirs(MODELS_DIR, exist_ok=True)
+        tmp = os.path.join(MODELS_DIR, "." + final + ".part")
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        os.replace(tmp, os.path.join(MODELS_DIR, final))    # atomic: never a half-written model
+        log.info("model uploaded: %s (%d bytes)", final, len(data))
+        self._send(200, {"ok": True, "name": final, "size": len(data)})
 
     def _serve_static(self, path):
         if path in ("/", ""):

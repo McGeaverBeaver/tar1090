@@ -71,6 +71,7 @@
     <button class="subtab admin-only" data-p="import">Historical import</button>
     <button class="subtab admin-only" data-p="users">Users</button>
     <button class="subtab admin-only" data-p="airshow">Air show</button>
+    <button class="subtab admin-only" data-p="models">3D models</button>
     <button class="subtab" data-p="prefs">My preferences</button>
   </div>
 
@@ -349,6 +350,36 @@
       <div id="ac_builtin" class="help wide">…</div>
     </fieldset>
   </section>
+
+  <!-- 3D aircraft models (admin) -->
+  <section class="panel admin-only" id="p_models">
+    <fieldset>
+      <legend>3D aircraft models — swap the 3D view's silhouettes for real models</legend>
+      <div class="help wide">Upload glTF binary (<code>.glb</code>) models here and the 3D view uses them
+        instead of the built-in silhouettes. <b>The filename picks the aircraft</b>: name the file after the
+        ICAO type — <code>C172.glb</code>, <code>B738.glb</code>, <code>A320.glb</code> — or use a category
+        fallback for everything of one shape: <code>ga.glb</code> (light singles), <code>jet.glb</code>
+        (fast military), <code>heli.glb</code> (helicopters), <code>airliner.glb</code> (everything else).
+        Aircraft with no matching file keep the silhouette. Models are auto-scaled and auto-centred
+        (glTF convention, nose facing +Z), and nodes named <code>prop*</code>/<code>rotor*</code> spin.
+        Flightradar24's published set
+        (<a href="https://github.com/Flightradar24/fr24-3d-models" target="_blank" rel="noopener">fr24-3d-models</a>)
+        is already named by type and drops straight in — check that repo's licence for your use first.
+        Reload the Live/History page after uploading to see them.</div>
+      <div id="mdl_drop" style="border:1px dashed #3a4150;border-radius:8px;padding:20px;text-align:center;cursor:pointer;color:#9aa3b2">
+        Drop <code>.glb</code> files here, or click to choose files
+        <input type="file" id="mdl_file" accept=".glb" multiple style="display:none">
+      </div>
+      <div id="mdl_msg" class="help wide"></div>
+      <div class="tblwrap">
+        <table class="users" id="mdl_tbl" style="display:none">
+          <thead><tr><th>Model file</th><th>Used for</th><th>Size</th><th>Installed</th><th></th></tr></thead>
+          <tbody id="mdl_rows"></tbody>
+        </table>
+      </div>
+      <div class="actions" style="margin-top:10px"><button id="mdl_refresh" class="ghost mini">Refresh</button></div>
+    </fieldset>
+  </section>
 </main>
 
 <script>
@@ -361,7 +392,7 @@ async function post(path, body){
 }
 
 // ---- sub-tabs ----
-const ADMIN_PANELS = ['display', 'integrations', 'import', 'users', 'airshow'];
+const ADMIN_PANELS = ['display', 'integrations', 'import', 'users', 'airshow', 'models'];
 const PANELS = ADMIN_PANELS.concat(['prefs']);
 let isAdmin = true;
 function showPanel(name){
@@ -374,6 +405,7 @@ function showPanel(name){
   if (name === 'airshow') loadAirshowCfg();
   if (name === 'display') populateDisplay();
   if (name === 'prefs') populatePrefs();
+  if (name === 'models') loadModels();
 }
 document.querySelectorAll('.subtab').forEach(b => b.onclick = () => showPanel(b.dataset.p));
 
@@ -763,6 +795,61 @@ $('u_reset').onclick = async () => {
   if (r.ok){ CFG.prefs = {}; populatePrefs(); $('u_status').textContent = 'Reset to site defaults.'; }
   else $('u_status').textContent = 'Error: ' + (r.error || 'failed');
 };
+
+// ---- 3D aircraft models (upload / list / delete) ----
+const MDL_KINDS = { ga: 'all light single-engine aircraft (fallback)', jet: 'all fast military jets (fallback)',
+                    heli: 'all helicopters (fallback)', airliner: 'airliners & everything else (fallback)' };
+function fmtSize(b){ return b >= 1048576 ? (b/1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b/1024)) + ' KB'; }
+async function loadModels(){
+  let j = null;
+  try { j = await (await fetch('api/models')).json(); } catch(e){}
+  const rows = $('mdl_rows'), tbl = $('mdl_tbl');
+  if (!j || !j.models){ $('mdl_msg').textContent = 'Could not load the model list.'; return; }
+  rows.innerHTML = '';
+  tbl.style.display = j.models.length ? '' : 'none';
+  if (!j.models.length) $('mdl_msg').textContent = 'No models installed yet — aircraft use the built-in silhouettes.';
+  for (const m of j.models){
+    const stem = m.name.replace(/\.glb$/i, '');
+    const what = MDL_KINDS[stem.toLowerCase()] || ('aircraft with ICAO type ' + stem.toUpperCase());
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><code>${esc(m.name)}</code></td><td>${esc(what)}</td><td>${fmtSize(m.size)}</td>
+      <td>${m.builtin ? '<span class="pill">bundled</span>' : esc(new Date(m.mtime*1000).toLocaleDateString())}</td>
+      <td>${m.builtin ? '' : '<button class="ghost mini mdl-del">Delete</button>'}</td>`;
+    const del = tr.querySelector('.mdl-del');
+    if (del) del.onclick = async () => {
+      if (!confirm('Delete ' + m.name + '? Aircraft of this type go back to the silhouette.')) return;
+      const r = await post('api/models/delete', { name: m.name });
+      $('mdl_msg').textContent = r.ok ? ('Deleted ' + m.name + '.') : ('Error: ' + (r.error || 'delete failed'));
+      loadModels();
+    };
+    rows.appendChild(tr);
+  }
+}
+async function uploadModels(files){
+  const list = [...files].filter(f => /\.glb$/i.test(f.name));
+  if (!list.length){ $('mdl_msg').textContent = 'Only .glb (glTF binary) files are accepted.'; return; }
+  let okCount = 0;
+  for (const f of list){
+    $('mdl_msg').textContent = 'Uploading ' + f.name + '…';
+    try {
+      const r = await fetch('api/models/upload?name=' + encodeURIComponent(f.name), { method: 'POST', body: f });
+      const j = await r.json();
+      if (j.ok){ okCount++; $('mdl_msg').textContent = 'Installed ' + j.name + ' ✓'; }
+      else $('mdl_msg').textContent = f.name + ': ' + (j.error || 'upload failed');
+    } catch(e){ $('mdl_msg').textContent = f.name + ': upload failed — ' + e; }
+  }
+  if (okCount > 1) $('mdl_msg').textContent = 'Installed ' + okCount + ' models ✓';
+  loadModels();
+}
+{
+  const drop = $('mdl_drop'), inp = $('mdl_file');
+  drop.onclick = () => inp.click();
+  inp.onchange = () => { uploadModels(inp.files); inp.value = ''; };
+  drop.ondragover = e => { e.preventDefault(); drop.style.borderColor = '#2d6cdf'; };
+  drop.ondragleave = () => { drop.style.borderColor = '#3a4150'; };
+  drop.ondrop = e => { e.preventDefault(); drop.style.borderColor = '#3a4150'; uploadModels(e.dataTransfer.files); };
+  $('mdl_refresh').onclick = loadModels;
+}
 
 // load settings + role, gate the admin tabs, then open the right panel
 (async function(){
